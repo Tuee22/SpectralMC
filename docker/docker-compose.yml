@@ -1,0 +1,11 @@
+services:
+    lab:
+        restart: unless-stopped
+        runtime: nvidia
+        volumes:
+            - ..:/home/jupyter
+        ports:
+            - "8888:8888"
+        build: 
+            context: .                
+        platform: "linux/amd64"
