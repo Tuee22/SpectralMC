@@ -22,7 +22,7 @@ While useful in multiple domains, SpectralMC is especially relevant to the field
 
 ## Installation
 
-1. Use a machine with an nvidia GPU. If you're on AWS, for example, you might choose a g5.xlarge instance.
+1. Use a machine with an nvidia GPU. If you're on AWS, for example, you might choose a g5.xlarge instance running Ubuntu 24.04.
 
 2. Clone this repository:
 ```bash
