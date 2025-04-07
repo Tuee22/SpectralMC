@@ -32,17 +32,7 @@ sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plug
 echo "=== Step 3: Install NVIDIA Driver ==="
 # Option A: Install from Ubuntu's official repository (which typically provides newer drivers for each release).
 # This uses 'nvidia-driver-535' as an example. Adjust if you have different version needs.
-sudo apt-get install -y nvidia-driver-535
-
-# Alternatively, you could enable the graphics-drivers PPA, but for Ubuntu 24.04,
-# the official repository may have up-to-date packages anyway. If you still prefer:
-# sudo add-apt-repository -y ppa:graphics-drivers/ppa
-# sudo apt-get update
-# sudo apt-get install -y nvidia-driver-535
-
-echo "=== [Optional] Reboot now for the driver to fully activate ==="
-# It's recommended to reboot at this point, but not forced by the script.
-# sudo reboot
+sudo apt-get install -y nvidia-driver-570
 
 echo "=== Step 4: Install NVIDIA Container Toolkit ==="
 # Add NVIDIA Container Toolkit public GPG key
