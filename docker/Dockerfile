@@ -1,26 +1,73 @@
-FROM nvidia/cuda:12.2.2-devel-ubuntu22.04
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04
+
 ARG DEBIAN_FRONTEND=noninteractive
-RUN apt update && apt install -y nodejs npm build-essential libboost-all-dev libcairo2-dev pkg-config python3 python3-dev python3-pip git curl wget ffmpeg
 
-# update package managers 
-RUN python3 -m pip install --upgrade pip setuptools wheel 
-RUN python3 -m pip install --ignore-installed blinker
-RUN npm cache clean -f
-RUN npm install -g n
-RUN n stable
+# 1) Update and install base tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    software-properties-common \
+    apt-transport-https \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    curl \
+    wget \
+    unzip \
+    git \
+    tmux \
+    htop \
+    openssh-client \
+    ca-certificates \
+    jq \
+    gnupg \
+    nano \
+    tini \
+    bash-completion \
+    && rm -rf /var/lib/apt/lists/*
 
-# install python packages
-WORKDIR /app
-#RUN python3 -m pip install pandas edward gym[classic_control] matplotlib numba pymc3 pystan QuantLib scikit-learn scipy scons seaborn statsmodels pydot graphviz dask[complete] cupy-cuda12x jupyterlab==3.6.6 plotly ipywidgets boto3 fabric tables pyarrow s3fs mypy pandas-stubs sympy torch lightning torchvision torchtext torchmetrics torchdata torchaudio moviepy tensorboard protobuf pydantic pulsar-client apache-flink
-COPY requirements.txt /app/
-RUN python3 -m pip install -r requirements.txt
+# 2) Install Python 3.12 from deadsnakes
+RUN add-apt-repository ppa:deadsnakes/ppa -y && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    python3.12-venv \
+    python3.12-dev \
+    python3.12-lib2to3 \
+    && rm -rf /var/lib/apt/lists/*
 
-# jupyterlab extension installation instructions as per https://plot.ly/python/getting-started/
-# if the extension build is failing with a runtime error, you may need more ram in your container
-RUN export NODE_OPTIONS=--max-old-space-size=4096
-RUN jupyter labextension install @ijmbarr/jupyterlab_spellchecker --no-build
-RUN jupyter lab build
-RUN unset NODE_OPTIONS
+# 4) Set Python 3.12 as default for python3 and python
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 && \
+    update-alternatives --set python3 /usr/bin/python3.12 && \
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 && \
+    update-alternatives --set python /usr/bin/python3.12
 
+# 5) Install pip for Python 3.12
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
+
+# 6) Upgrade pip, setuptools, wheel
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# 7) Clean up apt caches
+RUN apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/*
+
+# 8) Install Poetry
+# By default, Poetry is placed in ~/.local/bin, which is not on PATH for root by default.
+# We'll fix that by either (a) exporting PATH, or (b) symlinking poetry to /usr/local/bin.
+RUN curl -sSL https://install.python-poetry.org | python - && \
+    ln -s /root/.local/bin/poetry /usr/local/bin/poetry
+
+# 9) Work in /SpectralMC
+WORKDIR /SpectralMC
+
+# 10) Copy pyproject.toml
+COPY ../pyproject.toml ./pyproject.toml
+
+# 11) Disable Poetry venv creation & install dependencies system-wide
+RUN poetry config virtualenvs.create false && \
+    poetry install --no-root --no-interaction && \
+    rm -rf /root/.cache/pypoetry
+
+# 12) Expose port 8888
 EXPOSE 8888
-CMD jupyter lab --ip=0.0.0.0 --port=8888 --LabApp.token="" --notebook-dir='/home/jupyter' --no-browser --allow-root
+
+# 13) Default command to run Jupyter
+CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", \
+     "--NotebookApp.token=", "--NotebookApp.password=", "--notebook-dir=/home/jupyter"]
