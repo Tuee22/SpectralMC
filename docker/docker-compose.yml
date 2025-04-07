@@ -1,11 +1,18 @@
 services:
-    lab:
-        restart: unless-stopped
-        runtime: nvidia
-        volumes:
-            - ..:/home/jupyter
-        ports:
-            - "8888:8888"
-        build: 
-            context: .                
-        platform: "linux/amd64"
+  spectralmc:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    volumes:
+      - "..:/home/jupyter"
+    ports:
+      - "8888:8888"
+    platform: "linux/amd64"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]
