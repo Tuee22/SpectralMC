@@ -2,6 +2,7 @@
 #
 # setup_ubuntu24_docker_nvidia.sh
 # Installs Docker CE, NVIDIA driver, and NVIDIA Container Toolkit on Ubuntu 24.04.
+# Also configures Docker so it can be run by non-root users (no sudo needed).
 
 set -e
 
@@ -29,9 +30,15 @@ echo \
 sudo apt-get update
 sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
+# Add current user to the docker group so Docker can be used without sudo
+echo "=== Step 2a: Grant non-root Docker usage ==="
+sudo groupadd -f docker
+sudo usermod -aG docker "$USER"
+
 echo "=== Step 3: Install NVIDIA Driver ==="
 # Option A: Install from Ubuntu's official repository (which typically provides newer drivers for each release).
-# This uses 'nvidia-driver-535' as an example. Adjust if you have different version needs.
+sudo add-apt-repository -y ppa:graphics-drivers/ppa
+sudo apt-get update
 sudo apt-get install -y nvidia-driver-570
 
 echo "=== Step 4: Install NVIDIA Container Toolkit ==="
@@ -57,3 +64,4 @@ echo "1) For best results, reboot if you haven't since installing the NVIDIA dri
 echo "2) After reboot, verify NVIDIA driver with 'nvidia-smi'."
 echo "3) Test Docker GPU support with:"
 echo "   docker run --rm --gpus all nvidia/cuda:12.2.2-base-ubuntu22.04 nvidia-smi"
+echo "4) IMPORTANT: You must log out and log back in (or run 'newgrp docker') to use Docker without sudo."
