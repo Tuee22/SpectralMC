@@ -39,7 +39,7 @@ echo "=== Step 3: Install NVIDIA Driver ==="
 # Option A: Install from Ubuntu's official repository (which typically provides newer drivers for each release).
 sudo add-apt-repository -y ppa:graphics-drivers/ppa
 sudo apt-get update
-sudo apt-get install -y nvidia-driver-570
+sudo apt-get install -y nvidia-driver-570-open
 
 echo "=== Step 4: Install NVIDIA Container Toolkit ==="
 # Add NVIDIA Container Toolkit public GPG key
