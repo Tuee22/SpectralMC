@@ -1,6 +1,7 @@
 FROM nvidia/cuda:12.8.1-devel-ubuntu22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
+ENV PATH="/root/.local/bin:/usr/local/bin:$PATH"
 
 # 1) Update and install base tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -43,31 +44,33 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
 RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
 
 # 6) Upgrade pip, setuptools, wheel
-RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN python -m pip install --upgrade pip setuptools wheel
 
 # 7) Clean up apt caches
 RUN apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/*
 
 # 8) Install Poetry
-# By default, Poetry is placed in ~/.local/bin, which is not on PATH for root by default.
-# We'll fix that by either (a) exporting PATH, or (b) symlinking poetry to /usr/local/bin.
-RUN curl -sSL https://install.python-poetry.org | python - && \
-    ln -s /root/.local/bin/poetry /usr/local/bin/poetry
+# Install Poetry
+RUN curl -sSL https://install.python-poetry.org | python3.12 -
 
-# 9) Work in /SpectralMC
-WORKDIR /SpectralMC
+# Configure Poetry to not use virtual environments
+RUN poetry config virtualenvs.create false
+    
+# 9) Copy repo contents
+COPY ./ /spectralmc
 
-# 10) Copy pyproject.toml
-COPY ../pyproject.toml ./pyproject.toml
+# 10) Work in /spectralmc
+WORKDIR /spectralmc
 
-# 11) Disable Poetry venv creation & install dependencies system-wide
-RUN poetry config virtualenvs.create false && \
-    poetry install --no-root --no-interaction && \
-    rm -rf /root/.cache/pypoetry
+# 11) install dependencies system-wide
+RUN poetry install --no-interaction
+
+# validate code with mypy
+RUN mypy /spectralmc/python --strict --no-incremental && rm -rf .mypy_cache
 
 # 12) Expose port 8888
 EXPOSE 8888
 
 # 13) Default command to run Jupyter
 CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", \
-     "--NotebookApp.token=", "--NotebookApp.password=", "--notebook-dir=/home/jupyter"]
+     "--NotebookApp.token=", "--NotebookApp.password=", "--notebook-dir=/spectralmc"]
