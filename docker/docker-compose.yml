@@ -1,11 +1,12 @@
 services:
   spectralmc:
+    container_name: spectralmc
     build:
       context: ..
       dockerfile: docker/Dockerfile
     restart: unless-stopped
     volumes:
-      - "..:/home/jupyter"
+      - "..:/spectralmc"
     ports:
       - "8888:8888"
     platform: "linux/amd64"
