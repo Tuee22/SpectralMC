@@ -160,3 +160,4 @@ cython_debug/
 #.idea/
 
 .Trash-0/
+setup.sh
