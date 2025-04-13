@@ -5,7 +5,7 @@ description = "GPU accelerated library for SDE simulation"
 authors = ["tuee22"]
 
 packages = [
-  { include = "spectralmc" , from="python"}
+  { include = "spectralmc", from = "python" }
 ]
 
 [tool.poetry.dependencies]
@@ -55,3 +55,8 @@ pydantic_settings = ">=2.7.1,<3.0.0"
 [build-system]
 requires = ["poetry-core>=1.1.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "python/stubs"
