@@ -9,7 +9,7 @@ manages multiple generators in round-robin.
 from __future__ import annotations
 
 import cupy as cp  # type: ignore[import-untyped]
-import numpy as np  # type: ignore[import-untyped]
+import numpy as np
 from time import time
 from itertools import cycle
 from typing import Iterator, Optional, List

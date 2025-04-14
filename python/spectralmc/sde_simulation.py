@@ -2,7 +2,7 @@
 
 """
 Demonstrates a GPU-accelerated SDE simulation (Euler-Maruyama) via CuPy and Numba.
-Adapted from SDE_Simulation_with_CuPy.ipynb. Minimal leftover ignores removed.
+Adapted from SDE_Simulation_with_CuPy.ipynb.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import cupy as cp  # type: ignore[import-untyped]
 from numba import cuda  # type: ignore[import-untyped]
 
 
-@cuda.jit
+@cuda.jit  # type: ignore[misc]
 def sde_simulation_cuda(
     result: cp.ndarray,
     random_numbers: cp.ndarray,

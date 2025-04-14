@@ -7,7 +7,7 @@ Useful for param sweeps or advanced sampling in Monte Carlo or Bayesian contexts
 
 from __future__ import annotations
 
-import numpy as np  # type: ignore[import-untyped]
+import numpy as np
 from scipy.stats.qmc import Sobol  # type: ignore[import-untyped]
 from pydantic import BaseModel, ValidationError
 from typing import Type, List, Dict

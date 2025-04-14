@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Annotated
 from math import sqrt
 
-# pydantic v2 approach: Annotated[float, Field(gt=0)] instead of confloat
 PosFloat = Annotated[float, Field(gt=0)]
 NonNegFloat = Annotated[float, Field(ge=0)]
 
@@ -41,7 +40,7 @@ class SimulationParams(BaseModel):
         ) // self.threads_per_block
 
 
-@cuda.jit
+@cuda.jit  # type: ignore[misc]
 def SimulateBlackScholes(
     input_output: cp.ndarray, timesteps: int, sqrt_dt: float, X0: float, v: float
 ) -> None:

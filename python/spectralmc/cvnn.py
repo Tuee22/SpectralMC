@@ -1,9 +1,8 @@
 # python/spectralmc/cvnn.py
 
 """
-Complex-valued neural networks (CVNNs) using PyTorch. Includes zReLU, modReLU,
-batchnorm, residual blocks, etc. We cast layer(...) to torch.Tensor in forward
-so mypy doesn't complain about returning Any.
+Complex-valued neural networks (CVNNs) using PyTorch. We fix "Returning Any"
+by casting each layer(...) call to torch.Tensor.
 """
 
 from __future__ import annotations
@@ -75,7 +74,6 @@ class ResidualBlock(nn.Module):
         self.bn2 = ComplexBatchNorm(out_features)
         self.modrelu2 = modReLU(bias_init)
 
-        # match_dimensions can be None or a Sequential
         self.match_dimensions: Optional[nn.Sequential] = None
         if in_features != out_features:
             self.match_dimensions = nn.Sequential(
@@ -94,13 +92,13 @@ class ResidualBlock(nn.Module):
 
         if self.match_dimensions is not None:
             residual = self.match_dimensions(residual)
-        return out + residual
+        return cast(torch.Tensor, out + residual)
 
 
 class CVNN(nn.Module):
     """
     A complex-valued neural network (CVNN) with residual blocks.
-    We cast each layer(...) call to torch.Tensor so Mypy sees a definite return.
+    Casting each layer(...) call to torch.Tensor so mypy sees a definite return type.
     """
 
     def __init__(
