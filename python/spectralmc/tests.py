@@ -32,7 +32,10 @@ PYTHON = Path(sys.executable)  # interpreter to launch child processes
 # helper
 # ---------------------------------------------------------------------------
 
-def run_module_cli(module: str, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+
+def run_module_cli(
+    module: str, *args: str, check: bool = True
+) -> subprocess.CompletedProcess[str]:
     """Run ``python -m <module> args…`` and *capture* its stdout/stderr."""
     cmd = [PYTHON, "-m", module, *args]
     return subprocess.run(cmd, text=True, capture_output=True, check=check)
@@ -42,9 +45,11 @@ def reverse(s: str) -> str:
     """Sample function to keep our unit‑test section."""
     return s[::-1]
 
+
 # ---------------------------------------------------------------------------
 # integration tests – capture first, print after assertions
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     (
@@ -57,7 +62,6 @@ def reverse(s: str) -> str:
         ("async_normals", None, None),
     ],
 )
-
 def test_cli_smoke(module: str, arg: str, expect_fragment: str | None):
     cp = run_module_cli(module, arg)
 
@@ -77,7 +81,7 @@ def test_cli_smoke(module: str, arg: str, expect_fragment: str | None):
 # ordinary unit test section
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("inp,expected", [("abc", "cba"), ("racecar", "racecar")])
 
+@pytest.mark.parametrize("inp,expected", [("abc", "cba"), ("racecar", "racecar")])
 def test_reverse(inp: str, expected: str):
     assert reverse(inp) == expected
