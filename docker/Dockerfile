@@ -63,7 +63,7 @@ COPY ./ /spectralmc
 WORKDIR /spectralmc
 
 # 11) install dependencies system-wide
-RUN poetry install --no-interaction
+RUN poetry install --with dev --no-interaction
 
 # validate code with mypy
 RUN mypy /spectralmc/python --strict --no-incremental && rm -rf .mypy_cache

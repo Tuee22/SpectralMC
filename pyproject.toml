@@ -1,59 +1,73 @@
 [tool.poetry]
-name = "spectralmc"
-version = "0.0.1"
-description = "GPU accelerated library for SDE simulation"
-authors = ["tuee22"]
+name        = "spectralmc"
+version     = "0.0.1"
+description = "GPU‑accelerated library for SDE simulation"
+authors     = ["tuee22"]
 
 packages = [
-  { include = "spectralmc" , from="python"}
+  { include = "spectralmc", from = "python" }
 ]
 
+# --------------------------------------------------------------------------- #
+#                       R U N T I M E   D E P E N D E N C I E S               #
+# --------------------------------------------------------------------------- #
 [tool.poetry.dependencies]
-python = ">=3.12.0,<3.13.0"
+python = ">=3.12,<3.13"
 
-# Core libraries
-numpy = ">=2.0.0,<3.0.0"
-pandas = ">=2.0.0,<3.0.0"
-pandas-stubs = ">=2.2.3,<3.0.0"
-polars = ">=1.26.0,<2.0.0"
-aiohttp = ">=3.8.0,<4.0.0"
-aiofiles = ">=24.1.0,<25.0.0"
-types-aiofiles = ">=24.1.0,<25.0.0"
+# core
+numpy          = ">=2.0,<3.0"
+pandas         = ">=2.0,<3.0"
+pandas-stubs   = ">=2.2.3,<3.0"
+polars         = ">=1.26,<2.0"
+aiohttp        = ">=3.8,<4.0"
+aiofiles       = ">=24.1,<25.0"
+types-aiofiles = ">=24.1,<25.0"
 
 # distributed compute
-dask = { version = ">=2025.3.0,<2026.0.0", extras = ["complete"] }
-ray = ">=2.44.1,<3.0.0"
+dask = { version = ">=2025.3,<2026.0", extras = ["complete"] }
+ray  = ">=2.44,<3.0"
 
 # data clients
-pulsar-client = ">=3.6.1,<4.0.0"
-minio = ">=7.2.15,<8.0.0"
-protobuf = ">=6.30.2,<7.0.0"
+pulsar-client = ">=3.6,<4.0"
+minio         = ">=7.2,<8.0"
+protobuf      = ">=6.30,<7.0"
 
-# numerical packages
-scipy = ">=1.13.0,<2.0.0"
-scikit-learn = ">=1.6.1,<2.0.0"
-torch = ">=2.6.0,<3.0.0"
-torchtyping = ">=0.1.5,<1.0.0"
-stable_baselines3 = ">=2.6.0,<3.0.0"
-cupy-cuda12x = ">=13.4.1,<14.0.0"
-numba = ">=0.61.0,<1.0.0"
-pystan = ">=3.10.0,<4.0.0"
-pymc = ">=5.22.0,<6.0.0"
-statsmodels = ">=0.14.4,<1.0.0"
-QuantLib = ">=1.37.0,<2.0.0"
+# numerics
+scipy            = ">=1.13,<2.0"
+scikit-learn     = ">=1.6,<2.0"
+torch            = ">=2.6,<3.0"
+torchtyping      = ">=0.1.5,<1.0"
+stable_baselines3 = ">=2.6,<3.0"
+cupy-cuda12x     = ">=13.4,<14.0"
+numba            = ">=0.61,<1.0"
+pystan           = ">=3.10,<4.0"
+pymc             = ">=5.22,<6.0"
+statsmodels      = ">=0.14.4,<1.0"
+QuantLib         = ">=1.37,<2.0"
 
-# Jupyter and visualization:
-jupyterlab = ">=3.0.0,<4.0.0"
-plotly = ">=6.0.1,<7.0.0"
-matplotlib = ">=3.10.1,<4.0.0"
-seaborn = ">=0.13.2,<1.0.0"
+# Jupyter / viz
+jupyterlab  = ">=3.0,<4.0"
+plotly      = ">=6.0.1,<7.0"
+matplotlib  = ">=3.10.1,<4.0"
+seaborn     = ">=0.13.2,<1.0"
 
-# python tools
-mypy = ">=1.15.0,<2.0.0"
-black = ">=25.1.0,<26.0.0"
-pydantic = { version = ">=2.9.0,<3.0.0", extras = ["mypy"] }
-pydantic_settings = ">=2.7.1,<3.0.0"
+# runtime typing / settings
+pydantic           = { version = ">=2.9,<3.0", extras = ["mypy"] }
+pydantic_settings  = ">=2.7,<3.0"
 
+# --------------------------------------------------------------------------- #
+#                       D E V   &   T E S T   D E P S                         #
+# --------------------------------------------------------------------------- #
+[tool.poetry.group.dev.dependencies]
+pytest        = ">=8.2,<9.0"
+pytest-cov    = ">=5.0,<6.0"
+hypothesis    = ">=6.102,<7.0"
+
+# static analysis / formatting
+mypy   = ">=1.15,<2.0"
+black  = ">=25.1,<26.0"
+
+# --------------------------------------------------------------------------- #
 [build-system]
-requires = ["poetry-core>=1.1.0"]
+requires      = ["poetry-core>=1.1.0"]
 build-backend = "poetry.core.masonry.api"

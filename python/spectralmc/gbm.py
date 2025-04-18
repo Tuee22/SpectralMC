@@ -53,7 +53,9 @@ class SimulationParams(BaseModel):
 
         We implement   (n + t − 1) // t   for that ceiling division.
         """
-        return (self.total_paths() + self.threads_per_block - 1) // self.threads_per_block
+        return (
+            self.total_paths() + self.threads_per_block - 1
+        ) // self.threads_per_block
 
 
 # --------------------------------------------------------------------------- #
@@ -109,13 +111,6 @@ class BlackScholes:
         forwards: cp.ndarray
         df: cp.ndarray
 
-        @field_validator("*", mode="before")
-        @classmethod
-        def _cupy_only(cls, v):
-            if not isinstance(v, cp.ndarray):
-                raise ValueError("Expected CuPy array")
-            return v
-
     class PricingResults(BaseModel):
         model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -124,13 +119,6 @@ class BlackScholes:
         underlying: cp.ndarray
         put_convexity: cp.ndarray
         call_convexity: cp.ndarray
-
-        @field_validator("*", mode="before")
-        @classmethod
-        def _cupy_only(cls, v):
-            if not isinstance(v, cp.ndarray):
-                raise ValueError("Expected CuPy array")
-            return v
 
     # -------------------------- constructor ------------------------------- #
 
@@ -169,16 +157,14 @@ class BlackScholes:
 
             self._numba_stream.synchronize()  # wait for kernel
             row_means = cp.mean(sims, axis=1, keepdims=True)
-            sims *= (forwards[:, None] / row_means)
+            sims *= forwards[:, None] / row_means
 
         self._cp_stream.synchronize()
         return self.SimResults(times=times, sims=sims, forwards=forwards, df=df)
 
     # ----------------------------- pricing -------------------------------- #
 
-    def price(
-        self, inputs: Inputs, sr: Optional[SimResults] = None
-    ) -> PricingResults:
+    def price(self, inputs: Inputs, sr: Optional[SimResults] = None) -> PricingResults:
         sr = sr or self._simulate(inputs)
 
         with self._cp_stream:
@@ -214,7 +200,7 @@ if __name__ == "__main__":
     # ---------------------- “few‑million” setup ------------------------- #
     #  Path count = 2 048 × 2 048  ≈ 4.19 M
     sp = SimulationParams(
-        timesteps=10,               # keep timesteps modest to fit memory
+        timesteps=10,  # keep timesteps modest to fit memory
         network_size=2_048,
         batches_per_mc_run=2_048,
         threads_per_block=256,
@@ -228,9 +214,7 @@ if __name__ == "__main__":
     # ----------------------- run a small workflow ----------------------- #
     bs = BlackScholes(sp)
 
-    inputs = BlackScholes.Inputs(
-        X0=100.0, K=105.0, T=1.0, r=0.01, d=0.00, v=0.20
-    )
+    inputs = BlackScholes.Inputs(X0=100.0, K=105.0, T=1.0, r=0.01, d=0.00, v=0.20)
 
     print("Running _simulate() ...")
     sim_res = bs._simulate(inputs)

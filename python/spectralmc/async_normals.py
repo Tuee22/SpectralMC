@@ -267,12 +267,16 @@ if __name__ == "__main__":
     norm_gen = NormGenerator(rows, cols, seed)
     mat1 = norm_gen.get_matrix()
     print(f"Shape of first matrix: {mat1.shape}")
-    print(f"Time spent synchronizing so far: {norm_gen.get_time_spent_synchronizing():.6f} s\n")
+    print(
+        f"Time spent synchronizing so far: {norm_gen.get_time_spent_synchronizing():.6f} s\n"
+    )
 
     # Test 2: Obtain another matrix and verify shape again
     mat2 = norm_gen.get_matrix()
     print(f"Shape of second matrix: {mat2.shape}")
-    print(f"Time spent synchronizing now: {norm_gen.get_time_spent_synchronizing():.6f} s\n")
+    print(
+        f"Time spent synchronizing now: {norm_gen.get_time_spent_synchronizing():.6f} s\n"
+    )
 
     # Test 3: ConcurrentNormGenerator usage
     print("Test 3: ConcurrentNormGenerator")
@@ -284,7 +288,9 @@ if __name__ == "__main__":
     c_mat2 = cng.get_matrix()
     c_mat3 = cng.get_matrix()
 
-    print(f"Shapes of concurrent matrices: {c_mat1.shape}, {c_mat2.shape}, {c_mat3.shape}")
+    print(
+        f"Shapes of concurrent matrices: {c_mat1.shape}, {c_mat2.shape}, {c_mat3.shape}"
+    )
     sync_time = cng.get_time_spent_synchronizing()
     print(f"Total time spent synchronizing across all generators: {sync_time:.6f} s")
 
