@@ -3,19 +3,12 @@
 pytest suite with **post‑test printing** of captured stdout / stderr
 ==================================================================
 
-This is the *simplest* way to see what each `python ‑m <module>` wrote:
-we capture its output, run our assertions, **then print the text** once the
-process finishes.  No incremental streaming logic needed.
+Run it with::
 
-Usage
------
-Run the suite with ``pytest -s`` (or ``--capture=tee-sys``) so pytest
-forwards the prints to your terminal:
+    pytest -s
 
-    $ pytest -s
-
-Replace the placeholder module names (``tool_a``, ``tool_b``) with your
-real command‑line packages.
+The ``-s`` (or ``--capture=tee-sys``) flag lets you see the captured output that
+each ``python ‑m <module>`` emits.
 """
 
 from __future__ import annotations
@@ -26,51 +19,52 @@ from pathlib import Path
 
 import pytest
 
-PYTHON = Path(sys.executable)  # interpreter to launch child processes
+PYTHON = Path(sys.executable)  # interpreter used to spawn child processes
+
 
 # ---------------------------------------------------------------------------
-# helper
+# helpers
 # ---------------------------------------------------------------------------
 
 
 def run_module_cli(
     module: str, *args: str, check: bool = True
 ) -> subprocess.CompletedProcess[str]:
-    """Run ``python -m <module> args…`` and *capture* its stdout/stderr."""
-    cmd = [PYTHON, "-m", module, *args]
+    """
+    Launch ``python ‑m <module> [args…]`` and capture its stdout/stderr.
+
+    Empty strings are ignored so parametrised tests can pass "" instead of None
+    without upsetting subprocess.run.
+    """
+    cmd: list[str] = [str(PYTHON), "-m", module]
+    cmd.extend(a for a in args if a)  # drop falsy args ("" / None)
+
     return subprocess.run(cmd, text=True, capture_output=True, check=check)
 
 
 def reverse(s: str) -> str:
-    """Sample function to keep our unit‑test section."""
+    """Simple utility to demonstrate a small unit‑test section."""
     return s[::-1]
 
 
 # ---------------------------------------------------------------------------
-# integration tests – capture first, print after assertions
+# integration tests – run module CLIs
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    (
-        "module",
-        "arg",
-        "expect_fragment",
-    ),
+    "module",
     [
-        ("gbm", None, None),
-        ("async_normals", None, None),
+        "spectralmc.gbm",
+        "spectralmc.async_normals",
     ],
 )
-def test_cli_smoke(module: str, arg: str, expect_fragment: str | None):
-    cp = run_module_cli(module, arg)
+def test_cli_smoke(module: str) -> None:
+    """Ensure each ``python ‑m <module>`` exits successfully and show its output."""
+    cp = run_module_cli(module)
 
-    # basic assertions
     assert cp.returncode == 0
-    if expect_fragment is not None:
-        assert expect_fragment in cp.stdout.lower()
 
-    # now print what the command wrote so the user sees it in the log
     if cp.stdout:
         print(f"\n[stdout from {module}]\n{cp.stdout}")
     if cp.stderr:
@@ -78,10 +72,17 @@ def test_cli_smoke(module: str, arg: str, expect_fragment: str | None):
 
 
 # ---------------------------------------------------------------------------
-# ordinary unit test section
+# ordinary unit‑test section
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("inp,expected", [("abc", "cba"), ("racecar", "racecar")])
-def test_reverse(inp: str, expected: str):
+@pytest.mark.parametrize(
+    ("inp", "expected"),
+    [
+        ("abc", "cba"),
+        ("racecar", "racecar"),
+    ],
+)
+def test_reverse(inp: str, expected: str) -> None:
+    """Basic example to keep a pure unit test in the suite."""
     assert reverse(inp) == expected
