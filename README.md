@@ -17,12 +17,12 @@ While useful in multiple domains, SpectralMC is especially relevant to the field
 
 ## Prerequisites
 
-- A ubuntu machine with an NVIDIA GPU
+- A ubuntu 24.04 machine with an NVIDIA GPU
 
 
 ## Installation
 
-1. Use a machine with an nvidia GPU. If you're on AWS, for example, you might choose a g5.xlarge instance running Ubuntu 24.04.
+1. Use a Ubuntu 24.04 machine with an nvidia GPU. If you're on AWS, for example, you might choose a g5.xlarge instance, running Ubuntu 24.04.
 
 2. Clone this repository:
 ```bash
@@ -32,21 +32,26 @@ cd SpectralMC
 
 3. Run the provided installation script, which installs Docker, the NVIDIA drivers, and the NVIDIA Container Toolkit. For example:
 ```bash
-./scripts/install_docker_cuda.sh
+./scripts/build_and_run_unit_tests.sh
 ```
 
-- This will install Docker, the Nvidia drivers, and nvidia-docker2. When finished, reboot to fully activate the driver.
+- This will install Docker, the Nvidia drivers, and nvidia-docker2. When finished, reboot to fully activate the driver (the script will offer to do this for you, press Ctrl-C to stop it). After rebooting, run the script again, and it will build and start the container, and execute test cases.
 
-4. Build and run the Docker containers:
+4. To interact with the container manually:
 
 ```bash
 cd docker
 docker compose up -d
+docker compose exec -it spectralmc bash
 ```
 
+This will open a bash terminal, which will allow you to explicitly call the python library, eg
 
-- This starts a container for SpectralMC, and includes a Jupyter notebook on port 8888.
-- Please forward this port locally (via SSH tunneling) or open http://localhost:8888 in a browser.
+```bash
+python -m spectralmc.gbm
+```
+
+There is also a jupyter notebook listening on port 8888, which you can access in your browser via localhost:8888.
 
 ## Contribution
 

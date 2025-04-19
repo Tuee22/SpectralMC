@@ -8,7 +8,7 @@ Run it with::
     pytest -s
 
 The ``-s`` (or ``--capture=tee-sys``) flag lets you see the captured output that
-each ``python ‑m <module>`` emits.
+each ``python -m <module>`` emits.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ def run_module_cli(
     module: str, *args: str, check: bool = True
 ) -> subprocess.CompletedProcess[str]:
     """
-    Launch ``python ‑m <module> [args…]`` and capture its stdout/stderr.
+    Launch ``python -m <module> [args…]`` and capture its stdout/stderr.
 
     Empty strings are ignored so parametrised tests can pass "" instead of None
     without upsetting subprocess.run.
@@ -48,6 +48,42 @@ def reverse(s: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# system-level sanity check
+# ---------------------------------------------------------------------------
+
+
+def test_nvidia_smi() -> None:
+    """Ensure nvidia-smi is available and print its output."""
+    try:
+        cp = subprocess.run(
+            ["nvidia-smi"],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+    except FileNotFoundError:
+        pytest.fail(
+            "❌ `nvidia-smi` not found inside the container.\n"
+            "This usually means the container is not running with GPU support.\n\n"
+            "✅ Make sure you've installed the NVIDIA Container Toolkit and started the container with GPU access:\n"
+            "   > sudo docker compose --profile gpu up\n\n"
+            "🔧 See the setup instructions in `scripts/install_docker_cuda.sh` or the README."
+        )
+    except subprocess.CalledProcessError as e:
+        pytest.fail(
+            f"❌ `nvidia-smi` command failed with return code {e.returncode}.\n"
+            f"stderr:\n{e.stderr}\n\n"
+            "This might mean the container does not have access to the GPU.\n"
+            "✅ Ensure the NVIDIA runtime is enabled and the container has GPU access."
+        )
+
+    if cp.stdout:
+        print(f"\n[stdout from nvidia-smi]\n{cp.stdout}")
+    if cp.stderr:
+        print(f"\n[stderr from nvidia-smi]\n{cp.stderr}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
 # integration tests – run module CLIs
 # ---------------------------------------------------------------------------
 
@@ -60,7 +96,7 @@ def reverse(s: str) -> str:
     ],
 )
 def test_cli_smoke(module: str) -> None:
-    """Ensure each ``python ‑m <module>`` exits successfully and show its output."""
+    """Ensure each ``python -m <module>`` exits successfully and show its output."""
     cp = run_module_cli(module)
 
     assert cp.returncode == 0
