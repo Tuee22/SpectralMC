@@ -93,6 +93,7 @@ def test_nvidia_smi() -> None:
     [
         "spectralmc.gbm",
         "spectralmc.async_normals",
+        "spectralmc.cvnn",
     ],
 )
 def test_cli_smoke(module: str) -> None:

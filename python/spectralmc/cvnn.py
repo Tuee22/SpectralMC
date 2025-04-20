@@ -25,24 +25,28 @@ class ComplexLinear(nn.Module):
         bias (bool): If True, include a complex bias term. Default: True.
     """
 
+    real_weight: nn.Parameter
+    imag_weight: nn.Parameter
+    real_bias: Optional[nn.Parameter]
+    imag_bias: Optional[nn.Parameter]
+
     def __init__(self, in_features: int, out_features: int, bias: bool = True) -> None:
         super().__init__()
         self.in_features: int = in_features
         self.out_features: int = out_features
+
         # Real and imaginary weight matrices
-        self.real_weight: nn.Parameter = nn.Parameter(
-            torch.Tensor(out_features, in_features)
-        )
-        self.imag_weight: nn.Parameter = nn.Parameter(
-            torch.Tensor(out_features, in_features)
-        )
+        self.real_weight = nn.Parameter(torch.Tensor(out_features, in_features))
+        self.imag_weight = nn.Parameter(torch.Tensor(out_features, in_features))
+
         # Real and imaginary bias if needed
         if bias:
-            self.real_bias: nn.Parameter = nn.Parameter(torch.Tensor(out_features))
-            self.imag_bias: nn.Parameter = nn.Parameter(torch.Tensor(out_features))
+            self.real_bias = nn.Parameter(torch.Tensor(out_features))
+            self.imag_bias = nn.Parameter(torch.Tensor(out_features))
         else:
             self.real_bias = None
             self.imag_bias = None
+
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -130,10 +134,12 @@ class modReLU(nn.Module):
         num_features (int): Number of features (channels) of the input. One bias parameter per feature will be learned.
     """
 
+    bias: nn.Parameter
+
     def __init__(self, num_features: int) -> None:
         super().__init__()
         self.num_features: int = num_features
-        self.bias: nn.Parameter = nn.Parameter(torch.zeros(num_features))
+        self.bias = nn.Parameter(torch.zeros(num_features))
 
     def forward(
         self, input_real: torch.Tensor, input_imag: torch.Tensor
@@ -169,6 +175,9 @@ class NaiveComplexBatchNorm(nn.Module):
         affine (bool): If True, apply learnable affine parameters (scale and shift) to both real and imag parts. Default: True.
         track_running_stats (bool): If True, track running mean and variance. Default: True.
     """
+
+    bn_real: nn.BatchNorm1d
+    bn_imag: nn.BatchNorm1d
 
     def __init__(
         self,
@@ -255,6 +264,19 @@ class CovarianceComplexBatchNorm(nn.Module):
         track_running_stats (bool): If True, tracks running mean and covariance. Default: True.
     """
 
+    beta_real: Optional[nn.Parameter]
+    beta_imag: Optional[nn.Parameter]
+    gamma_rr: Optional[nn.Parameter]
+    gamma_ri: Optional[nn.Parameter]
+    gamma_ii: Optional[nn.Parameter]
+
+    # We'll store typed references to the actual buffer Tensors:
+    running_mean_real: torch.Tensor
+    running_mean_imag: torch.Tensor
+    running_C_rr: torch.Tensor
+    running_C_ri: torch.Tensor
+    running_C_ii: torch.Tensor
+
     def __init__(
         self,
         num_features: int,
@@ -264,28 +286,34 @@ class CovarianceComplexBatchNorm(nn.Module):
         track_running_stats: bool = True,
     ) -> None:
         super().__init__()
-        self.num_features: int = num_features
-        self.eps: float = eps
-        self.momentum: float = momentum
-        self.affine: bool = affine
-        self.track_running_stats: bool = track_running_stats
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+        self.affine = affine
+        self.track_running_stats = track_running_stats
 
-        # create the buffers directly with register_buffer, no separate assignment
-        self.register_buffer(
-            "running_mean_real", torch.zeros(num_features, dtype=torch.float)
-        )
-        self.register_buffer(
-            "running_mean_imag", torch.zeros(num_features, dtype=torch.float)
-        )
-        self.register_buffer(
-            "running_C_rr", torch.full((num_features,), 0.5, dtype=torch.float)
-        )
-        self.register_buffer(
-            "running_C_ri", torch.zeros(num_features, dtype=torch.float)
-        )
-        self.register_buffer(
-            "running_C_ii", torch.full((num_features,), 0.5, dtype=torch.float)
-        )
+        # 1) Create a local Tensor
+        # 2) Register it as a buffer
+        # 3) Also store it in a typed attribute so mypy recognizes it as a torch.Tensor
+        rm_real = torch.zeros(num_features, dtype=torch.float)
+        self.register_buffer("running_mean_real", rm_real)
+        self.running_mean_real = rm_real
+
+        rm_imag = torch.zeros(num_features, dtype=torch.float)
+        self.register_buffer("running_mean_imag", rm_imag)
+        self.running_mean_imag = rm_imag
+
+        c_rr = torch.full((num_features,), 0.5, dtype=torch.float)
+        self.register_buffer("running_C_rr", c_rr)
+        self.running_C_rr = c_rr
+
+        c_ri = torch.zeros(num_features, dtype=torch.float)
+        self.register_buffer("running_C_ri", c_ri)
+        self.running_C_ri = c_ri
+
+        c_ii = torch.full((num_features,), 0.5, dtype=torch.float)
+        self.register_buffer("running_C_ii", c_ii)
+        self.running_C_ii = c_ii
 
         # Learnable affine parameters
         if affine:
@@ -317,13 +345,6 @@ class CovarianceComplexBatchNorm(nn.Module):
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: The normalized and transformed real and imaginary parts.
         """
-        # retrieve the buffers
-        running_mean_real: torch.Tensor = self.running_mean_real
-        running_mean_imag: torch.Tensor = self.running_mean_imag
-        running_C_rr: torch.Tensor = self.running_C_rr
-        running_C_ri: torch.Tensor = self.running_C_ri
-        running_C_ii: torch.Tensor = self.running_C_ii
-
         if self.training or not self.track_running_stats:
             batch_mean_real = input_real.mean(dim=0)
             batch_mean_imag = input_imag.mean(dim=0)
@@ -335,19 +356,19 @@ class CovarianceComplexBatchNorm(nn.Module):
 
             if self.track_running_stats:
                 with torch.no_grad():
-                    running_mean_real.mul_(1 - self.momentum).add_(
+                    self.running_mean_real.mul_(1 - self.momentum).add_(
                         batch_mean_real * self.momentum
                     )
-                    running_mean_imag.mul_(1 - self.momentum).add_(
+                    self.running_mean_imag.mul_(1 - self.momentum).add_(
                         batch_mean_imag * self.momentum
                     )
-                    running_C_rr.mul_(1 - self.momentum).add_(
+                    self.running_C_rr.mul_(1 - self.momentum).add_(
                         batch_C_rr * self.momentum
                     )
-                    running_C_ri.mul_(1 - self.momentum).add_(
+                    self.running_C_ri.mul_(1 - self.momentum).add_(
                         batch_C_ri * self.momentum
                     )
-                    running_C_ii.mul_(1 - self.momentum).add_(
+                    self.running_C_ii.mul_(1 - self.momentum).add_(
                         batch_C_ii * self.momentum
                     )
             mean_real = batch_mean_real
@@ -356,11 +377,11 @@ class CovarianceComplexBatchNorm(nn.Module):
             C_ri = batch_C_ri
             C_ii = batch_C_ii
         else:
-            mean_real = running_mean_real
-            mean_imag = running_mean_imag
-            C_rr = running_C_rr
-            C_ri = running_C_ri
-            C_ii = running_C_ii
+            mean_real = self.running_mean_real
+            mean_imag = self.running_mean_imag
+            C_rr = self.running_C_rr
+            C_ri = self.running_C_ri
+            C_ii = self.running_C_ii
             centered_real = input_real - mean_real
             centered_imag = input_imag - mean_imag
 
@@ -397,6 +418,7 @@ class CovarianceComplexBatchNorm(nn.Module):
         else:
             out_real = whitened_real
             out_imag = whitened_imag
+
         return out_real, out_imag
 
 
@@ -601,9 +623,9 @@ class SimpleCVNN(nn.Module):
         return out_real, out_imag
 
 
-# ----------------
+# --------------------------------------------------------------------------
 #  Unit tests
-# ----------------
+# --------------------------------------------------------------------------
 
 
 def test_complex_linear_basic() -> None:
@@ -614,6 +636,7 @@ def test_complex_linear_basic() -> None:
     x_real = torch.tensor([[1.0]])
     x_imag = torch.tensor([[1.0]])
     out_real, out_imag = lin(x_real, x_imag)
+    # (2+3i)*(1+i) = -1 + 5i
     assert torch.allclose(out_real, torch.tensor([[-1.0]]), atol=1e-6)
     assert torch.allclose(out_imag, torch.tensor([[5.0]]), atol=1e-6)
 
@@ -634,14 +657,14 @@ def test_modrelu_activation() -> None:
     """Test modReLU threshold behavior."""
     act = modReLU(1)
     act.bias.data = torch.tensor([-4.0])  # threshold = r + (-4)
-    inp_real = torch.tensor([[3.0]])  # magnitude=5
+    inp_real = torch.tensor([[3.0]])
     inp_imag = torch.tensor([[4.0]])
     out_real, out_imag = act(inp_real, inp_imag)
-    # (2+3i)*(1+i) => (r=5, r+b=1 => (1/5)*(3+4i) => 0.6 + 0.8i)
+    # r=5, r+b=1 => (1/5)*(3+4i) => 0.6+0.8i
     assert torch.allclose(out_real, torch.tensor([[0.6]]), atol=1e-6)
     assert torch.allclose(out_imag, torch.tensor([[0.8]]), atol=1e-6)
-    # If r+b <= 0 => 0
-    act.bias.data = torch.tensor([-6.0])
+
+    act.bias.data = torch.tensor([-6.0])  # r+b=-1 => output=0
     out_real2, out_imag2 = act(inp_real, inp_imag)
     assert torch.equal(out_real2, torch.tensor([[0.0]]))
     assert torch.equal(out_imag2, torch.tensor([[0.0]]))
@@ -704,7 +727,6 @@ def test_residual_block_identity_skip_eval() -> None:
     inp_real = torch.tensor([[1.0]])
     inp_imag = torch.tensor([[2.0]])
     out_real, out_imag = block(inp_real, inp_imag)
-    # With zero layers, out=inp => pass zReLU since (1,2)>=0
     assert torch.allclose(out_real, inp_real)
     assert torch.allclose(out_imag, inp_imag)
 
@@ -822,6 +844,7 @@ def test_models_gpu_forward() -> None:
         out_real, out_imag = model_cvnn(xr, xi)
         assert out_real.device.type == "cuda" and out_imag.device.type == "cuda"
         assert out_real.shape == (4, 4) and out_imag.shape == (4, 4)
+
         model_simple = SimpleCVNN(
             input_features=4,
             output_features=4,
