@@ -193,36 +193,3 @@ class BlackScholes:
 
 # --------------------------------------------------------------------------- #
 #                           Quick Demonstration                               #
-# --------------------------------------------------------------------------- #
-
-if __name__ == "__main__":
-
-    # ---------------------- “few‑million” setup ------------------------- #
-    #  Path count = 2 048 × 2 048  ≈ 4.19 M
-    sp = SimulationParams(
-        timesteps=10,  # keep timesteps modest to fit memory
-        network_size=2_048,
-        batches_per_mc_run=2_048,
-        threads_per_block=256,
-        mc_seed=42,
-        buffer_size=4,
-    )
-
-    print(f"\nTotal Monte‑Carlo paths : {sp.total_paths():,}")
-    print(f"CUDA blocks            : {sp.total_blocks():,}\n")
-
-    # ----------------------- run a small workflow ----------------------- #
-    bs = BlackScholes(sp)
-
-    inputs = BlackScholes.Inputs(X0=100.0, K=105.0, T=1.0, r=0.01, d=0.00, v=0.20)
-
-    print("Running _simulate() ...")
-    sim_res = bs._simulate(inputs)
-    print("sims.shape:", sim_res.sims.shape)
-
-    print("\nPricing ...")
-    pr = bs.price(inputs, sr=sim_res)
-    print("Put intrinsic price :", float(pr.put_price_intrinsic))
-    print("Call intrinsic price:", float(pr.call_price_intrinsic))
-
-    print("\nDone.")

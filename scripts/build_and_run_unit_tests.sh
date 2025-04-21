@@ -1,15 +1,29 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
-# Get the absolute path to the directory where this script lives
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+###############################################################################
+# 0.  Resolve paths
+###############################################################################
+SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+REPO_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 
-# Run the CUDA check
+###############################################################################
+# 1.  Verify the host can launch NVIDIA‑enabled containers
+###############################################################################
 "$SCRIPT_DIR/verify_docker_cuda.sh"
 
-# Move to the docker directory relative to the script location
-cd "$SCRIPT_DIR/../docker"
+###############################################################################
+# 2.  Build (if needed) and start the docker‑compose stack
+###############################################################################
+cd "$REPO_ROOT/docker"
+docker compose up -d
 
-# Bring up container and run tests
-docker compose up -d # will automatically build the image if it doesn't exist
-docker compose exec spectralmc pytest -s --pyargs spectralmc.tests
+###############################################################################
+# 3.  Run the test suite in the running container
+###############################################################################
+docker compose exec spectralmc bash -c '
+  set -euo pipefail
+  cd /spectralmc/python            # <- repo root inside the image (adapt if different)
+  echo "🧪  Running unit tests …"
+  pytest -s                # spectralmc is already on PYTHONPATH
+'
