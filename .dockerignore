@@ -22,6 +22,7 @@ data/
 **/*.txt
 **/*.bin
 **/*.pid
+**/*.ipynb_checkpoints
 
 **/__pycache__
 
