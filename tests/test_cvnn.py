@@ -5,7 +5,7 @@ from typing import Type, Union
 import torch
 import pytest
 
-from .cvnn import (
+from spectralmc.cvnn import (
     ComplexLinear,
     zReLU,
     modReLU,

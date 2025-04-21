@@ -23,7 +23,7 @@ docker compose up -d
 ###############################################################################
 docker compose exec spectralmc bash -c '
   set -euo pipefail
-  cd /spectralmc/python            # <- repo root inside the image (adapt if different)
+  cd /spectralmc
   echo "🧪  Running unit tests …"
-  pytest -s                # spectralmc is already on PYTHONPATH
+  pytest
 '

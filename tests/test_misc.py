@@ -32,9 +32,9 @@ def test_cuda_tools_available(binary: str) -> None:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 def test_gbm_smoke() -> None:
     sp = gbm.SimulationParams(
-        timesteps=4,
-        network_size=8,
-        batches_per_mc_run=8,
+        timesteps=1024,
+        network_size=2048,
+        batches_per_mc_run=64,
         threads_per_block=32,
         mc_seed=1,
         buffer_size=1,
