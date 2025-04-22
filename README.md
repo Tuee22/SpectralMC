@@ -73,4 +73,16 @@ Author: matt@resolvefintech.com
 
 Send any questions or suggestions to this email address.
 
+## To-do:
+-Genaralize the library to be a server via asynciohttp (spectralmc server)
+-Generalize pricers to take instances of async_normals from a shared instance 
+-create an abstract interface for queueing requests and referencing market data
+    - there will be a market data class topology (spots, fixings, curves, surfaces) and an abstract server. queries will be based on (valuation_namespace, val_datetime, data_asof). For absolute reproducibility, any valuation request must uniquely identify a dataset.
+    If spectralmc is being used for intermediate processing of data (eg turning raw quotes into a surface), it
+    will store the (valuation_namespace, val_datetime, data_asof) that was used for creating it. it will have
+    the same (valuation_namespace, val_datetime) but a later data_asof.
+    -There will be something declarative for running real-time jobs, eg one per second
+-every class that allocates GPU memory has a hard cap (to manage shared memory across pricers)
+
+
 
