@@ -7,6 +7,8 @@ from pydantic import BaseModel, ValidationError, model_validator
 
 from spectralmc.sobol_sampler import BoundSpec, SobolSampler
 
+SEED = 42
+
 
 class Point(BaseModel):
     x: float
@@ -18,8 +20,8 @@ def test_skip_changes_sequence() -> None:
         "x": BoundSpec(lower=0.0, upper=1.0),
         "y": BoundSpec(lower=-1.0, upper=1.0),
     }
-    p0 = SobolSampler(Point, dims).sample(1)[0]
-    p8 = SobolSampler(Point, dims, skip=8).sample(1)[0]
+    p0 = SobolSampler(Point, dims, seed=SEED).sample(1)[0]
+    p8 = SobolSampler(Point, dims, skip=8, seed=SEED).sample(1)[0]
     assert (p0.x, p0.y) != (p8.x, p8.y)
 
 
@@ -32,6 +34,6 @@ def test_validation_error_bubbles() -> None:
             raise ValueError("forced failure")
 
     dims = {"z": BoundSpec(lower=0.0, upper=1.0)}
-    sampler = SobolSampler(AlwaysFail, dims)
+    sampler = SobolSampler(AlwaysFail, dims, seed=SEED)
     with pytest.raises(ValidationError):
         sampler.sample(1)

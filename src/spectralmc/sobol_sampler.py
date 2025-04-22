@@ -1,4 +1,5 @@
 # python/sobol_sampler.py
+
 """
 Sobol‑based quasi‑random sampling with automatic Pydantic validation
 ===================================================================
@@ -30,6 +31,7 @@ sampler: SobolSampler[PointT] = SobolSampler(
         "y": BoundSpec(lower=-1.0, upper=1.0),
     },
     skip=32,  # burn‑in
+    seed=42   # seed for scrambling
 )
 
 points = sampler.sample(8)
@@ -39,15 +41,12 @@ print(points[0].x, points[0].y)
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Dict, Generic, List, Type, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
 from pydantic import BaseModel, ValidationError, model_validator
 
-# If your environment lacks typed stubs for "scipy.stats.qmc", you can do:
 from scipy.stats.qmc import Sobol  # type: ignore[import-untyped]
 
 # ---------------------------------------------------------------------------
@@ -60,15 +59,10 @@ from scipy.stats.qmc import Sobol  # type: ignore[import-untyped]
 #: match the keys given in ``dimensions``.
 PointT = TypeVar("PointT", bound=BaseModel)
 
-# ---------------------------------------------------------------------------
-# pydantic bound specification
-# ---------------------------------------------------------------------------
-
 
 class BoundSpec(BaseModel):
     """
     Simple lower/upper bound pair used to define one dimension of the cube.
-
     Validation guarantees ``lower < upper``.
     """
 
@@ -81,11 +75,6 @@ class BoundSpec(BaseModel):
         if self.lower >= self.upper:
             raise ValueError("The 'lower' value must be strictly less than 'upper'.")
         return self
-
-
-# ---------------------------------------------------------------------------
-# main sampler
-# ---------------------------------------------------------------------------
 
 
 class SobolSampler(Generic[PointT]):
@@ -102,14 +91,9 @@ class SobolSampler(Generic[PointT]):
     skip :
         **Burn‑in** — how many Sobol points to skip from the beginning of the
         sequence (``Sobol.fast_forward(skip)``).  Must be ≥ 0.
-
-    Any `ValidationError` raised by the model bubbles up immediately (no silent
-    skipping).
+    seed :
+        Seed used for scrambling the Sobol sequence. Must be a non-negative int or None.
     """
-
-    # ---------------------------------------------------------------------
-    # construction
-    # ---------------------------------------------------------------------
 
     def __init__(
         self,
@@ -117,10 +101,8 @@ class SobolSampler(Generic[PointT]):
         dimensions: Dict[str, BoundSpec],
         *,
         skip: int = 0,
+        seed: int,
     ) -> None:
-        # ------------------------------------------------------------------
-        # 0) Ensure every dimension name matches a field on the Pydantic model
-        # ------------------------------------------------------------------
         model_fields: set[str] = set(pydantic_class.model_fields)
         dim_names: set[str] = set(dimensions)
 
@@ -134,14 +116,13 @@ class SobolSampler(Generic[PointT]):
         if skip < 0:
             raise ValueError("`skip` must be a non‑negative integer")
 
-        # ------------------------------------------------------------------
-        # 1) Store references and pre‑compute helpers
-        # ------------------------------------------------------------------
+        if seed is not None and (not isinstance(seed, int) or seed < 0):
+            raise ValueError("`seed` must be a non-negative integer or None")
+
         self._pydantic_class: Type[PointT] = pydantic_class
         self._dimensions = dimensions
         self._dimension_names = list(dimensions.keys())
 
-        # Vectorised lower / upper bounds
         self._lower_bounds = np.array(
             [v.lower for v in dimensions.values()], dtype=float
         )
@@ -149,28 +130,17 @@ class SobolSampler(Generic[PointT]):
             [v.upper for v in dimensions.values()], dtype=float
         )
 
-        # Dimensionality
         self._d = len(dimensions)
 
-        # Sobol generator
-        self._sampler = Sobol(d=self._d, scramble=True)
+        self._sampler = Sobol(d=self._d, scramble=True, seed=seed)
 
-        # Burn‑in / fast‑forward
         if skip:
             self._sampler.fast_forward(skip)
-
-    # ---------------------------------------------------------------------
-    # internal helpers
-    # ---------------------------------------------------------------------
 
     def _create_instance(self, row: NDArray[np.float64]) -> PointT:
         """Instantiate PointT from a single NumPy row."""
         data = {self._dimension_names[i]: row[i] for i in range(self._d)}
         return self._pydantic_class(**data)
-
-    # ---------------------------------------------------------------------
-    # public API
-    # ---------------------------------------------------------------------
 
     def sample(self, n_samples: int) -> List[PointT]:
         """
@@ -182,17 +152,10 @@ class SobolSampler(Generic[PointT]):
         ValidationError
             If any sample violates the model constraints.
         """
-        # Raw Sobol points in [0,1]
         samples = self._sampler.random(n_samples)
 
-        # Scale to [lower, upper]
         scaled = (
             self._lower_bounds + (self._upper_bounds - self._lower_bounds) * samples
         )
 
         return [self._create_instance(row) for row in scaled]
-
-
-# =============================================================================
-# self‑contained sanity checks – run with ``python -m sobol_sampler``
-# =============================================================================

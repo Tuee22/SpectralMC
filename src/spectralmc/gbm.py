@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, Annotated
 from math import sqrt
 
-from .async_normals import ConcurrentNormGenerator
+from spectralmc.async_normals import ConcurrentNormGenerator
 
 # --------------------------------------------------------------------------- #
 #                               Type Helpers                                  #
@@ -56,6 +56,11 @@ class SimulationParams(BaseModel):
         return (
             self.total_paths() + self.threads_per_block - 1
         ) // self.threads_per_block
+
+    def memory_footprint_bytes(self) -> int:
+        """Returns total memory footprint in bytes"""
+        bytes_per_float = 8  # double precision floats
+        return bytes_per_float * self.total_paths() * self.timesteps * self.buffer_size
 
 
 # --------------------------------------------------------------------------- #
@@ -99,7 +104,7 @@ class BlackScholes:
         T: NonNegFloat
         r: float
         d: float
-        v: PosFloat
+        v: NonNegFloat
 
     # ---------------------------- results --------------------------------- #
 
@@ -122,7 +127,7 @@ class BlackScholes:
 
     # -------------------------- constructor ------------------------------- #
 
-    def __init__(self, sp: SimulationParams, buffer_size: int = 4) -> None:
+    def __init__(self, sp: SimulationParams) -> None:
         self._sp = sp
         self._cp_stream = cp.cuda.Stream(non_blocking=True)
         self._numba_stream = cuda.stream()
@@ -132,7 +137,7 @@ class BlackScholes:
             rows=self._sp.timesteps,
             cols=self._sp.total_paths(),
             seed=self._sp.mc_seed,
-            buffer_size=buffer_size,
+            buffer_size=self._sp.buffer_size,
         )
 
     # ------------------------ path simulation ----------------------------- #
@@ -144,10 +149,10 @@ class BlackScholes:
         # 2) Launch kernel on Numba stream
         dt = inputs.T / self._sp.timesteps
         sqrt_dt = sqrt(dt)
-        sims_dev = cuda.as_cuda_array(sims)  # same underlying memory
+        sims_numba = cuda.as_cuda_array(sims)  # same underlying memory
         SimulateBlackScholes[
             self._sp.total_blocks(), self._sp.threads_per_block, self._numba_stream
-        ](sims_dev, self._sp.timesteps, sqrt_dt, inputs.X0, inputs.v)
+        ](sims_numba, self._sp.timesteps, sqrt_dt, inputs.X0, inputs.v)
 
         # 3) Concurrent CuPy work
         with self._cp_stream:
