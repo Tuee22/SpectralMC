@@ -179,7 +179,7 @@ class BlackScholes:
     # ----------------------------- pricing -------------------------------- #
 
     def price(self, inputs: Inputs, sr: Optional[SimResults] = None) -> PricingResults:
-        """generates a pricing sample on the device """
+        """generates a pricing sample on the device"""
         sr = sr or self._simulate(inputs)
 
         with self._cp_stream:
@@ -206,7 +206,7 @@ class BlackScholes:
         )
 
     def get_host_price(self, pr: PricingResults) -> HostPricingResults:
-        """ takes the pricing sample on the device, averages it, and moves it to the host """
+        """takes the pricing sample on the device, averages it, and moves it to the host"""
         with self._cp_stream:
             call_price_intrinsic = pr.call_price_intrinsic.item()
             put_price_intrinsic = pr.put_price_intrinsic.item()

@@ -3,6 +3,11 @@ FROM nvidia/cuda:12.8.1-devel-ubuntu22.04
 ARG DEBIAN_FRONTEND=noninteractive
 ENV PATH="/root/.local/bin:/usr/local/bin:$PATH"
 
+# these are needed to ensure cupy works with newer gen GPUs
+# (will jit for the local architecture if we need it)
+ENV CUPY_COMPILE_WITH_PTX=1
+ENV CUPY_NVCC_GENERATE_CODE=current
+
 # 1) Update and install base tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
