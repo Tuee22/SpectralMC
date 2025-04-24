@@ -125,6 +125,15 @@ class BlackScholes:
         put_convexity: cp.ndarray
         call_convexity: cp.ndarray
 
+    class HostPricingResults(BaseModel):
+        call_price_intrinsic: float
+        put_price_intrinsic: float
+        underlying: float
+        put_convexity: float
+        call_convexity: float
+        call_price: float
+        put_price: float
+
     # -------------------------- constructor ------------------------------- #
 
     def __init__(self, sp: SimulationParams) -> None:
@@ -170,6 +179,7 @@ class BlackScholes:
     # ----------------------------- pricing -------------------------------- #
 
     def price(self, inputs: Inputs, sr: Optional[SimResults] = None) -> PricingResults:
+        """generates a pricing sample on the device """
         sr = sr or self._simulate(inputs)
 
         with self._cp_stream:
@@ -195,6 +205,27 @@ class BlackScholes:
             call_convexity=call_conv,
         )
 
+    def get_host_price(self, pr: PricingResults) -> HostPricingResults:
+        """ takes the pricing sample on the device, averages it, and moves it to the host """
+        with self._cp_stream:
+            call_price_intrinsic = pr.call_price_intrinsic.item()
+            put_price_intrinsic = pr.put_price_intrinsic.item()
+            underlying = pr.underlying.mean().item()
+            put_convexity = pr.put_convexity.mean().item()
+            call_convexity = pr.call_convexity.mean().item()
+        self._cp_stream.synchronize()
 
-# --------------------------------------------------------------------------- #
-#                           Quick Demonstration                               #
+        return self.HostPricingResults(
+            call_price_intrinsic=call_price_intrinsic,
+            put_price_intrinsic=put_price_intrinsic,
+            underlying=underlying,
+            put_convexity=put_convexity,
+            call_convexity=call_convexity,
+            call_price=call_price_intrinsic + call_convexity,
+            put_price=put_price_intrinsic + put_convexity,
+        )
+
+    def price_to_host(self, inputs: Inputs) -> HostPricingResults:
+        """prices on device and returns price to the host"""
+        pr = self.price(inputs=inputs)
+        return self.get_host_price(pr=pr)
