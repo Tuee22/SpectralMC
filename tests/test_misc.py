@@ -19,7 +19,7 @@ def test_cuda_tools_available(binary: str) -> None:
     try:
         cp = subprocess.run([binary], capture_output=True, text=True, check=True)
     except FileNotFoundError:
-        pytest.skip(f"{binary!r} not found (CPU‑only runner?)")
+        pytest.skip(f"{binary!r} not found (CPU-only runner?)")
     else:
         assert cp.returncode == 0
 
@@ -39,15 +39,24 @@ def test_gbm_smoke() -> None:
         mc_seed=1,
         buffer_size=1,
     )
-    engine = gbm.BlackScholes(sp)
-    inputs = gbm.BlackScholes.Inputs(X0=100.0, K=101.0, T=1.0, r=0.01, d=0.0, v=0.20)
+
+    engine = gbm.BlackScholesPricer(sp)
+    inputs = gbm.BlackScholesPricer.Inputs(
+        X0=100.0,
+        K=101.0,
+        T=1.0,
+        r=0.01,
+        d=0.0,
+        v=0.20,
+    )
+
     res = engine.price(inputs)
     assert res.call_price_intrinsic >= 0.0
     assert res.put_price_intrinsic >= 0.0
 
 
 # --------------------------------------------------------------------------- #
-# Tiny pure‑python example                                                    #
+# Tiny pure-python example                                                    #
 # --------------------------------------------------------------------------- #
 
 

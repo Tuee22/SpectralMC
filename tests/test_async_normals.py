@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 def _has_cupy() -> bool:
     try:
-        import cupy  # noqa: F401  (runtime check only)
+        import cupy  # noqa: F401 — runtime check only
     except ModuleNotFoundError:
         return False
     return True
@@ -25,9 +25,9 @@ def _has_cupy() -> bool:
 
 @pytest.mark.skipif(not _has_cupy(), reason="CuPy not installed")
 def test_norm_generator_shapes_and_state() -> None:
-    import cupy as cp  # runtime‑only import
+    import cupy as cp  # runtime-only import
 
-    gen = async_normals.NormGenerator(5, 7, seed=123)
+    gen = async_normals.NormGenerator(5, 7, seed=123, dtype=cp.float32)
     a: "cp.ndarray" = gen.get_matrix()
     b: "cp.ndarray" = gen.get_matrix()
     assert a.shape == (5, 7)
@@ -46,7 +46,9 @@ def test_concurrent_norm_generator_round_robin() -> None:
     import cupy as cp
 
     rows, cols = 4, 6
-    cgen = async_normals.ConcurrentNormGenerator(rows, cols, seed=999, buffer_size=3)
+    cgen = async_normals.ConcurrentNormGenerator(
+        rows, cols, seed=999, buffer_size=3, dtype=cp.float64
+    )
     mats = [cgen.get_matrix() for _ in range(6)]
     for m in mats:
         assert m.shape == (rows, cols)
