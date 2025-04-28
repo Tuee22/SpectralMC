@@ -13,7 +13,7 @@ import cupy as cp  # type: ignore[import-untyped]
 from numba import cuda  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, Annotated
-from math import sqrt
+from math import sqrt, exp
 
 from spectralmc.async_normals import ConcurrentNormGenerator
 
@@ -70,18 +70,27 @@ class SimulationParams(BaseModel):
 
 @cuda.jit  # type: ignore[misc]
 def SimulateBlackScholes(
-    input_output: cp.ndarray, timesteps: int, sqrt_dt: float, X0: float, v: float
+    input_output: cp.ndarray,
+    timesteps: int,
+    dt: float,
+    X0: float,
+    r: float,
+    d: float,
+    v: float,
 ) -> None:
     """
     Evolves *Geometric* Brownian motion paths **in‑place** on the GPU.
     Each column = one path; each row = time‑step.
     """
+    sqrt_dt = sqrt(dt)
     idx = cuda.grid(1)
     if idx < input_output.shape[1]:
         X = X0
         for i in range(timesteps):
             dW = input_output[i, idx] * sqrt_dt
-            X += v * X * dW
+            # log_v = (r - d - 0.5 * v * v) * dt + v * dW
+            # X *= exp(log_v)
+            X += (r - d) * X * dt + v * X * dW
             X = abs(X)  # numerical guard
             input_output[i, idx] = X
 
@@ -157,11 +166,10 @@ class BlackScholes:
 
         # 2) Launch kernel on Numba stream
         dt = inputs.T / self._sp.timesteps
-        sqrt_dt = sqrt(dt)
         sims_numba = cuda.as_cuda_array(sims)  # same underlying memory
         SimulateBlackScholes[
             self._sp.total_blocks(), self._sp.threads_per_block, self._numba_stream
-        ](sims_numba, self._sp.timesteps, sqrt_dt, inputs.X0, inputs.v)
+        ](sims_numba, self._sp.timesteps, dt, inputs.X0, inputs.r, inputs.d, inputs.v)
 
         # 3) Concurrent CuPy work
         with self._cp_stream:
@@ -169,10 +177,7 @@ class BlackScholes:
             forwards = inputs.X0 * cp.exp((inputs.r - inputs.d) * times)
             df = cp.exp(-inputs.r * times)
 
-            self._numba_stream.synchronize()  # wait for kernel
-            row_means = cp.mean(sims, axis=1, keepdims=True)
-            sims *= forwards[:, None] / row_means
-
+        self._numba_stream.synchronize()
         self._cp_stream.synchronize()
         return self.SimResults(times=times, sims=sims, forwards=forwards, df=df)
 
