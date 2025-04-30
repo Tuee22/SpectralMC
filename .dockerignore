@@ -31,3 +31,4 @@ data/
 .dockerignore
 **/.mypy_cache
 setup.sh
+**/.failed_artifacts
