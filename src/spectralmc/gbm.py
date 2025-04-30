@@ -98,9 +98,9 @@ def _simulate_black_scholes(  # noqa: N802 (CUDA naming)
 ) -> None:
     """In‑place GBM evolution kernel (dtype comes from *input_output*)."""
 
-    sqrt_dt = sqrt(dt)
     idx = cuda.grid(1)
     if idx < input_output.shape[1]:
+        sqrt_dt = sqrt(dt)
         X = X0
         for i in range(timesteps):
             dW = input_output[i, idx] * sqrt_dt
@@ -172,17 +172,11 @@ class BlackScholes:
             dtype=self._cp_dtype,
         )
 
-    # ---------------- helpers ------------------------------------------ #
-
-    def _scalar(self, x: float) -> Scalar:
-        """Convert *x* to engine precision (32‑ or 64‑bit float)."""
-        return Scalar32(x) if self._sp.dtype == "float32" else Scalar64(x)
-
     # ---------------- simulation pipeline ------------------------------ #
 
-    def _simulate(self, inputs: "BlackScholes.Inputs") -> "BlackScholes.SimResults":
+    def _simulate(self, inputs: Inputs) -> SimResults:
         sims: cp.ndarray = self._normal_gen.get_matrix()
-        dt_scalar: Scalar = self._scalar(inputs.T / self._sp.timesteps)
+        dt: float = inputs.T / self._sp.timesteps
 
         sims_numba = cuda.as_cuda_array(sims)
         SimulateBlackScholes[
@@ -192,24 +186,23 @@ class BlackScholes:
         ](
             sims_numba,
             self._sp.timesteps,
-            float(dt_scalar),
-            float(self._scalar(inputs.X0)),
-            float(self._scalar(inputs.r)),
-            float(self._scalar(inputs.d)),
-            float(self._scalar(inputs.v)),
+            dt,
+            inputs.X0,
+            inputs.r,
+            inputs.d,
+            inputs.v,
         )
 
+        # concurrent wrt kernel above
         with self._cp_stream:
             times = cp.linspace(
-                dt_scalar,
-                self._scalar(inputs.T),
+                dt,
+                inputs.T,
                 num=self._sp.timesteps,
                 dtype=self._cp_dtype,
             )
-            forwards = self._scalar(inputs.X0) * cp.exp(
-                (self._scalar(inputs.r) - self._scalar(inputs.d)) * times
-            )
-            df = cp.exp(-self._scalar(inputs.r) * times)
+            forwards = inputs.X0 * cp.exp((inputs.r - inputs.d) * times)
+            df = cp.exp(-inputs.r * times)
 
         self._numba_stream.synchronize()
         self._cp_stream.synchronize()
@@ -220,9 +213,9 @@ class BlackScholes:
     def price(
         self,
         *,
-        inputs: "BlackScholes.Inputs",
-        sr: Optional["BlackScholes.SimResults"] = None,
-    ) -> "BlackScholes.PricingResults":
+        inputs: Inputs,
+        sr: Optional[SimResults] = None,
+    ) -> PricingResults:
         sr = sr or self._simulate(inputs)
 
         with self._cp_stream:
@@ -250,9 +243,7 @@ class BlackScholes:
 
     # ---------------- host aggregation --------------------------------- #
 
-    def get_host_price(
-        self, pr: "BlackScholes.PricingResults"
-    ) -> "BlackScholes.HostPricingResults":
+    def get_host_price(self, pr: PricingResults) -> HostPricingResults:
         with self._cp_stream:
             call_intr = float(pr.call_price_intrinsic.item())
             put_intr = float(pr.put_price_intrinsic.item())
@@ -273,7 +264,5 @@ class BlackScholes:
 
     # ---------------- convenience wrapper ------------------------------ #
 
-    def price_to_host(
-        self, inputs: "BlackScholes.Inputs"
-    ) -> "BlackScholes.HostPricingResults":
+    def price_to_host(self, inputs: Inputs) -> HostPricingResults:
         return self.get_host_price(self.price(inputs=inputs))

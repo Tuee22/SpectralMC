@@ -5,16 +5,19 @@ from __future__ import annotations
 import math
 from pathlib import Path
 from typing import Any, Dict, Final, List, Tuple, TypeAlias, cast
+from typing_extensions import Literal
+from pydantic import BaseModel
+from operator import attrgetter
 
 import numpy as np
-import pandas as pd
 import pytest
-from typing_extensions import Literal
+from scipy.stats import t # type: ignore[import-untyped]
+import pandas as pd
 
 import cupy as cp  # type: ignore[import-untyped]
 import QuantLib as ql  # type: ignore[import-untyped]
 
-from spectralmc.gbm import BlackScholes, SimulationParams
+from spectralmc.gbm import BlackScholes, SimulationParams, DtypeLiteral
 from spectralmc.sobol_sampler import BoundSpec, SobolSampler
 
 # ─────────────────────────────────── constants ──────────────────────────────────
@@ -35,138 +38,114 @@ _MC_SEED: Final[int] = 42
 _BUFFER_SIZE: Final[int] = 1
 
 _SOBOL_N: Final[int] = 128
-_REPS_COLD: Final[int] = 3
-_REPS_HQ: Final[int] = 7
+_REPS_COLD: Final[int] = 64
+_REPS_HQ: Final[int] = 512
+_EPSILON: Final[float] = 1e-6
+_P_THRESHOLD: Final[float] = 0.05
 
-_K_SIGMA: Final[float] = 3.0
-_RMSE_TOL: Final[float] = 1.0e-2
 
 _ARTEFACT_DIR: Final[Path] = Path(__file__).with_suffix("").parent / ".failed_artifacts"
 _ARTEFACT_DIR.mkdir(exist_ok=True)
-
-# ─────────────────────────────────── typing help ────────────────────────────────
-StatT: TypeAlias = Tuple[float, float]
-PriceT: TypeAlias = Tuple[StatT, StatT]
 
 
 # ───────────────────────────── analytic Black helper ────────────────────────────
 def bs_price_quantlib(inp: BlackScholes.Inputs) -> BlackScholes.HostPricingResults:
     """Closed-form Black price via QuantLib.blackFormula."""
     std = inp.v * math.sqrt(inp.T)
-    disc = math.exp(-inp.r * inp.T)
+    df = math.exp(-inp.r * inp.T)
     fwd = inp.X0 * math.exp((inp.r - inp.d) * inp.T)
 
-    call = ql.blackFormula(ql.Option.Call, inp.K, fwd, std, disc)
-    put = ql.blackFormula(ql.Option.Put, inp.K, fwd, std, disc)
+    call = ql.blackFormula(ql.Option.Call, inp.K, fwd, std, df)
+    put = ql.blackFormula(ql.Option.Put, inp.K, fwd, std, df)
 
-    cint = disc * max(fwd - inp.K, 0.0)
-    pint = disc * max(inp.K - fwd, 0.0)
+    call_intrinsic = df * max(fwd - inp.K, 0.0)
+    put_intrinsic = df * max(inp.K - fwd, 0.0)
 
     return BlackScholes.HostPricingResults(
-        call_price_intrinsic=cint,
-        put_price_intrinsic=pint,
+        call_price_intrinsic=call_intrinsic,
+        put_price_intrinsic=put_intrinsic,
         underlying=fwd,
-        call_convexity=call - cint,
-        put_convexity=put - pint,
+        call_convexity=call - call_intrinsic,
+        put_convexity=put - put_intrinsic,
         call_price=call,
         put_price=put,
     )
 
 
+def two_tailed_t_pvalue(sample: np.ndarray, mu0: float = 0.0) -> float:
+    """
+    Return the two-tailed p-value for a one-sample Student’s t-test.
+
+    Parameters
+    ----------
+    sample : np.ndarray
+        1-D array of observations (numeric).
+    mu0 : float, optional (default = 0.0)
+        The population mean under the null hypothesis H₀.
+
+    Returns
+    -------
+    float
+        Two-tailed p-value for testing H₀ : mean(sample) == mu0.
+    """
+    # Ensure a NumPy array of floats
+    x = np.asarray(sample, dtype=float)
+    n = x.size
+    if n < 2:
+        raise ValueError("At least two observations are required for a t-test.")
+
+    # Sample statistics
+    x_bar = x.mean()
+    s = x.std(ddof=1)  # unbiased (n-1) denominator
+    se = s / np.sqrt(n)  # standard error of the mean
+
+    # t statistic and degrees of freedom
+    t_stat = (x_bar - mu0) / se
+    df = n - 1
+
+    # Two-tailed p-value: 2 * P(T > |t_stat|)
+    p_val = 2.0 * t.sf(abs(t_stat), df)
+
+    return p_val
+
+
+def SamplingResults(BaseModel):
+    """results container for _mc_sample function below"""
+    input: Inputs
+    sample: List[BlackScholes.HostPricingResults]
+    analytic_price: BlackScholes.HostPricingResults
+    p_value: float
+
+
 # ───────────────────────────── Monte-Carlo helpers ─────────────────────────────
-def _mc_stats(engine: BlackScholes, inp: BlackScholes.Inputs, reps: int) -> PriceT:
-    sample = np.array(
-        [
-            (host.call_price, host.put_price)
-            for host in (engine.price_to_host(inp) for _ in range(reps))
-        ],
-        dtype=float,
+def _mc_sample(engine: BlackScholes, input: Inputs, n: int) -> SamplingResults:
+    """uses the MC engine to sample n MC prices, and performs a student T
+    test to see if they are within tolerance"""
+    sample = [engine.price_to_host(input) for _ in range(n)]
+    analytic_price = bs_price_quantlib(input)
+
+    # perform parity check
+    parity_check = np.array([s.put_convexity - s.call_convexity for s in sample])
+    assert (
+        np.max(np.abs(parity_check)) < _EPSILON
+    ), f"Error: parity check failed with input {input}"
+
+    # compute sampling errors wrt analytic price
+    sample_errors = (
+        np.array([s.call_convexity for s in sample]) - analytic_price.call_convexity
     )
-    means = sample.mean(0)
-    stderrs = np.maximum(
-        sample.std(0, ddof=1) / math.sqrt(reps),
-        1e-8 * np.maximum(1.0, np.abs(means)),
+
+    # perform student-t test
+    p_value = two_tailed_t_pvalue(sample_errors)
+
+    return SamplingResults(
+        input=input, sample=sample, analytic_price=analytic_price, p_value=p_value
     )
-    return (
-        (float(means[0]), float(stderrs[0])),
-        (float(means[1]), float(stderrs[1])),
-    )
-
-
-# ───────────────────────────── Data-frame pipeline ─────────────────────────────
-def _cold_pass(points: List[BlackScholes.Inputs], eng: BlackScholes) -> pd.DataFrame:
-    def _row(idx_pt: Tuple[int, BlackScholes.Inputs]) -> Dict[str, float]:
-        idx, p = idx_pt
-        (mc_c, se_c), (mc_p, se_p) = _mc_stats(eng, p, _REPS_COLD)
-        ana = bs_price_quantlib(p)
-        return {
-            "idx": idx,
-            **p.model_dump(),
-            "mc_call_mean": mc_c,
-            "mc_call_se": se_c,
-            "mc_put_mean": mc_p,
-            "mc_put_se": se_p,
-            "ana_call": ana.call_price,
-            "ana_put": ana.put_price,
-        }
-
-    df = pd.DataFrame([_row(t) for t in enumerate(points)]).set_index("idx")
-    df["abs_err_call"] = (df["mc_call_mean"] - df["ana_call"]).abs()
-    df["abs_err_put"] = (df["mc_put_mean"] - df["ana_put"]).abs()
-    df["hq_needed"] = (df["abs_err_call"] > _K_SIGMA * df["mc_call_se"]) | (
-        df["abs_err_put"] > _K_SIGMA * df["mc_put_se"]
-    )
-    df["hq_failed"] = False
-    return df
-
-
-def _hq_upgrade(
-    df: pd.DataFrame,
-    pts: List[BlackScholes.Inputs],
-    eng: BlackScholes,
-) -> pd.DataFrame:
-    def _upgrade(
-        row: pd.Series[Any],
-    ) -> pd.Series[Any]:  # 👈 Series[Any] => no mypy error
-        if not bool(row["hq_needed"]):
-            return row
-        idx = cast(int, row.name)
-        (mc_c, se_c), (mc_p, se_p) = _mc_stats(eng, pts[idx], _REPS_HQ)
-        ana_c, ana_p = float(row["ana_call"]), float(row["ana_put"])
-        within = (
-            abs(mc_c - ana_c) <= _K_SIGMA * se_c
-            and abs(mc_p - ana_p) <= _K_SIGMA * se_p
-        )
-        upd = row.copy()
-        upd.loc[
-            [
-                "mc_call_mean",
-                "mc_call_se",
-                "mc_put_mean",
-                "mc_put_se",
-                "abs_err_call",
-                "abs_err_put",
-                "hq_needed",
-                "hq_failed",
-            ]
-        ] = [
-            mc_c,
-            se_c,
-            mc_p,
-            se_p,
-            abs(mc_c - ana_c),
-            abs(mc_p - ana_p),
-            False,
-            not within,
-        ]
-        return upd
-
-    return cast(pd.DataFrame, df.apply(_upgrade, axis=1))
 
 
 # ──────────────────────────────── PyTest entry ────────────────────────────────
 @pytest.mark.parametrize("precision", ["float32", "float64"])
-def test_black_scholes_mc(precision: str) -> None:
+def test_black_scholes_mc(precision: DtypeLiteral) -> None:
     """GPU Monte-Carlo pricer must match QuantLib within 3 σ & 1 % RMSE."""
     sp = SimulationParams(
         timesteps=_TIMESTEPS,
@@ -175,29 +154,41 @@ def test_black_scholes_mc(precision: str) -> None:
         threads_per_block=_THREADS_PER_BLOCK,
         mc_seed=_MC_SEED,
         buffer_size=_BUFFER_SIZE,
-        dtype=cast(Literal["float32", "float64"], precision),
+        dtype=precision,
     )
     engine = BlackScholes(sp)
     sampler = SobolSampler(BlackScholes.Inputs, _BS_DIMENSIONS, seed=43)
     points = sampler.sample(_SOBOL_N)
 
-    df = _hq_upgrade(_cold_pass(points, engine), points, engine)
+    cold_sampling_results: List[SamplingResults] = [
+        _mc_sample(enging=engine, input=p, n=_REPS_COLD) for p in points
+    ]
 
-    failures: List[str] = []
-    if df["hq_failed"].any():
-        failures.append(f"{df['hq_failed'].sum()} >3σ post-HQ")
+    hq_sampling_results: List[SamplingResults] = [
+        _mc_sample(engine=engine, input=r.input, n=_REPS_HQ)
+        for r in cold_sampling_results
+        if r.p_value < _P_THRESHOLD
+    ]
 
-    rel_call = (df["mc_call_mean"] - df["ana_call"]).abs() / df["ana_call"].abs()
-    rel_put = (df["mc_put_mean"] - df["ana_put"]).abs() / df["ana_put"].abs()
-    rms_c, rms_p = np.sqrt((rel_call**2).mean()), np.sqrt((rel_put**2).mean())
-    if rms_c >= _RMSE_TOL:
-        failures.append(f"Call RMSE {rms_c:.3%} ≥ 1 %")
-    if rms_p >= _RMSE_TOL:
-        failures.append(f"Put RMSE {rms_p:.3%} ≥ 1 %")
+    sorted_failures: List[SamplingResults] = sorted(
+        (r for r in hq_sampling_results if r.p_value < _P_THRESHOLD),
+        key=attrgetter("p_value"),
+        reverse=True,
+    )
 
     if failures:
+        # construct pandas df showing results
+        input = pd.DataFrame([f.input.dump_model() for f in sorted_failures])
+        analytic_price = pd.DataFrame(
+            [f.analytic_price.dump_model() for f in sorted_failures], index=input
+        )
+        p_value = pd.DataFrame(
+            [f.p_value.dump_model() for f in sorted_failures], index=input
+        )
+        df = pd.concat(
+            {"analytic_price": analytic_price, "p_value": p_value}, axis="columns"
+        )
+
         artefact = _ARTEFACT_DIR / f"bs_mc_failure_{precision}.parquet"
         df.assign(dtype=precision).to_parquet(artefact)
         pytest.fail("; ".join([*failures, f"artefact → {artefact}"]))
-
-    print(df.head())
