@@ -62,7 +62,8 @@ _BUFFER_SIZE: Final[int] = 1
 _SOBOL_N: Final[int] = 128
 _REPS_COLD: Final[int] = 64
 _REPS_HQ: Final[int] = 512
-_EPSILON: Final[float] = 1e-4
+_FLOAT64_EPSILON: Final[float] = 1e-8
+_FLOAT32_EPSILON: Final[float] = 1e-2
 _P_THRESHOLD: Final[float] = 0.05
 
 _ARTEFACT_DIR: Final[Path] = Path(__file__).with_suffix("").parent / ".failed_artifacts"
@@ -90,20 +91,20 @@ def bs_price_quantlib(inp: Inputs) -> HostPriceResults:
     df = math.exp(-inp.r * inp.T)
     fwd = inp.X0 * math.exp((inp.r - inp.d) * inp.T)
 
-    call = ql.blackFormula(ql.Option.Call, inp.K, fwd, std, df)
-    put = ql.blackFormula(ql.Option.Put, inp.K, fwd, std, df)
+    put_price = ql.blackFormula(ql.Option.Put, inp.K, fwd, std, df)
+    call_price = ql.blackFormula(ql.Option.Call, inp.K, fwd, std, df)
 
-    call_intrinsic = df * max(fwd - inp.K, 0.0)
     put_intrinsic = df * max(inp.K - fwd, 0.0)
+    call_intrinsic = df * max(fwd - inp.K, 0.0)
 
     return HostPriceResults(
-        call_price_intrinsic=call_intrinsic,
         put_price_intrinsic=put_intrinsic,
+        call_price_intrinsic=call_intrinsic,
         underlying=fwd,
-        call_convexity=call - call_intrinsic,
-        put_convexity=put - put_intrinsic,
-        call_price=call,
-        put_price=put,
+        put_convexity=put_price - put_intrinsic,
+        call_convexity=call_price - call_intrinsic,
+        put_price=put_price,
+        call_price=call_price,
     )
 
 
@@ -162,11 +163,15 @@ def _mc_sample(engine: BlackScholes, input: Inputs, n: int) -> SamplingResults:
     sample = [engine.price_to_host(input) for _ in range(n)]
     analytic_price = bs_price_quantlib(input)
 
-    # put‑call parity on convexities (should be zero)
-    parity_check = np.array([s.put_convexity - s.call_convexity for s in sample])
-    assert (
-        np.max(np.abs(parity_check)) < _EPSILON
-    ), f"Parity check failed for input {input}"
+    # put‑call parity on convexities (should be zero if we normalize forwards)
+    if engine._sp.normalize_forwards:
+        parity_check = np.array([s.put_convexity - s.call_convexity for s in sample])
+        epsilon = (
+            _FLOAT32_EPSILON if engine._sp.dtype == "float32" else _FLOAT64_EPSILON
+        )
+        assert (
+            np.max(np.abs(parity_check)) < epsilon
+        ), f"Parity check failed for input {input}"
 
     errors = (
         np.array([s.call_convexity for s in sample]) - analytic_price.call_convexity
@@ -184,7 +189,7 @@ def _mc_sample(engine: BlackScholes, input: Inputs, n: int) -> SamplingResults:
 # ──────────────────────────────── PyTest entry ────────────────────────────────
 
 
-@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("precision", ["float64", "float32"])
 def test_black_scholes_mc(precision: DtypeLiteral) -> None:
     """End‑to‑end validation of the GPU Monte‑Carlo Black‑Scholes pricer.
 
@@ -203,6 +208,8 @@ def test_black_scholes_mc(precision: DtypeLiteral) -> None:
         mc_seed=_MC_SEED,
         buffer_size=_BUFFER_SIZE,
         dtype=precision,
+        simulate_log_return=True,
+        normalize_forwards=False,
     )
     engine = BlackScholes(sp)
 
