@@ -1,3 +1,4 @@
+# python/async_normals.py
 """
 Asynchronous normal generation with CuPy for GPU‑based Monte‑Carlo.
 
@@ -47,7 +48,7 @@ class NormGenerator:
         cols: int,
         seed: int,
         *,
-        dtype: _InputDType = "float32",
+        dtype: _InputDType,
     ) -> None:
         if rows <= 0 or cols <= 0 or seed <= 0:
             raise ValueError("rows, cols, and seed must be positive")
