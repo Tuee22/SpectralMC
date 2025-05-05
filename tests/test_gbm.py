@@ -1,4 +1,4 @@
-"""tests/test_bs_mc.py – GPU MC vs. QuantLib Black‑Scholes.
+"""tests/test_gbm.py – GPU MC vs. QuantLib Black‑Scholes.
 
 A PyTest regression that compares a GPU Monte‑Carlo pricer against the
 closed‑form Black–Scholes ("Black") value produced by QuantLib.  The module
