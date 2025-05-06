@@ -51,9 +51,7 @@ def assert_close(
     """Thin wrapper over :func:`torch.allclose` with helpful diagnostics."""
     if not torch.allclose(actual, expected, atol=atol, rtol=rtol):
         diff_abs = (actual - expected).abs().max().item()
-        diff_rel = (
-            (actual - expected).abs() / (expected.abs() + 1e-12)
-        ).max().item()
+        diff_rel = ((actual - expected).abs() / (expected.abs() + 1e-12)).max().item()
         raise AssertionError(
             msg or f"Tensors differ (abs={diff_abs:.2e}, rel={diff_rel:.2e})"
         )
@@ -274,7 +272,9 @@ def test_residual_block_identity_when_zeroed() -> None:
         (CVNN, {"hidden_features": 8, "num_residual_blocks": 2}),
     ],
 )
-def test_models_forward_and_grad(model_cls: type[nn.Module], kwargs: dict[str, int]) -> None:
+def test_models_forward_and_grad(
+    model_cls: type[nn.Module], kwargs: dict[str, int]
+) -> None:
     """Forward/backward sanity for full models."""
     model = model_cls(input_features=5, output_features=2, **kwargs)
 
