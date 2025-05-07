@@ -1,12 +1,21 @@
 [tool.poetry]
 name        = "spectralmc"
 version     = "0.0.1"
-description = "GPU‑accelerated library for SDE simulation"
+description = "GPU-accelerated library for SDE simulation"
 authors     = ["tuee22"]
 
 packages = [
   { include = "spectralmc", from = "src" }
 ]
+
+# --------------------------------------------------------------------------- #
+#        P Y T O R C H   C U D A   1 2 . 8   W H E E L   S O U R C E          #
+# --------------------------------------------------------------------------- #
+[[tool.poetry.source]]
+name     = "pytorch-cu128"
+url      = "https://download.pytorch.org/whl/cu128"
+priority = "explicit"   # only used when a dependency asks for it
+
 
 # --------------------------------------------------------------------------- #
 #                       R U N T I M E   D E P E N D E N C I E S               #
@@ -19,7 +28,7 @@ numpy          = ">=2.0,<3.0"
 pandas         = ">=2.0,<3.0"
 pandas-stubs   = ">=2.2.3,<3.0"
 polars         = ">=1.26,<2.0"
-pandera = {version = ">=0.23.1,<1.0.0", extras = ["mypy","dask","polars"]}
+pandera        = { version = ">=0.23.1,<1.0.0", extras = ["mypy","dask","polars"] }
 aiohttp        = ">=3.8,<4.0"
 aiofiles       = ">=24.1,<25.0"
 types-aiofiles = ">=24.1,<25.0"
@@ -36,7 +45,10 @@ protobuf      = ">=6.30,<7.0"
 # numerics
 scipy            = ">=1.13,<2.0"
 scikit-learn     = ">=1.6,<2.0"
-torch            = ">=2.6,<3.0"
+
+# --- PyTorch 2.7.0 compiled for CUDA 12.8 (sm_120) ------------------------- #
+torch            = { version = "2.7.0+cu128", source = "pytorch-cu128" }
+# --------------------------------------------------------------------------- #
 torchtyping      = ">=0.1.5,<1.0"
 stable_baselines3 = ">=2.6,<3.0"
 cupy-cuda12x     = ">=13.4,<14.0"
@@ -56,6 +68,7 @@ seaborn     = ">=0.13.2,<1.0"
 pydantic           = { version = ">=2.9,<3.0", extras = ["mypy"] }
 pydantic_settings  = ">=2.7,<3.0"
 
+
 # --------------------------------------------------------------------------- #
 #                       D E V   &   T E S T   D E P S                         #
 # --------------------------------------------------------------------------- #
@@ -68,20 +81,26 @@ hypothesis    = ">=6.102,<7.0"
 mypy   = ">=1.15,<2.0"
 black  = ">=25.1,<26.0"
 
+
+# --------------------------------------------------------------------------- #
+#                               B U I L D                                     #
 # --------------------------------------------------------------------------- #
 [build-system]
 requires      = ["poetry-core>=1.1.0"]
 build-backend = "poetry.core.masonry.api"
 
+
+# --------------------------------------------------------------------------- #
+#                       T O O L   C O N F I G U R A T I O N                   #
+# --------------------------------------------------------------------------- #
 [tool.mypy]
 python_version = "3.12"
-strict = true
-files = ["src/spectralmc", "tests"]
-
+strict         = true
+files          = ["src/spectralmc", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = "tests"
-addopts = "-ra -q -m 'not gpu'"
-markers = [
+addopts   = "-ra -q -m 'not gpu'"
+markers   = [
     "gpu: needs CUDA"
 ]
