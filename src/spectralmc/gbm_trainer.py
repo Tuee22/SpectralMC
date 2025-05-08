@@ -1,370 +1,100 @@
 """
 gbm_trainer.py
 ==============
-Complex-Valued Neural Network for GBM Payoff DFT
-------------------------------------------------
-This module trains a complex-valued neural network (CVNN) to learn the
-Fourier transform (DFT) of a European call payoff distribution under
-a Geometric Brownian Motion (GBM) model. It uses Sobol quasi-random sampling
-to cover the 6D Black-Scholes parameter space: (X0, K, T, r, d, v).
+Trains a complex-valued neural network (CVNN) to learn the Fourier transform (DFT)
+of a European call payoff distribution under a GPU-based Black-Scholes simulation.
 
-Key Steps:
-    1) Draw Sobol points in [0,1]^6 and map to actual domain bounds.
-    2) Simulate Monte Carlo payoffs (for each point) in one step:
-       S_T = S0 * exp((r - d - 0.5 * v^2) * T + v * sqrt(T) * Z).
-    3) Reshape payoffs into (network_size, batch) and take column-wise FFT
-       to approximate the characteristic function / DFT of the payoff.
-    4) Train a CVNN that maps the 6 normalized inputs to the complex DFT.
-    5) Use MSE loss on real+imag parts of the DFT output.
-
-Runtime GPU Architecture Note:
-------------------------------
-If your CUDA driver/PyTorch build does not support the installed GPU,
-this script falls back to CPU to avoid runtime errors. See PyTorch docs
-for how to install a build that supports your GPU architecture.
+Core Steps:
+    1) Sample 6D (X0,K,T,r,d,v) points with SobolSampler, validated by BlackScholes.Inputs.
+    2) For each sample, run GPU MC to get final prices -> payoff -> column-wise DFT.
+    3) Store these DFTs in a PyTorch complex tensor as training targets.
+    4) Feed real (and zero-imag) inputs into a CVNN that outputs real+imag components
+       (matching the DFT shape).
+    5) Use MSE loss over real+imag parts to train the network.
+    6) For inference, interpret the 0th DFT frequency (real part) as the sum of payoffs,
+       returning sum / network_size.
 
 Usage:
-    python -m spectralmc.gbm_trainer
+    python gbm_trainer.py
 
-Example:
-    # If run directly, it trains for 200 steps (batch_size=16) on a small domain
-    # Then prints a predicted (undiscounted) payoff for (X0=100, K=100, T=1, r=0.02, d=0.01, v=0.2)
+Requirements:
+    * sobol_sampler.py
+    * gbm.py
+    * cvnn.py
+    * mypy --strict compliance
 """
 
-import math
-from typing import Optional, Union, Sequence, Tuple, Dict
+from __future__ import annotations
 
+import math
+from typing import List, Optional
+
+import cupy as cp  # type: ignore[import]  # (CuPy is untyped)
 import torch
 import torch.nn as nn
-from torch import Tensor
+import torch.optim
+
+from spectralmc.sobol_sampler import BoundSpec, SobolSampler
+from spectralmc.gbm import BlackScholes, SimulationParams
+from spectralmc.cvnn import CVNN
 
 
-def _select_device_fallback() -> torch.device:
-    """Select a suitable device (CUDA if supported, else CPU).
-
-    Checks whether CUDA is available and the major capability is >= 5.
-    If not suitable, falls back to CPU.
-
-    Returns:
-        A torch.device object pointing to 'cuda' or 'cpu'.
+class GbmTrainer:
     """
-    if torch.cuda.is_available():
-        major, _minor = torch.cuda.get_device_capability()
-        # Arbitrary check: require a major capability >= 5
-        if major >= 5:
-            return torch.device("cuda")
-    return torch.device("cpu")
+    A trainer that uses:
+      - SobolSampler to generate 6D Black-Scholes Inputs.
+      - BlackScholes GPU MC for payoff simulations.
+      - A user-supplied CVNN to learn the payoff DFT.
 
-
-class ComplexLinear(nn.Module):
-    """A linear (fully-connected) layer for complex inputs and outputs.
-
-    This layer maintains real and imaginary weight matrices (and optional biases)
-    for an affine transformation on complex inputs.  Given an input z ∈ ℂ^d,
-    the transformation is:
-      output = (W_r + i·W_i) · z + (b_r + i·b_i).
-
-    Args:
-        in_features: Dimensionality of the complex input.
-        out_features: Dimensionality of the complex output.
-        bias: Whether to include complex bias (True by default).
-        device: Optional device for parameter storage.
-        dtype: Optional data type for parameter storage.
+    Attributes:
+        sim_params: SimulationParams controlling the MC engine (timesteps, etc.).
+        domain_bounds: Dict mapping parameter names ("X0", "K", "T", "r", "d", "v") to BoundSpec.
+        skip_sobol: How many Sobol samples to skip initially (burn-in).
+        sobol_seed: Scramble seed for Sobol sampler.
+        cvnn: A complex-valued neural network from cvnn.py that we train.
+        device: Torch device (e.g., 'cuda') for computation.
     """
-
-    # We allow None as bias => Optional
-    bias_real: Optional[nn.Parameter]
-    bias_imag: Optional[nn.Parameter]
 
     def __init__(
         self,
-        in_features: int,
-        out_features: int,
-        bias: bool = True,
-        device: Optional[Union[torch.device, str]] = None,
-        dtype: Optional[torch.dtype] = None,
+        sim_params: SimulationParams,
+        domain_bounds: dict[str, BoundSpec],
+        skip_sobol: int,
+        sobol_seed: int,
+        cvnn: CVNN,
+        device: Optional[torch.device] = None,
     ) -> None:
-        super().__init__()
-        # Real/imag weight: shape (out_features, in_features)
-        self.weight_real = nn.Parameter(
-            torch.empty((out_features, in_features), device=device, dtype=dtype)
-        )
-        self.weight_imag = nn.Parameter(
-            torch.empty((out_features, in_features), device=device, dtype=dtype)
-        )
-        nn.init.xavier_uniform_(self.weight_real)
-        nn.init.xavier_uniform_(self.weight_imag)
-
-        if bias:
-            self.bias_real = nn.Parameter(
-                torch.zeros((out_features,), device=device, dtype=dtype)
-            )
-            self.bias_imag = nn.Parameter(
-                torch.zeros((out_features,), device=device, dtype=dtype)
-            )
-        else:
-            self.bias_real = None
-            self.bias_imag = None
-
-    def forward(self, input: Tensor) -> Tensor:
-        """Apply the complex linear transformation.
-
-        Args:
-            input: A (batch_size, in_features) real or complex tensor.
-
-        Returns:
-            Complex tensor of shape (batch_size, out_features).
         """
-        if not torch.is_complex(input):
-            # Convert real -> complex with 0 imaginary
-            imaginary_part = torch.zeros_like(input)
-            input = torch.complex(input, imaginary_part)
-
-        # Split into real/imag
-        x_real = input.real
-        x_imag = input.imag
-
-        # Real part of output = W_r x_real - W_i x_imag
-        # Imag part of output = W_i x_real + W_r x_imag
-        out_real = x_real @ self.weight_real.T - x_imag @ self.weight_imag.T
-        out_imag = x_real @ self.weight_imag.T + x_imag @ self.weight_real.T
-
-        if self.bias_real is not None and self.bias_imag is not None:
-            out_real = out_real + self.bias_real
-            out_imag = out_imag + self.bias_imag
-
-        comp_out: Tensor = torch.complex(out_real, out_imag)
-        return comp_out
-
-
-class ComplexResidualBlock(nn.Module):
-    """A simple residual block with two ComplexLinear layers and ReLU.
-
-    Each block computes:
-      z_out = z_in + ComplexLinear(ReLU(ComplexLinear(z_in))).
-
-    The input and output have the same shape (batch_size, features).
-
-    Args:
-        features: Number of complex features in input/output.
-        device: Device for layers.
-        dtype: Data type for layers.
-    """
-
-    def __init__(
-        self,
-        features: int,
-        device: Optional[Union[torch.device, str]] = None,
-        dtype: Optional[torch.dtype] = None,
-    ) -> None:
-        super().__init__()
-        self.linear1 = ComplexLinear(features, features, device=device, dtype=dtype)
-        self.linear2 = ComplexLinear(features, features, device=device, dtype=dtype)
-
-    def forward(self, z_in: Tensor) -> Tensor:
-        """Compute forward pass of the residual block.
-
         Args:
-            z_in: Complex input of shape (batch_size, features).
-
-        Returns:
-            A complex tensor with the same shape, after the residual operation.
+            sim_params: Configuration (timesteps, network_size, etc.) for the Monte Carlo engine.
+            domain_bounds: 6D domain for SobolSampler, matching BlackScholes.Inputs fields.
+            skip_sobol: Burn-in steps for Sobol sequence.
+            sobol_seed: Seed for scrambling the Sobol generator.
+            cvnn: Complex-valued neural network to be trained on DFT outputs.
+            device: PyTorch device to store model and do computations. Defaults to CUDA if available.
         """
-        z1: Tensor = self.linear1(z_in)
-        # ReLU on real and imaginary parts
-        z1 = torch.complex(torch.relu(z1.real), torch.relu(z1.imag))
-        z2: Tensor = self.linear2(z1)
-        # Residual connection
-        z_out: Tensor = z_in + z2
-        return z_out
-
-
-class OptionPricingCVNN(nn.Module):
-    """A configurable complex network for DFT of payoffs.
-
-    The network maps 6 real inputs (X0, K, T, r, d, v) to a complex vector
-    of length `output_features`, using a hidden dimension and optional residual blocks.
-
-    Args:
-        output_features: Number of complex output features (e.g. network_size for DFT).
-        hidden_features: Number of complex features in the hidden layers.
-        num_res_layers: Number of residual blocks to include.
-        device: Device for layer parameters.
-        dtype: Data type for layer parameters.
-    """
-
-    def __init__(
-        self,
-        output_features: int,
-        hidden_features: int,
-        num_res_layers: int,
-        device: Optional[Union[torch.device, str]] = None,
-        dtype: Optional[torch.dtype] = None,
-    ) -> None:
-        super().__init__()
-        self.num_res_layers = num_res_layers
-
-        # Input linear: 6 -> hidden
-        self.input_linear = ComplexLinear(
-            6, hidden_features, device=device, dtype=dtype
-        )
-
-        # Residual blocks
-        self.res_blocks = nn.ModuleList(
-            [
-                ComplexResidualBlock(hidden_features, device=device, dtype=dtype)
-                for _ in range(num_res_layers)
-            ]
-        )
-
-        # Output linear: hidden -> output_features
-        self.output_linear = ComplexLinear(
-            hidden_features, output_features, device=device, dtype=dtype
-        )
-
-    def forward(self, x: Tensor) -> Tensor:
-        """Forward pass from real(ish) input to complex DFT.
-
-        Args:
-            x: Float or complex tensor of shape (batch_size, 6).
-
-        Returns:
-            Complex tensor (batch_size, output_features).
-        """
-        z_in: Tensor
-        if not torch.is_complex(x):
-            z_in = torch.complex(x, torch.zeros_like(x))
-        else:
-            z_in = x
-
-        # Input linear + ReLU
-        z_hidden_0: Tensor = self.input_linear(z_in)
-        z_hidden_0 = torch.complex(
-            torch.relu(z_hidden_0.real), torch.relu(z_hidden_0.imag)
-        )
-
-        # Residual blocks
-        z_res: Tensor = z_hidden_0
-        for block in self.res_blocks:
-            z_res = block(z_res)
-            z_res = torch.complex(torch.relu(z_res.real), torch.relu(z_res.imag))
-
-        # Output
-        z_out_pre: Tensor = self.output_linear(z_res)
-        z_out: Tensor = z_out_pre  # no final activation
-        return z_out
-
-
-class OptionPricerTrainer:
-    """Trainer for learning the spectral representation (DFT) of call payoffs under GBM.
-
-    Steps:
-      1) Draw Sobol points in [0,1]^6.
-      2) Map them to actual domain for (X0, K, T, r, d, v).
-      3) Simulate MC payoffs for each param set and reshape to (network_size, batch).
-      4) Compute column-wise FFT -> shape (network_size, batch).
-      5) Transpose to (batch, network_size) for training with a CVNN via MSE on complex outputs.
-
-    Args:
-        domain_bounds: Either a dict with keys ["X0","K","T","r","d","v"]
-          or a 6-tuple list specifying (lower, upper) in order (X0, K, T, r, d, v).
-        network_size: The number of simulated paths (also the DFT size).
-        hidden_features: The hidden dimension (number of complex features).
-        num_res_layers: Number of complex residual blocks.
-        scramble: Whether to scramble the Sobol sequence (True by default).
-        sobol_seed: Seed for the Sobol engine.
-        device: Device for training (defaults to auto).
-        dtype: Torch data type for model.
-    """
-
-    def __init__(
-        self,
-        domain_bounds: Union[
-            Dict[str, Tuple[float, float]], Sequence[Tuple[float, float]]
-        ],
-        network_size: int,
-        hidden_features: int,
-        num_res_layers: int,
-        scramble: bool = True,
-        sobol_seed: Optional[int] = None,
-        device: Optional[Union[torch.device, str]] = None,
-        dtype: Optional[torch.dtype] = None,
-    ) -> None:
-        # Parse domain bounds into shape (6,)
-        if isinstance(domain_bounds, dict):
-            param_order = ["X0", "K", "T", "r", "d", "v"]
-            lowers = [domain_bounds[k][0] for k in param_order]
-            uppers = [domain_bounds[k][1] for k in param_order]
-        else:
-            if len(domain_bounds) != 6:
-                raise ValueError("Expected 6 parameter bounds for (X0, K, T, r, d, v).")
-            lowers = [db[0] for db in domain_bounds]
-            uppers = [db[1] for db in domain_bounds]
-
+        self.sim_params = sim_params
+        self.domain_bounds = domain_bounds
+        self.skip_sobol = skip_sobol
+        self.sobol_seed = sobol_seed
+        self.cvnn = cvnn
         if device is None:
-            device = _select_device_fallback()
-
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device = device
-        self.domain_lower = torch.tensor(
-            lowers, dtype=torch.float32, device=self.device
-        )
-        self.domain_upper = torch.tensor(
-            uppers, dtype=torch.float32, device=self.device
-        )
 
-        self.network_size = network_size
-        self.model = OptionPricingCVNN(
-            output_features=network_size,
-            hidden_features=hidden_features,
-            num_res_layers=num_res_layers,
-            device=self.device,
-            dtype=dtype,
-        ).to(self.device)
-
-        # We'll add a mypy ignore for the untyped SobolEngine
-        self.sobol_engine = torch.quasirandom.SobolEngine(
-            dimension=6, scramble=scramble, seed=sobol_seed
-        )  # type: ignore[no-untyped-call]
-
-    def _simulate_payoffs(self, params: Tensor) -> Tensor:
-        """Simulate call payoffs for given parameter sets, shape (network_size, batch).
-
-        A single-step GBM approach:
-          S_T = S0 * exp((r - d - 0.5 * v^2)*T + v * sqrt(T) * Z)
-          payoff = max(S_T - K, 0).
-
-        Args:
-            params: shape (batch, 6) -> [X0, K, T, r, d, v].
-
-        Returns:
-            A float Tensor of shape (network_size, batch).
-        """
-        batch_size = params.shape[0]
-        S0 = params[:, 0]
-        K = params[:, 1]
-        T = params[:, 2]
-        r = params[:, 3]
-        div = params[:, 4]
-        vol = params[:, 5]
-
-        Z = torch.randn(
-            (self.network_size, batch_size),
-            device=self.device,
-            dtype=torch.float32,
+        # Build the Sobol sampler
+        self.sampler = SobolSampler(
+            pydantic_class=BlackScholes.Inputs,
+            dimensions=self.domain_bounds,
+            skip=self.skip_sobol,
+            seed=self.sobol_seed,
         )
 
-        drift = (r - div - 0.5 * vol * vol) * T
-        diffusion_scale = vol * torch.sqrt(torch.clamp(T, min=1e-12))
+        # Build the GPU-based BlackScholes pricer
+        self.bsm_engine = BlackScholes(self.sim_params)
 
-        drift_2d = drift.unsqueeze(0)
-        diff_2d = diffusion_scale.unsqueeze(0)
-        S0_2d = S0.unsqueeze(0)
-        K_2d = K.unsqueeze(0)
-
-        exponents = drift_2d + diff_2d * Z
-        S_T = S0_2d * torch.exp(exponents)
-        payoffs: Tensor = torch.clamp(S_T - K_2d, min=0.0)
-        return payoffs
+        # Move CVNN to device
+        self.cvnn.to(self.device)
 
     def train(
         self,
@@ -372,107 +102,180 @@ class OptionPricerTrainer:
         batch_size: int,
         learning_rate: float = 1e-3,
     ) -> None:
-        """Train the CVNN over multiple Sobol-sampled mini-batches.
+        """
+        Perform training over multiple mini-batches of Sobol-sampled points.
+
+        For each batch:
+          - Sample `batch_size` points from the SobolSampler.
+          - Run GPU-based MC with black_scholes._simulate(...) to get final payoffs.
+          - Reshape to (network_size, batches_per_mc_run).
+          - Column-wise CuPy FFT and average columns => shape (network_size,).
+          - Convert to PyTorch complex => store in a (batch_size, network_size) target.
+          - CVNN forward pass (6 real inputs => output of shape (batch_size, network_size) real+imag).
+          - MSE loss on real + imag parts => .backward().
+          - Adam step.
 
         Args:
-            num_batches: Number of training iterations (each iteration uses fresh Sobol points).
-            batch_size: How many parameter sets per iteration.
-            learning_rate: Adam learning rate.
+            num_batches: How many iterations (batches).
+            batch_size: How many sobol points per batch.
+            learning_rate: Learning rate for the Adam optimizer.
         """
-        self.model.train()
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
+        optimizer = torch.optim.Adam(self.cvnn.parameters(), lr=learning_rate)
+        self.cvnn.train()
 
         for step in range(1, num_batches + 1):
-            params_unit = self.sobol_engine.draw(
+            # Sample sobol points
+            sobol_points = self.sampler.sample(
                 batch_size
-            )  # shape (batch_size, 6), CPU
-            # Map to domain
-            params_actual = self.domain_lower + (
-                self.domain_upper - self.domain_lower
-            ) * params_unit.to(self.device)
+            )  # list of BlackScholes.Inputs
 
-            payoffs = self._simulate_payoffs(
-                params_actual
-            )  # (network_size, batch_size)
-            payoff_dft = torch.fft.fft(
-                payoffs, dim=0
-            )  # shape (network_size, batch_size), complex
-            target: Tensor = payoff_dft.T  # (batch_size, network_size)
+            # Prepare payoff DFT storage: shape (batch_size, network_size), complex64
+            payoff_dft = torch.zeros(
+                (batch_size, self.sim_params.network_size),
+                dtype=torch.complex64,
+            )
 
-            # Input to model is the normalized param (i.e. params_unit) in [0,1]
-            inputs: Tensor = params_unit.to(self.device)  # shape (batch_size, 6)
-            preds: Tensor = self.model(inputs)  # (batch_size, network_size), complex
+            # For each point, run MC, do DFT in CuPy
+            for i, bs_input in enumerate(sobol_points):
+                sim_res = self.bsm_engine._simulate(bs_input)
+                final_prices = sim_res.sims[-1, :]  # shape (total_paths,)
 
-            diff = preds - target
-            loss = torch.mean(torch.abs(diff) ** 2)
+                # payoff = max(final_prices - K, 0)
+                payoff_cp = cp.maximum(final_prices - float(bs_input.K), 0.0)
+
+                # reshape to (network_size, batches_per_mc_run)
+                payoff_matrix = payoff_cp.reshape(
+                    (self.sim_params.network_size, self.sim_params.batches_per_mc_run)
+                )
+                # column-wise DFT along axis=0
+                payoff_fft = cp.fft.fft(payoff_matrix, axis=0)
+                # average across columns => shape (network_size,)
+                payoff_mean = cp.mean(payoff_fft, axis=1)  # complex64
+                # Move to torch
+                payoff_mean_torch_real = torch.from_numpy(payoff_mean.real.get())
+                payoff_mean_torch_imag = torch.from_numpy(payoff_mean.imag.get())
+
+                payoff_complex = torch.view_as_complex(
+                    torch.stack(
+                        (payoff_mean_torch_real, payoff_mean_torch_imag), dim=-1
+                    )
+                )
+                payoff_dft[i, :] = payoff_complex
+
+            # Build real + imag inputs for CVNN => shape (batch_size, 6)
+            input_real = torch.zeros(
+                (batch_size, 6), dtype=torch.float32, device=self.device
+            )
+            input_imag = torch.zeros(
+                (batch_size, 6), dtype=torch.float32, device=self.device
+            )
+            for i, bs_input in enumerate(sobol_points):
+                input_real[i, 0] = float(bs_input.X0)
+                input_real[i, 1] = float(bs_input.K)
+                input_real[i, 2] = float(bs_input.T)
+                input_real[i, 3] = float(bs_input.r)
+                input_real[i, 4] = float(bs_input.d)
+                input_real[i, 5] = float(bs_input.v)
+
+            # Move payoff_dft to device as well
+            payoff_dft = payoff_dft.to(self.device)
+
+            # Separate into real + imag => shape (batch_size, network_size)
+            target_real = payoff_dft.real
+            target_imag = payoff_dft.imag
+
+            # Forward pass
+            pred_real, pred_imag = self.cvnn(input_real, input_imag)
+
+            # MSE on real + MSE on imag
+            loss_real = nn.functional.mse_loss(pred_real, target_real)
+            loss_imag = nn.functional.mse_loss(pred_imag, target_imag)
+            loss_val = loss_real + loss_imag
 
             optimizer.zero_grad()
-            loss.backward()  # type: ignore[no-untyped-call]
+            loss_val.backward()  # type: ignore[no-untyped-call]
             optimizer.step()
 
-            if step % 100 == 0 or step == num_batches:
-                print(f"Step {step}/{num_batches}, loss = {loss.item():.4e}")
+            if step % 10 == 0 or step == num_batches:
+                print(f"Batch {step}/{num_batches}, loss: {loss_val.item():.6f}")
 
-    def predict_option_price(
+    def predict_mean_payoff(
         self, X0: float, K: float, T: float, r: float, d: float, v: float
     ) -> float:
-        """Use the trained model to predict the mean payoff (DFT 0th frequency / network_size).
+        """
+        Do a forward pass of CVNN at a single input. The network outputs a length=network_size
+        complex vector. We interpret the 0th index (DC component) of that vector's real part
+        as the sum of payoffs, so mean = real/ network_size.
 
         Args:
-            X0: Underlying spot price.
-            K: Strike price.
-            T: Time to maturity (years).
-            r: Risk-free rate.
-            d: Continuous dividend yield.
-            v: Volatility (std dev).
+            X0, K, T, r, d, v: Floats for each parameter.
 
         Returns:
-            A float representing the predicted undiscounted mean payoff.
+            The predicted mean payoff as a float.
         """
-        self.model.eval()
-        param_arr = torch.tensor(
-            [X0, K, T, r, d, v], dtype=torch.float32, device=self.device
+        self.cvnn.eval()
+        real_in = torch.tensor(
+            [[X0, K, T, r, d, v]], dtype=torch.float32, device=self.device
         )
-        # Normalize
-        param_unit: Tensor = (param_arr - self.domain_lower) / (
-            self.domain_upper - self.domain_lower
-        )
-        param_unit = param_unit.unsqueeze(0)  # shape (1, 6)
+        imag_in = torch.zeros_like(real_in)
+
         with torch.no_grad():
-            pred_dft: Tensor = self.model(param_unit)
-        # The 0-frequency component is pred_dft[0, 0]
-        payoff_mean = (pred_dft[0, 0].real / float(self.network_size)).item()
-        return float(payoff_mean)
+            pred_r, pred_i = self.cvnn(real_in, imag_in)
+            # shape = (1, network_size)
+            sum_payoffs: float = float(pred_r[0, 0].item())
+            mean_payoff: float = sum_payoffs / float(self.sim_params.network_size)
+        return mean_payoff
 
 
 if __name__ == "__main__":
-    # Example domain (X0, K, T, r, d, v)
+    # Minimal example run
+    from spectralmc.cvnn import CVNN
+
+    # 1) Build sim_params
+    sp = SimulationParams(
+        timesteps=32,
+        network_size=8,
+        batches_per_mc_run=8,
+        threads_per_block=128,
+        mc_seed=999,
+        buffer_size=1,
+        dtype="float32",
+        simulate_log_return=True,
+        normalize_forwards=False,
+    )
+
+    # 2) Domain bounds for Sobol
     domain_example = {
-        "X0": (50.0, 150.0),
-        "K": (50.0, 150.0),
-        "T": (0.1, 2.0),
-        "r": (0.0, 0.1),
-        "d": (0.0, 0.05),
-        "v": (0.1, 0.5),
+        "X0": BoundSpec(lower=50.0, upper=150.0),
+        "K": BoundSpec(lower=50.0, upper=150.0),
+        "T": BoundSpec(lower=0.1, upper=2.0),
+        "r": BoundSpec(lower=0.0, upper=0.1),
+        "d": BoundSpec(lower=0.0, upper=0.05),
+        "v": BoundSpec(lower=0.1, upper=0.5),
     }
 
-    # Instantiate trainer
-    trainer = OptionPricerTrainer(
-        domain_bounds=domain_example,
-        network_size=64,
-        hidden_features=32,
-        num_res_layers=1,
-        scramble=True,
-        sobol_seed=42,
-        device=None,  # will auto-select (GPU if supported, else CPU)
-        dtype=torch.float32,
+    # 3) Build a CVNN
+    net = CVNN(
+        input_features=6,
+        output_features=8,  # must match network_size
+        hidden_features=16,
+        num_residual_blocks=1,
     )
 
-    # Train with 200 batches of size 16 each
-    trainer.train(num_batches=200, batch_size=16, learning_rate=1e-3)
+    # 4) Instantiate GbmTrainer
+    trainer = GbmTrainer(
+        sim_params=sp,
+        domain_bounds=domain_example,
+        skip_sobol=0,
+        sobol_seed=42,
+        cvnn=net,
+    )
 
-    # Predict for a specific parameter set
-    price_pred = trainer.predict_option_price(
+    # 5) Train
+    trainer.train(num_batches=20, batch_size=4, learning_rate=1e-3)
+
+    # 6) Predict mean payoff
+    payoff_pred = trainer.predict_mean_payoff(
         X0=100.0, K=100.0, T=1.0, r=0.02, d=0.01, v=0.2
     )
-    print(f"Predicted payoff mean (undiscounted): {price_pred:.4f}")
+    print("Predicted mean payoff (undiscounted):", payoff_pred)
