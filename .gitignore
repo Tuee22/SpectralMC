@@ -162,3 +162,4 @@ cython_debug/
 .Trash-0/
 setup.sh
 .failed_artifacts/
+.logs/

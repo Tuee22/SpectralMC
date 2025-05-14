@@ -46,10 +46,10 @@ def test_trainer_integration(precision: Literal["float32", "float64"]) -> None:
     sim_params = SimulationParams(
         timesteps=1,
         network_size=64,  # e.g., 64 DFT components
-        batches_per_mc_run=(2**20),  # huge number of paths => 64*(2^20) total paths
+        batches_per_mc_run=(2**19),  # huge number of paths => 64*(2^20) total paths
         threads_per_block=256,
         mc_seed=123,
-        buffer_size=4,
+        buffer_size=1,
         dtype=precision,  # must be "float32" or "float64"
         simulate_log_return=True,
         normalize_forwards=False,

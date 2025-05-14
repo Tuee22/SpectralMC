@@ -1,22 +1,23 @@
+# spectralmc/gbm.py
 """
 spectralmc.gbm
 ---------------
-GPU‑accelerated Geometric Brownian‑motion Monte‑Carlo with selectable
+GPU-accelerated Geometric Brownian-motion Monte-Carlo with selectable
 precision.  The file passes **mypy --strict** while deliberately marking
 only the compiled CUDA kernel as ``Any`` (Python’s type system cannot
-describe the square‑bracket launch syntax).
+describe the square-bracket launch syntax).
 """
 
 from __future__ import annotations
 
-from math import sqrt
+from math import sqrt, exp
 from typing import (
     Annotated,
     Any,
     Literal,
     Optional,
-    Union,
     TypeAlias,
+    List,
 )
 
 import cupy as cp  # type: ignore[import-untyped]
@@ -24,7 +25,6 @@ import numpy as np
 from numba import cuda  # type: ignore[import-untyped]
 from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field
-from math import exp
 
 from spectralmc.async_normals import ConcurrentNormGenerator
 
@@ -39,7 +39,7 @@ DtypeLiteral = Literal["float32", "float64"]
 DeviceNDArray: TypeAlias = NDArray[np.floating]
 
 # ---------------------------------------------------------------------------#
-# Simulation‑parameter model                                                 #
+# Simulation-parameter model                                                 #
 # ---------------------------------------------------------------------------#
 
 
@@ -80,7 +80,7 @@ class SimulationParams(BaseModel):
 
 
 # ---------------------------------------------------------------------------#
-# CUDA kernel — compiled object typed as Any                                 #
+# CUDA kernel — compiled object typed as Any                                 #
 # ---------------------------------------------------------------------------#
 
 
@@ -95,7 +95,7 @@ def _simulate_black_scholes(  # noqa: N802 (CUDA naming)
     v: float,
     simulate_log_return: bool,
 ) -> None:
-    """In‑place GBM evolution kernel (dtype comes from *input_output*)."""
+    """In-place GBM evolution kernel (dtype comes from *input_output*)."""
 
     idx = cuda.grid(1)
     if idx < input_output.shape[1]:
@@ -121,12 +121,12 @@ def _simulate_black_scholes(  # noqa: N802 (CUDA naming)
 SimulateBlackScholes: Any = _simulate_black_scholes  # noqa: N802
 
 # ---------------------------------------------------------------------------#
-# Black‑Scholes Monte‑Carlo engine                                           #
+# Black-Scholes Monte-Carlo engine                                           #
 # ---------------------------------------------------------------------------#
 
 
 class BlackScholes:
-    """GPU Monte‑Carlo engine obeying the precision in *SimulationParams*."""
+    """GPU Monte-Carlo engine obeying the precision in *SimulationParams*."""
 
     # ---------------- nested models ------------------------------------ #
 
@@ -215,7 +215,7 @@ class BlackScholes:
             if self._sp.normalize_forwards:
                 # Compute the row-wise mean of the array
                 row_means = cp.mean(sims, axis=1, keepdims=True)
-                # Compute the division of factors needed
+                # Compute the division factors needed
                 factors = forwards[:, cp.newaxis] / row_means
                 # Multiply each row of the array by the corresponding factor
                 sims = sims * factors

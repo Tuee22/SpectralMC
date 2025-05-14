@@ -32,3 +32,4 @@ data/
 **/.mypy_cache
 setup.sh
 **/.failed_artifacts
+**/.logs
