@@ -73,8 +73,8 @@ RUN poetry install --with dev --no-interaction
 # validate code with mypy
 RUN mypy /spectralmc/src/spectralmc /spectralmc/tests --strict --no-incremental && rm -rf .mypy_cache
 
-# 12) Expose port 8888
-EXPOSE 8888
+# 12) Expose port 6006 & 8888
+EXPOSE 6006 8888
 
 # 13) Default command to run Jupyter
 CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", \

@@ -81,7 +81,7 @@ def test_trainer_integration(precision: Literal["float32", "float64"]) -> None:
     )
 
     # 10 training steps (each big):
-    trainer.train(num_batches=10, batch_size=64, learning_rate=1e-2)
+    trainer.train(num_batches=1024, batch_size=64, learning_rate=1e-2)
 
     # Predict
     input_list = [

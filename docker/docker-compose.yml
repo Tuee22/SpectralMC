@@ -9,6 +9,7 @@ services:
       - "..:/spectralmc"
     ports:
       - "8888:8888"
+      - "6006:6006"
     platform: "linux/amd64"
     deploy:
       resources:
