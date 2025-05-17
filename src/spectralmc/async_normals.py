@@ -5,7 +5,7 @@ Features
 --------
 * **Latency hiding** – several CUDA streams keep the GPU busy while the host
   consumes previous batches.
-* **Deterministic checkpointing** via :class:`NormGenConfig` – only two integers
+* **Deterministic checkpointing** via :class:`ConcurrentNormGeneratorConfig` – only two integers
   (``seed`` and ``skips``) are needed to resume a stream, independent of
   *buffer_size*.
 * **Strict typing** – passes ``mypy --strict`` without suppressions (except for
@@ -22,7 +22,7 @@ import cupy as cp  # type: ignore[import-untyped]
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__: list[str] = ["NormGenConfig", "ConcurrentNormGenerator"]
+__all__: list[str] = ["ConcurrentNormGeneratorConfig", "ConcurrentNormGenerator"]
 
 # --------------------------------------------------------------------------- #
 # Constants & aliases                                                         #
@@ -39,7 +39,7 @@ _InputDType = Union[FloatStr, FloatScalar]
 # --------------------------------------------------------------------------- #
 
 
-class NormGenConfig(BaseModel):
+class ConcurrentNormGeneratorConfig(BaseModel):
     """Frozen checkpoint capturing the *global* random state."""
 
     rows: int = Field(..., gt=0, description="Matrix height (>0)")
@@ -143,7 +143,7 @@ class ConcurrentNormGenerator:
     # Construction                                                       #
     # ------------------------------------------------------------------ #
 
-    def __init__(self, buffer_size: int, config: NormGenConfig) -> None:
+    def __init__(self, buffer_size: int, config: ConcurrentNormGeneratorConfig) -> None:
         if buffer_size <= 0:
             raise ValueError("buffer_size must be positive")
 
@@ -199,8 +199,8 @@ class ConcurrentNormGenerator:
         self._update_idle_state()
         return mat
 
-    def snapshot(self) -> NormGenConfig:
-        return NormGenConfig(
+    def snapshot(self) -> ConcurrentNormGeneratorConfig:
+        return ConcurrentNormGeneratorConfig(
             rows=self._rows,
             cols=self._cols,
             seed=self._base_seed,

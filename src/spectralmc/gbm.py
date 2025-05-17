@@ -1,24 +1,15 @@
 # spectralmc/gbm.py
-"""
-spectralmc.gbm
----------------
-GPU-accelerated Geometric Brownian-motion Monte-Carlo with selectable
-precision.  The file passes **mypy --strict** while deliberately marking
-only the compiled CUDA kernel as ``Any`` (Python’s type system cannot
-describe the square-bracket launch syntax).
+"""GPU-accelerated Geometric-Brownian Monte-Carlo paths.
+
+The module integrates tightly with :pymod:`spectralmc.async_normals` and passes
+``mypy --strict``.  The only ``Any`` annotations refer to the compiled CUDA
+kernel dispatcher whose launch-syntax cannot be expressed in the type system.
 """
 
 from __future__ import annotations
 
-from math import sqrt, exp
-from typing import (
-    Annotated,
-    Any,
-    Literal,
-    Optional,
-    TypeAlias,
-    List,
-)
+from math import exp, sqrt
+from typing import Annotated, Any, List, Literal, Optional, TypeAlias
 
 import cupy as cp  # type: ignore[import-untyped]
 import numpy as np
@@ -26,11 +17,11 @@ from numba import cuda  # type: ignore[import-untyped]
 from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field
 
-from spectralmc.async_normals import ConcurrentNormGenerator
+from spectralmc.async_normals import ConcurrentNormGenerator, ConcurrentNormGeneratorConfig
 
-# ---------------------------------------------------------------------------#
-# Helper type aliases                                                        #
-# ---------------------------------------------------------------------------#
+# --------------------------------------------------------------------------- #
+# Helper type aliases                                                         #
+# --------------------------------------------------------------------------- #
 
 PosFloat = Annotated[float, Field(gt=0)]
 NonNegFloat = Annotated[float, Field(ge=0)]
@@ -38,13 +29,13 @@ DtypeLiteral = Literal["float32", "float64"]
 
 DeviceNDArray: TypeAlias = NDArray[np.floating]
 
-# ---------------------------------------------------------------------------#
-# Simulation-parameter model                                                 #
-# ---------------------------------------------------------------------------#
+# --------------------------------------------------------------------------- #
+# Simulation-parameter model                                                  #
+# --------------------------------------------------------------------------- #
 
 
 class SimulationParams(BaseModel):
-    """Immutable layout + RNG settings; precision is mandatory."""
+    """Layout and RNG settings (immutable)."""
 
     timesteps: int = Field(..., gt=0)
     network_size: int = Field(..., gt=0)
@@ -53,10 +44,10 @@ class SimulationParams(BaseModel):
     mc_seed: int = Field(..., gt=0)
     buffer_size: int = Field(..., gt=0)
     dtype: DtypeLiteral
-    simulate_log_return: bool = Field(default=True)
-    normalize_forwards: bool = Field(default=True)
+    simulate_log_return: bool = True
+    normalize_forwards: bool = True
 
-    # ---------------- convenience --------------------------------------
+    # ---------------- convenience ----------------------------------- #
 
     @property
     def cp_dtype(self) -> cp.dtype:  # noqa: D401
@@ -66,9 +57,7 @@ class SimulationParams(BaseModel):
         return self.network_size * self.batches_per_mc_run
 
     def total_blocks(self) -> int:
-        return (
-            self.total_paths() + self.threads_per_block - 1
-        ) // self.threads_per_block
+        return (self.total_paths() + self.threads_per_block - 1) // self.threads_per_block
 
     def memory_footprint_bytes(self) -> int:
         return (
@@ -79,13 +68,13 @@ class SimulationParams(BaseModel):
         )
 
 
-# ---------------------------------------------------------------------------#
-# CUDA kernel — compiled object typed as Any                                 #
-# ---------------------------------------------------------------------------#
+# --------------------------------------------------------------------------- #
+# CUDA kernel (typed as Any)                                                  #
+# --------------------------------------------------------------------------- #
 
 
 @cuda.jit  # type: ignore[misc]
-def _simulate_black_scholes(  # noqa: N802 (CUDA naming)
+def _simulate_black_scholes(  # noqa: N802
     input_output: DeviceNDArray,
     timesteps: int,
     dt: float,
@@ -95,7 +84,7 @@ def _simulate_black_scholes(  # noqa: N802 (CUDA naming)
     v: float,
     simulate_log_return: bool,
 ) -> None:
-    """In-place GBM evolution kernel (dtype comes from *input_output*)."""
+    """In-place GBM evolution kernel (dtype derived from *input_output*)."""
 
     idx = cuda.grid(1)
     if idx < input_output.shape[1]:
@@ -117,18 +106,17 @@ def _simulate_black_scholes(  # noqa: N802 (CUDA naming)
                 input_output[i, idx] = X
 
 
-# Treat dispatcher as Any so mypy ignores launch syntax
 SimulateBlackScholes: Any = _simulate_black_scholes  # noqa: N802
 
-# ---------------------------------------------------------------------------#
-# Black-Scholes Monte-Carlo engine                                           #
-# ---------------------------------------------------------------------------#
+# --------------------------------------------------------------------------- #
+# Monte-Carlo engine                                                          #
+# --------------------------------------------------------------------------- #
 
 
 class BlackScholes:
-    """GPU Monte-Carlo engine obeying the precision in *SimulationParams*."""
+    """GPU Monte-Carlo engine obeying :class:`SimulationParams` precision."""
 
-    # ---------------- nested models ------------------------------------ #
+    # ---------------- nested models ----------------------------------- #
 
     class Inputs(BaseModel):
         X0: PosFloat
@@ -162,23 +150,25 @@ class BlackScholes:
         put_price: float
         call_price: float
 
-    # ---------------- constructor -------------------------------------- #
+    # ---------------- constructor ------------------------------------ #
 
     def __init__(self, sp: SimulationParams) -> None:
         self._sp = sp
         self._cp_dtype: cp.dtype = sp.cp_dtype
         self._cp_stream: cp.cuda.Stream = cp.cuda.Stream(non_blocking=True)
-        self._numba_stream = cuda.stream()
+        self._numba_stream: cuda.cudadrv.driver.Stream = cuda.stream()
 
-        self._normal_gen = ConcurrentNormGenerator(
+        # Build NormGenConfig (skips = 0 for fresh run)
+        cfg = ConcurrentNormGeneratorConfig(
             rows=sp.timesteps,
             cols=sp.total_paths(),
             seed=sp.mc_seed,
-            buffer_size=sp.buffer_size,
-            dtype=self._cp_dtype,
+            dtype=sp.dtype,
+            skips=0,
         )
+        self._normal_gen = ConcurrentNormGenerator(sp.buffer_size, cfg)
 
-    # ---------------- simulation pipeline ------------------------------ #
+    # ---------------- simulation pipeline --------------------------- #
 
     def _simulate(self, inputs: Inputs) -> SimResults:
         sims: cp.ndarray = self._normal_gen.get_matrix()
@@ -200,37 +190,23 @@ class BlackScholes:
             self._sp.simulate_log_return,
         )
 
-        # concurrent wrt kernel above
-        with self._cp_stream:
-            times = cp.linspace(
-                dt,
-                inputs.T,
-                num=self._sp.timesteps,
-                dtype=self._cp_dtype,
-            )
+        with self._cp_stream:  # concurrent with kernel
+            times = cp.linspace(dt, inputs.T, self._sp.timesteps, dtype=self._cp_dtype)
             forwards = inputs.X0 * cp.exp((inputs.r - inputs.d) * times)
             df = cp.exp(-inputs.r * times)
 
-            self._numba_stream.synchronize()
-            if self._sp.normalize_forwards:
-                # Compute the row-wise mean of the array
-                row_means = cp.mean(sims, axis=1, keepdims=True)
-                # Compute the division factors needed
-                factors = forwards[:, cp.newaxis] / row_means
-                # Multiply each row of the array by the corresponding factor
-                sims = sims * factors
+        # Wait for kernel completion before optional normalisation
+        self._numba_stream.synchronize()
+        if self._sp.normalize_forwards:
+            row_means = cp.mean(sims, axis=1, keepdims=True)
+            sims *= forwards[:, cp.newaxis] / row_means
 
         self._cp_stream.synchronize()
         return self.SimResults(times=times, sims=sims, forwards=forwards, df=df)
 
-    # ---------------- pricing ------------------------------------------ #
+    # ---------------- pricing --------------------------------------- #
 
-    def price(
-        self,
-        *,
-        inputs: Inputs,
-        sr: Optional[SimResults] = None,
-    ) -> PricingResults:
+    def price(self, *, inputs: Inputs, sr: Optional[SimResults] = None) -> PricingResults:
         sr = sr or self._simulate(inputs)
 
         with self._cp_stream:
@@ -238,46 +214,44 @@ class BlackScholes:
             df_last = sr.df[-1]
             K = cp.asarray(inputs.K, dtype=self._cp_dtype)
 
-            put_price_intrinsic = df_last * cp.maximum(K - F, 0)
-            call_price_intrinsic = df_last * cp.maximum(F - K, 0)
+            put_intrinsic = df_last * cp.maximum(K - F, 0)
+            call_intrinsic = df_last * cp.maximum(F - K, 0)
 
             terminal = sr.sims[-1, :]
-
             put_price = df_last * cp.maximum(K - terminal, 0)
             call_price = df_last * cp.maximum(terminal - K, 0)
 
         self._cp_stream.synchronize()
         return self.PricingResults(
-            put_price_intrinsic=put_price_intrinsic,
-            call_price_intrinsic=call_price_intrinsic,
+            put_price_intrinsic=put_intrinsic,
+            call_price_intrinsic=call_intrinsic,
             underlying=terminal,
             put_price=put_price,
             call_price=call_price,
         )
 
-    # ---------------- host aggregation --------------------------------- #
+    # ---------------- host aggregation ------------------------------- #
 
     def get_host_price(self, pr: PricingResults) -> HostPricingResults:
         with self._cp_stream:
-            call_price_intrinsic = float(pr.call_price_intrinsic.item())
-            put_price_intrinsic = float(pr.put_price_intrinsic.item())
+            put_intr = float(pr.put_price_intrinsic.item())
+            call_intr = float(pr.call_price_intrinsic.item())
             underlying = float(pr.underlying.mean().item())
             put_price = float(pr.put_price.mean().item())
             call_price = float(pr.call_price.mean().item())
 
         self._cp_stream.synchronize()
-
         return self.HostPricingResults(
-            put_price_intrinsic=put_price_intrinsic,
-            call_price_intrinsic=call_price_intrinsic,
+            put_price_intrinsic=put_intr,
+            call_price_intrinsic=call_intr,
             underlying=underlying,
-            put_convexity=put_price - put_price_intrinsic,
-            call_convexity=call_price - call_price_intrinsic,
+            put_convexity=put_price - put_intr,
+            call_convexity=call_price - call_intr,
             put_price=put_price,
             call_price=call_price,
         )
 
-    # ---------------- convenience wrapper ------------------------------ #
+    # ---------------- convenience wrapper --------------------------- #
 
     def price_to_host(self, inputs: Inputs) -> HostPricingResults:
         return self.get_host_price(self.price(inputs=inputs))
