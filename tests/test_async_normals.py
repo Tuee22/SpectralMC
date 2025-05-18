@@ -99,7 +99,9 @@ def test_checkpoint_reproducibility(dtype_str: DType) -> None:  # noqa: D103
 
 
 def test_diagnostics(dtype_str: DType) -> None:  # noqa: D103
-    cfg = async_normals.ConcurrentNormGeneratorConfig(rows=2, cols=2, seed=7, dtype=dtype_str, skips=0)
+    cfg = async_normals.ConcurrentNormGeneratorConfig(
+        rows=2, cols=2, seed=7, dtype=dtype_str, skips=0
+    )
     gen = async_normals.ConcurrentNormGenerator(2, cfg)
 
     t0 = gen.get_time_spent_synchronizing()
@@ -124,6 +126,8 @@ def test_diagnostics(dtype_str: DType) -> None:  # noqa: D103
 
 def test_norm_config_validation() -> None:  # noqa: D103
     with pytest.raises(ValueError):
-        async_normals.ConcurrentNormGeneratorConfig(rows=0, cols=2, seed=1, dtype="float32", skips=0)
+        async_normals.ConcurrentNormGeneratorConfig(
+            rows=0, cols=2, seed=1, dtype="float32", skips=0
+        )
     with pytest.raises(ValueError):
         async_normals.ConcurrentNormGeneratorConfig(rows=1, cols=2, seed=1, dtype="float16", skips=0)  # type: ignore[arg-type]

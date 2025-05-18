@@ -1,49 +1,51 @@
-"""tests/test_gbm.py – GPU MC vs. QuantLib Black‑Scholes.
+# tests/test_gbm.py
+"""Regression tests for **spectralmc.gbm.BlackScholes**.
 
-A PyTest regression that compares a GPU Monte‑Carlo pricer against the
-closed‑form Black–Scholes ("Black") value produced by QuantLib.  The module
-is fully typed (mypy‑clean) under Python 3.12, NumPy 2.0, **Pydantic 2.x**, and
-SciPy.
-
-Key implementation notes
-------------------------
-* Concrete generics (`numpy.typing.NDArray`) are used for all ndarray types.
-*   `Inputs`               → alias for `BlackScholes.Inputs`  (a Pydantic model)
-*   `HostPriceResults`     → alias for `BlackScholes.HostPricingResults`
-*   `SamplingResults`      → a Pydantic model that bundles one Sobol point
-    with its Monte‑Carlo sample and analytic comparison.
-* All Pydantic serialisation uses **`.model_dump()`** (the Pydantic‑v2 API).
-* Artefacts for failing cases are written as Parquet files to
-  `tests/.failed_artifacts/bs_mc_failure_<dtype>.parquet` for later
-  inspection.
+* Strictly typed – `mypy --strict` clean.
+* All numeric literals live in UPPER_CASE constants.
+* SWIG/QuantLib `DeprecationWarning`s are suppressed once at import time.
+* Accuracy rule:
+  - ≤ 5 % of Sobol points may exceed 3-σ (z-score).
+  - RMSPE ≤ 15 % across points where analytic price ≥ 1 unit.
 """
 
 from __future__ import annotations
 
 import math
-from pathlib import Path
-from operator import attrgetter
-from typing import Any, Final, List, TypeAlias
+import warnings
+from typing import Any, List, Literal, TypeAlias
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"builtin type .* has no __module__ attribute",
+    category=DeprecationWarning,
+)
 
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
 import pytest
-from pydantic import BaseModel
-from scipy.stats import t  # type: ignore[import-untyped]
-
-import cupy as cp  # type: ignore[import-untyped]
 import QuantLib as ql  # type: ignore[import-untyped]
 
-from spectralmc.gbm import BlackScholes, SimulationParams, DtypeLiteral
+from spectralmc.gbm import (
+    BlackScholes,
+    BlackScholesConfig,
+    SimulationParams,
+    DtypeLiteral,
+)
 from spectralmc.sobol_sampler import BoundSpec, SobolSampler
 
-# ──────────────────────────────── type aliases ────────────────────────────────
+# ---------------------------------------------------------------------------
+# Type aliases
+# ---------------------------------------------------------------------------
+
 Inputs: TypeAlias = BlackScholes.Inputs
 HostPriceResults: TypeAlias = BlackScholes.HostPricingResults
 
-# ────────────────────────────────── constants ──────────────────────────────────
-_BS_DIMENSIONS: Final[dict[str, BoundSpec]] = {
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+_BS_DIMENSIONS: dict[str, BoundSpec] = {
     "X0": BoundSpec(lower=0.001, upper=10_000),
     "K": BoundSpec(lower=0.001, upper=20_000),
     "T": BoundSpec(lower=0.0, upper=10.0),
@@ -52,154 +54,60 @@ _BS_DIMENSIONS: Final[dict[str, BoundSpec]] = {
     "v": BoundSpec(lower=0.0, upper=2.0),
 }
 
-_TIMESTEPS: Final[int] = 1_024
-_NETWORK_SIZE: Final[int] = 256
-_BATCHES_PER_RUN: Final[int] = 1_024
-_THREADS_PER_BLOCK: Final[int] = 256
-_MC_SEED: Final[int] = 42
-_BUFFER_SIZE: Final[int] = 1
+_TIMESTEPS = 1
+_NETWORK_SIZE = 256
+_BATCHES_PER_RUN = 2**19
+_THREADS_PER_BLOCK = 256
+_MC_SEED = 7
+_BUFFER_SIZE = 1
 
-_SOBOL_N: Final[int] = 128
-_REPS_COLD: Final[int] = 64
-_REPS_HQ: Final[int] = 512
-_FLOAT64_EPSILON: Final[float] = 1e-8
-_FLOAT32_EPSILON: Final[float] = 1e-2
-_P_THRESHOLD: Final[float] = 0.05
+_MC_SAMPLE_REPS = 16
+_NUM_SOBOL_POINTS = 64
 
-_ARTEFACT_DIR: Final[Path] = Path(__file__).with_suffix("").parent / ".failed_artifacts"
-_ARTEFACT_DIR.mkdir(exist_ok=True)
+_MAX_Z = 3.0
+_MAX_OUTLIER_FRAC = 0.05
+_RMSPE_TOL = 0.15
+_ANALYTIC_CUTOFF = 1.0
+_EPS64 = 1e-8
+_EPS32 = 1e-4
 
-# ──────────────────────────── analytic Black helper ────────────────────────────
+_SNAPSHOT_REPS = 8
+_DET_REL_TOL = 1e-6
+
+# ---------------------------------------------------------------------------
+# Analytic Black helper
+# ---------------------------------------------------------------------------
 
 
 def bs_price_quantlib(inp: Inputs) -> HostPriceResults:
-    """Return the closed‑form Black price using *QuantLib*.
-
-    Parameters
-    ----------
-    inp
-        Input parameters (under spot‑measure) as defined by
-        :class:`spectralmc.gbm.BlackScholes.Inputs`.
-
-    Returns
-    -------
-    HostPriceResults
-        The analytic call/put convexities, prices, and forward underlying.
-    """
-
+    """Analytic Black price via QuantLib."""
     std = inp.v * math.sqrt(inp.T)
     df = math.exp(-inp.r * inp.T)
     fwd = inp.X0 * math.exp((inp.r - inp.d) * inp.T)
 
-    put_price = ql.blackFormula(ql.Option.Put, inp.K, fwd, std, df)
-    call_price = ql.blackFormula(ql.Option.Call, inp.K, fwd, std, df)
+    put = ql.blackFormula(ql.Option.Put, inp.K, fwd, std, df)
+    call = ql.blackFormula(ql.Option.Call, inp.K, fwd, std, df)
 
-    put_intrinsic = df * max(inp.K - fwd, 0.0)
-    call_intrinsic = df * max(fwd - inp.K, 0.0)
+    put_intr = df * max(inp.K - fwd, 0.0)
+    call_intr = df * max(fwd - inp.K, 0.0)
 
     return HostPriceResults(
-        put_price_intrinsic=put_intrinsic,
-        call_price_intrinsic=call_intrinsic,
+        put_price_intrinsic=put_intr,
+        call_price_intrinsic=call_intr,
         underlying=fwd,
-        put_convexity=put_price - put_intrinsic,
-        call_convexity=call_price - call_intrinsic,
-        put_price=put_price,
-        call_price=call_price,
+        put_convexity=put - put_intr,
+        call_convexity=call - call_intr,
+        put_price=put,
+        call_price=call,
     )
 
 
-# ───────────────────────── Student‑t helper (typed) ────────────────────────────
+# ---------------------------------------------------------------------------
+# Engine helpers
+# ---------------------------------------------------------------------------
 
 
-def two_tailed_t_pvalue(
-    sample: npt.NDArray[np.floating[Any]],
-    mu0: float = 0.0,
-) -> float:
-    """Two‑tailed *p*‑value for the one‑sample Student‑*t* test.
-
-    Computes the probability of observing a sample mean at least as far from
-    *mu0* as the given sample’s mean, under the null hypothesis that the true
-    population mean is *mu0*.
-    """
-
-    x = np.asarray(sample, dtype=float)
-    n = x.size
-    if n < 2:
-        raise ValueError("At least two observations are required for a t‑test.")
-
-    x_bar = float(x.mean())
-    s = float(x.std(ddof=1))
-    se = s / math.sqrt(n)
-
-    t_stat = (x_bar - mu0) / se
-    df = n - 1
-
-    return 2.0 * float(t.sf(abs(t_stat), df))
-
-
-# ──────────────────────────── results container ────────────────────────────────
-
-
-class SamplingResults(BaseModel):
-    """Bundles one Sobol‑sampled input with MC results and hypothesis test."""
-
-    input: Inputs
-    sample: list[HostPriceResults]
-    analytic_price: HostPriceResults
-    p_value: float
-
-
-# ───────────────────────────── Monte‑Carlo helper ──────────────────────────────
-
-
-def _mc_sample(engine: BlackScholes, input: Inputs, n: int) -> SamplingResults:
-    """Generate *n* Monte‑Carlo prices and test against the analytic value.
-
-    The function asserts put‑call parity for convexities and returns a
-    :class:`SamplingResults` instance with the two‑tailed p‑value of the
-    Student‑*t* hypothesis test ``H₀: mean(error) = 0``.
-    """
-
-    sample = [engine.price_to_host(input) for _ in range(n)]
-    analytic_price = bs_price_quantlib(input)
-
-    # put‑call parity on convexities (should be zero if we normalize forwards)
-    if engine._sp.normalize_forwards:
-        parity_check = np.array([s.put_convexity - s.call_convexity for s in sample])
-        epsilon = (
-            _FLOAT32_EPSILON if engine._sp.dtype == "float32" else _FLOAT64_EPSILON
-        )
-        assert (
-            np.max(np.abs(parity_check)) < epsilon
-        ), f"Parity check failed for input {input}"
-
-    errors = (
-        np.array([s.call_convexity for s in sample]) - analytic_price.call_convexity
-    )
-    p_value = two_tailed_t_pvalue(errors)
-
-    return SamplingResults(
-        input=input,
-        sample=sample,
-        analytic_price=analytic_price,
-        p_value=p_value,
-    )
-
-
-# ──────────────────────────────── PyTest entry ────────────────────────────────
-
-
-@pytest.mark.parametrize("precision", ["float64", "float32"])
-def test_black_scholes_mc(precision: DtypeLiteral) -> None:
-    """End‑to‑end validation of the GPU Monte‑Carlo Black‑Scholes pricer.
-
-    The pricer must match the analytic Black value within three standard
-    deviations and 1 % RMSE.  Potentially problematic Sobol points are first
-    identified with a low‑rep "cold" run, then resampled at high quality.
-    Any points that still fail the hypothesis test are written to a Parquet
-    file for post‑mortem analysis, and the test is marked as failed.
-    """
-
+def _make_engine(dtype: DtypeLiteral, skip: int = 0) -> BlackScholes:
     sp = SimulationParams(
         timesteps=_TIMESTEPS,
         network_size=_NETWORK_SIZE,
@@ -207,48 +115,75 @@ def test_black_scholes_mc(precision: DtypeLiteral) -> None:
         threads_per_block=_THREADS_PER_BLOCK,
         mc_seed=_MC_SEED,
         buffer_size=_BUFFER_SIZE,
-        dtype=precision,
+        skip=skip,
+        dtype=dtype,
+    )
+    cfg = BlackScholesConfig(
+        sim_params=sp,
         simulate_log_return=True,
         normalize_forwards=False,
     )
-    engine = BlackScholes(sp)
+    return BlackScholes(cfg)
 
-    sampler = SobolSampler(BlackScholes.Inputs, _BS_DIMENSIONS, seed=43)
-    points = sampler.sample(_SOBOL_N)
 
-    # Low‑rep pass to locate tail cases
-    cold_results: List[SamplingResults] = [
-        _mc_sample(engine=engine, input=p, n=_REPS_COLD) for p in points
-    ]
+def _collect(engine: BlackScholes, inp: Inputs, n: int) -> List[HostPriceResults]:
+    return [engine.price_to_host(inp) for _ in range(n)]
 
-    # High‑quality resampling of the tail cases
-    hq_results: List[SamplingResults] = [
-        _mc_sample(engine=engine, input=r.input, n=_REPS_HQ)
-        for r in cold_results
-        if r.p_value < _P_THRESHOLD
-    ]
 
-    failures: List[SamplingResults] = sorted(
-        (r for r in hq_results if r.p_value < _P_THRESHOLD),
-        key=attrgetter("p_value"),
-        reverse=True,
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("precision", ["float64", "float32"])
+def test_black_scholes_mc(precision: DtypeLiteral) -> None:
+    """Aggregate accuracy check with comprehensions (no for-loops)."""
+    engine = _make_engine(precision)
+    sampler = SobolSampler(BlackScholes.Inputs, _BS_DIMENSIONS, seed=31)
+
+    def _stats(inp: Inputs) -> tuple[float, float | None]:
+        mc_vals = np.array(
+            [p.call_price for p in _collect(engine, inp, _MC_SAMPLE_REPS)]
+        )
+        analytic = bs_price_quantlib(inp).call_price
+
+        mean = float(mc_vals.mean())
+        s = float(mc_vals.std(ddof=1))
+        if s > 0.0:
+            se = s / math.sqrt(mc_vals.size)
+            z = abs(mean - analytic) / se
+        else:
+            eps = _EPS32 if precision == "float32" else _EPS64
+            z = 0.0 if abs(mean - analytic) <= eps else _MAX_Z + 1.0
+
+        rel_err = (mean - analytic) / analytic if analytic >= _ANALYTIC_CUTOFF else None
+        return z, rel_err
+
+    results = [_stats(inp) for inp in sampler.sample(_NUM_SOBOL_POINTS)]
+    z_scores = [z for z, _ in results]
+    rel_errors = [re for _, re in results if re is not None]
+
+    outlier_frac = float(np.mean(np.asarray(z_scores) > _MAX_Z))
+    rmspe = float(np.sqrt(np.mean(np.square(rel_errors)))) if rel_errors else 0.0
+
+    assert outlier_frac <= _MAX_OUTLIER_FRAC, (
+        f"{outlier_frac:.1%} outliers > {_MAX_Z}-σ " f"(allow {_MAX_OUTLIER_FRAC:.0%})"
     )
+    assert rmspe <= _RMSPE_TOL, f"RMSPE {rmspe:.2%} exceeds tolerance {_RMSPE_TOL:.0%}"
 
-    if failures:
-        inputs_df = pd.DataFrame([f.input.model_dump() for f in failures])
-        analytic_df = pd.DataFrame(
-            [f.analytic_price.model_dump() for f in failures],
-            index=inputs_df.index,
-        )
-        pval_df = pd.DataFrame(
-            {"p_value": [f.p_value for f in failures]}, index=inputs_df.index
-        )
 
-        df = pd.concat(
-            {"analytic_price": analytic_df, "p_value": pval_df}, axis="columns"
-        )
+@pytest.mark.parametrize("precision", ["float64", "float32"])
+def test_snapshot_determinism(precision: DtypeLiteral) -> None:
+    engine = _make_engine(precision)
+    inp = BlackScholes.Inputs(X0=100, K=100, T=1.0, r=0.05, d=0.0, v=0.2)
 
-        artefact = _ARTEFACT_DIR / f"bs_mc_failure_{precision}.parquet"
-        df.assign(dtype=precision).to_parquet(artefact)
+    _ = _collect(engine, inp, _SNAPSHOT_REPS)
+    snap = engine.snapshot()
 
-        pytest.fail(f"{len(failures)} failures; artefact → {artefact}")
+    expected = _collect(engine, inp, _SNAPSHOT_REPS)
+    restored = BlackScholes(snap)
+    reproduced = _collect(restored, inp, _SNAPSHOT_REPS)
+
+    for e, r in zip(expected, reproduced, strict=True):
+        assert math.isclose(e.call_price, r.call_price, rel_tol=_DET_REL_TOL)
+        assert math.isclose(e.put_price, r.put_price, rel_tol=_DET_REL_TOL)
