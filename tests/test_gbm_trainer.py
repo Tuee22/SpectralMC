@@ -76,7 +76,7 @@ def test_trainer_integration(precision: Literal["float32", "float64"]) -> None:
     )
 
     # Train for a handful of steps to catch regressions -----------------
-    trainer.train(num_batches=10, batch_size=64, learning_rate=1e-2)
+    trainer.train(num_batches=64, batch_size=64, learning_rate=1e-2)
 
     # ------------------------------------------------------------------ #
     # 4) Simple prediction smoke‑test                                    #
