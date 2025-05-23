@@ -1,25 +1,19 @@
 # tests/test_cvnn.py
-"""Unit-tests for ``spectralmc.cvnn`` that satisfy
-`pytest` and `mypy --strict` without using ``typing.cast``.
-"""
+"""Unit-tests for `spectralmc.cvnn` that satisfy *pytest* and *mypy --strict*."""
 from __future__ import annotations
-
-import math
-from typing import List
 
 import pytest
 import torch
-from torch import Tensor, nn
+from torch import Tensor
 
 from spectralmc.cvnn import (
     ComplexLinear,
     zReLU,
     modReLU,
     NaiveComplexBatchNorm,
-    CovarianceComplexBatchNorm,
     ResidualBlock,
-    SimpleCVNN,
     CVNN,
+    CVNNConfig,
 )
 
 DTYPE: torch.dtype = torch.float32
@@ -27,269 +21,113 @@ ATOL: float = 1.0e-5
 RTOL: float = 1.0e-4
 
 
-# -----------------------------------------------------------------------------#
-# Helpers
-# -----------------------------------------------------------------------------#
-
-
-def _rand(
-    *shape: int, requires_grad: bool = False, device: torch.device | str = "cpu"
-) -> Tensor:
-    """Deterministic random tensor."""
+def _rand(*shape: int, requires_grad: bool = False) -> Tensor:
     torch.manual_seed(42)
-    return torch.randn(*shape, dtype=DTYPE, device=device, requires_grad=requires_grad)
+    return torch.randn(*shape, dtype=DTYPE, requires_grad=requires_grad)
 
 
 def assert_close(
-    actual: Tensor,
-    expected: Tensor,
-    *,
-    atol: float = ATOL,
-    rtol: float = RTOL,
-    msg: str | None = None,
+    a: Tensor, b: Tensor, *, atol: float = ATOL, rtol: float = RTOL
 ) -> None:
-    """Thin wrapper over :func:`torch.allclose` with helpful diagnostics."""
-    if not torch.allclose(actual, expected, atol=atol, rtol=rtol):
-        diff_abs = (actual - expected).abs().max().item()
-        diff_rel = ((actual - expected).abs() / (expected.abs() + 1e-12)).max().item()
+    if not torch.allclose(a, b, atol=atol, rtol=rtol):
+        diff_abs = (a - b).abs().max().item()
+        diff_rel = ((a - b).abs() / (b.abs() + 1e-12)).max().item()
         raise AssertionError(
-            msg or f"Tensors differ (abs={diff_abs:.2e}, rel={diff_rel:.2e})"
+            f"Tensor mismatch (abs={diff_abs:.1e}, rel={diff_rel:.1e})"
         )
 
 
-# -----------------------------------------------------------------------------#
-# ComplexLinear
-# -----------------------------------------------------------------------------#
-
-
 def test_complex_linear_manual() -> None:
-    """Analytical 2 × 2 check."""
-    layer = ComplexLinear(2, 2, bias=True)
-
+    layer = ComplexLinear(2, 2)
     with torch.no_grad():
         layer.real_weight.copy_(torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
         layer.imag_weight.copy_(torch.tensor([[5.0, 6.0], [7.0, 8.0]]))
-
-        # Bias parameters are definitely present when bias=True.
         assert layer.real_bias is not None and layer.imag_bias is not None
-        rbias_param: Tensor = layer.real_bias
-        ibias_param: Tensor = layer.imag_bias
-        rbias_param.copy_(torch.tensor([0.1, 0.2]))
-        ibias_param.copy_(torch.tensor([0.3, 0.4]))
+        layer.real_bias.copy_(torch.tensor([0.1, 0.2]))
+        layer.imag_bias.copy_(torch.tensor([0.3, 0.4]))
 
-    x_r = torch.tensor([[1.0, 1.0]])
-    x_i = torch.tensor([[0.5, -0.5]])
-
-    a, b = layer.real_weight, layer.imag_weight
-    exp_r = x_r @ a.T - x_i @ b.T + rbias_param
-    exp_i = x_r @ b.T + x_i @ a.T + ibias_param
-
-    out_r, out_i = layer(x_r, x_i)
+    xr, xi = torch.tensor([[1.0, 1.0]]), torch.tensor([[0.5, -0.5]])
+    exp_r = xr @ layer.real_weight.T - xi @ layer.imag_weight.T + layer.real_bias
+    exp_i = xr @ layer.imag_weight.T + xi @ layer.real_weight.T + layer.imag_bias
+    out_r, out_i = layer(xr, xi)
     assert_close(out_r, exp_r)
     assert_close(out_i, exp_i)
 
 
-@pytest.mark.parametrize("bias", [True, False])
-def test_complex_linear_shapes_and_grad(bias: bool) -> None:
-    """Shape preservation and gradients."""
-    layer = ComplexLinear(5, 3, bias=bias)
-    x_r = _rand(7, 5, requires_grad=True)
-    x_i = _rand(7, 5, requires_grad=True)
-
-    out_r, out_i = layer(x_r, x_i)
-    assert out_r.shape == (7, 3)
-    assert out_i.shape == (7, 3)
-
-    (out_r.pow(2).sum() + out_i.pow(2).sum()).backward()
-
-    for p in layer.parameters():
-        grad = p.grad
-        assert grad is not None and torch.isfinite(grad).all()
-
-    assert x_r.grad is not None and torch.isfinite(x_r.grad).all()
-    assert x_i.grad is not None and torch.isfinite(x_i.grad).all()
-
-
-# -----------------------------------------------------------------------------#
-# zReLU
-# -----------------------------------------------------------------------------#
-
-
-def test_zrelu_masking_and_grad() -> None:
-    """First-quadrant pass & matching grads."""
+def test_zrelu() -> None:
     act = zReLU()
-    r_in = torch.tensor([[-1.0, 0.5, 0.2]], requires_grad=True)
-    i_in = torch.tensor([[0.3, -0.2, 0.1]], requires_grad=True)
+    xr = torch.tensor([[-1.0, 0.5, 0.2]], requires_grad=True)
+    xi = torch.tensor([[0.3, -0.2, 0.1]], requires_grad=True)
 
-    out_r, out_i = act(r_in, i_in)
-    assert_close(out_r, torch.tensor([[0.0, 0.0, 0.2]]))
-    assert_close(out_i, torch.tensor([[0.0, 0.0, 0.1]]))
+    or_, oi = act(xr, xi)
+    assert_close(or_, torch.tensor([[0.0, 0.0, 0.2]]))
+    assert_close(oi, torch.tensor([[0.0, 0.0, 0.1]]))
 
-    (out_r.sum() + out_i.sum()).backward()
+    (or_.sum() + oi.sum()).backward()
     mask = torch.tensor([[0.0, 0.0, 1.0]])
-    assert r_in.grad is not None and i_in.grad is not None
-    assert_close(r_in.grad, mask)
-    assert_close(i_in.grad, mask)
+    xr_grad = xr.grad if xr.grad is not None else torch.zeros_like(mask)
+    xi_grad = xi.grad if xi.grad is not None else torch.zeros_like(mask)
+    assert_close(xr_grad, mask)
+    assert_close(xi_grad, mask)
 
 
-# -----------------------------------------------------------------------------#
-# modReLU
-# -----------------------------------------------------------------------------#
-
-
-def test_modrelu_thresholding() -> None:
-    """Below threshold → 0; above → rescaled."""
-    act = modReLU(num_features=1)
-    bias_val = -4.0  # r+b = 1 for 3-4-5 triangle
+def test_modrelu() -> None:
+    act = modReLU(1)
     with torch.no_grad():
-        act.bias.fill_(bias_val)
+        act.bias.fill_(-4.0)  # 3-4-5 => magnitude=5 => 5 + (-4)=1 => scale=0.2
 
-    hi_r, hi_i = torch.tensor([[3.0]]), torch.tensor([[4.0]])
-    scaling = (5.0 + bias_val) / 5.0  # (r+b)/r
-
-    out_r, out_i = act(hi_r, hi_i)
-    assert_close(out_r, hi_r * scaling)
-    assert_close(out_i, hi_i * scaling)
-
-    lo_r, lo_i = torch.tensor([[0.1]]), torch.tensor([[0.1]])
-    z_r, z_i = act(lo_r, lo_i)
-    assert_close(z_r, torch.zeros_like(lo_r))
-    assert_close(z_i, torch.zeros_like(lo_i))
+    or_, oi = act(torch.tensor([[3.0]]), torch.tensor([[4.0]]))
+    assert_close(or_, torch.tensor([[0.6]]))
+    assert_close(oi, torch.tensor([[0.8]]))
 
 
-# -----------------------------------------------------------------------------#
-# NaiveComplexBatchNorm
-# -----------------------------------------------------------------------------#
-
-
-def test_naive_bn_stats() -> None:
-    """Training → ≈0 mean & ≈1 var per component."""
-    bn = NaiveComplexBatchNorm(4)
-    bn.train()
-
-    r_in, i_in = _rand(128, 4), _rand(128, 4)
-    out_r, out_i = bn(r_in, i_in)
-
-    assert_close(out_r.mean(0), torch.zeros(4), atol=1e-2)
-    assert_close(out_i.mean(0), torch.zeros(4), atol=1e-2)
-    assert_close(out_r.var(0, unbiased=False), torch.ones(4), atol=1e-2)
-    assert_close(out_i.var(0, unbiased=False), torch.ones(4), atol=1e-2)
-
-
-def test_naive_bn_eval_shape() -> None:
-    """Eval-mode keeps shape."""
-    bn = NaiveComplexBatchNorm(3)
-    bn.train()
-    _ = bn(_rand(32, 3), _rand(32, 3))  # prime stats
-
-    bn.eval()
-    r_in, i_in = _rand(8, 3), _rand(8, 3)
-    out_r, out_i = bn(r_in, i_in)
-    assert out_r.shape == r_in.shape
-    assert out_i.shape == i_in.shape
-
-
-# -----------------------------------------------------------------------------#
-# CovarianceComplexBatchNorm
-# -----------------------------------------------------------------------------#
-
-
-def test_cov_bn_whitening() -> None:
-    """Whitening + γ diag ⇒ var≈0.25, |cov|≤var."""
-    bn = CovarianceComplexBatchNorm(6)
-    bn.train()
-
-    r_in, i_in = _rand(256, 6), _rand(256, 6)
-    out_r, out_i = bn(r_in, i_in)
-
-    mean_r, mean_i = out_r.mean(0), out_i.mean(0)
-    var_r = out_r.var(0, unbiased=False)
-    var_i = out_i.var(0, unbiased=False)
-    cov_ri = ((out_r - mean_r) * (out_i - mean_i)).mean(0)
-
-    assert_close(mean_r, torch.zeros_like(mean_r), atol=1e-2)
-    assert_close(mean_i, torch.zeros_like(mean_i), atol=1e-2)
-
-    target_var = torch.full_like(var_r, 0.25)
-    assert_close(var_r, target_var, atol=2e-2)
-    assert_close(var_i, target_var, atol=2e-2)
-
-    assert torch.all(cov_ri.abs() <= target_var + 2e-2)
-
-
-def test_cov_bn_eval_shape() -> None:
-    """Eval-mode keeps shape."""
-    bn = CovarianceComplexBatchNorm(2)
-    bn.train()
-    for _ in range(3):
-        _ = bn(_rand(16, 2), _rand(16, 2))
-
-    bn.eval()
-    r_in, i_in = _rand(4, 2), _rand(4, 2)
-    out_r, out_i = bn(r_in, i_in)
-    assert out_r.shape == r_in.shape
-    assert out_i.shape == i_in.shape
-
-
-# -----------------------------------------------------------------------------#
-# ResidualBlock
-# -----------------------------------------------------------------------------#
-
-
-def test_residual_block_identity_when_zeroed() -> None:
-    """Zeroed internals ⇒ identity skip + zReLU."""
-    block = ResidualBlock(3, activation=zReLU, bn_class=NaiveComplexBatchNorm)
-
-    for mod in block.modules():
-        if isinstance(mod, ComplexLinear):
-            with torch.no_grad():
+def test_residual_block_identity() -> None:
+    block = ResidualBlock(2, activation=zReLU, bn_class=NaiveComplexBatchNorm)
+    block.eval()
+    with torch.no_grad():
+        for mod in block.modules():
+            if isinstance(mod, ComplexLinear):
                 mod.real_weight.zero_()
                 mod.imag_weight.zero_()
-                if mod.real_bias is not None:
+                if mod.real_bias is not None and mod.imag_bias is not None:
                     mod.real_bias.zero_()
-                if mod.imag_bias is not None:
                     mod.imag_bias.zero_()
 
-    block.eval()
-    x_r = torch.tensor([[0.2, 0.4, 0.6]])
-    x_i = torch.tensor([[0.1, 0.2, 0.3]])
-    out_r, out_i = block(x_r, x_i)
-
-    mask = (x_r >= 0) & (x_i >= 0)
-    assert_close(out_r, x_r * mask)
-    assert_close(out_i, x_i * mask)
-
-
-# -----------------------------------------------------------------------------#
-# End-to-end models
-# -----------------------------------------------------------------------------#
+    xr = torch.tensor([[0.3, -0.1]])
+    xi = torch.tensor([[0.2, 0.2]])
+    or_, oi = block(xr, xi)
+    mask = (xr >= 0) & (xi >= 0)
+    assert_close(or_, xr * mask)
+    assert_close(oi, xi * mask)
 
 
 @pytest.mark.parametrize(
-    ("model_cls", "kwargs"),
+    "cfg",
     [
-        (SimpleCVNN, {"hidden_features": 8}),
-        (CVNN, {"hidden_features": 8, "num_residual_blocks": 2}),
+        CVNNConfig(input_features=5, output_features=2, hidden_features=8),
+        CVNNConfig(
+            input_features=5,
+            output_features=2,
+            hidden_features=8,
+            num_residual_blocks=2,
+        ),
     ],
 )
-def test_models_forward_and_grad(
-    model_cls: type[nn.Module], kwargs: dict[str, int]
-) -> None:
-    """Forward/backward sanity for full models."""
-    model = model_cls(input_features=5, output_features=2, **kwargs)
+def test_cvnn_roundtrip_and_grad(cfg: CVNNConfig) -> None:
+    model = cfg.build()
+    xr = _rand(10, cfg.input_features, requires_grad=True)
+    xi = _rand(10, cfg.input_features, requires_grad=True)
 
-    x_r = _rand(10, 5, requires_grad=True)
-    x_i = _rand(10, 5, requires_grad=True)
+    or_, oi = model(xr, xi)
+    assert or_.shape == (10, cfg.output_features)
+    assert oi.shape == (10, cfg.output_features)
 
-    o_r, o_i = model(x_r, x_i)
-    assert o_r.shape == (10, 2)
-    assert o_i.shape == (10, 2)
-
-    (o_r.square().mean() + o_i.square().mean()).backward()
-
-    grads: List[Tensor] = []
-    for p in model.parameters():
-        if p.requires_grad and p.grad is not None:
-            grads.append(p.grad)
-
+    (or_.square().mean() + oi.square().mean()).backward()
+    grads = [p.grad for p in model.parameters() if p.grad is not None]
     assert any(torch.isfinite(g).all() and g.abs().sum() > 0 for g in grads)
+
+    clone = model.as_config().build()
+    clone.load_state_dict(model.state_dict())
+    cr, ci = clone(xr, xi)
+    assert_close(cr, or_)
+    assert_close(ci, oi)

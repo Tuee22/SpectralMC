@@ -1,19 +1,5 @@
-# spectralmc/gbm.py
-"""GPU-accelerated Geometric-Brownian Monte-Carlo paths.
-
-The engine is built around :class:`spectralmc.async_normals.ConcurrentNormGenerator`
-(“CNGen”) and follows the **snapshotable** pattern used in
-:pyfile:`spectralmc/async_normals.py`:
-
-* **`BlackScholesConfig`** – a frozen Pydantic-v2 model that captures *all*
-  runtime state required to resume the simulation bit-for-bit.
-* **`BlackScholes.snapshot()`** – returns a fresh `BlackScholesConfig`; a new
-  instance created from that config will continue the random stream exactly as
-  if no serialisation/deserialisation had happened in between.
-
-The file passes ``mypy --strict``; the only `Any` refers to the compiled CUDA
-kernel dispatcher whose launch syntax cannot be typed.
-"""
+# src/spectralmc/gbm.py
+"""GPU-accelerated Geometric-Brownian Monte-Carlo paths."""
 
 from __future__ import annotations
 
@@ -31,27 +17,15 @@ from spectralmc.async_normals import (
     ConcurrentNormGeneratorConfig,
 )
 
-# --------------------------------------------------------------------------- #
-# Type aliases & constants                                                    #
-# --------------------------------------------------------------------------- #
-
 PosFloat = Annotated[float, Field(gt=0)]
 NonNegFloat = Annotated[float, Field(ge=0)]
 DtypeLiteral = Literal["float32", "float64"]
 
 DeviceNDArray: TypeAlias = NDArray[np.floating]
 
-# --------------------------------------------------------------------------- #
-# Simulation-parameter model                                                  #
-# --------------------------------------------------------------------------- #
-
 
 class SimulationParams(BaseModel):
-    """Layout + RNG settings. Precision is mandatory.
-
-    The model is immutable (``frozen=True``) so it can be embedded in
-    :class:`BlackScholesConfig` without accidental changes.
-    """
+    """Layout + RNG settings. Precision is mandatory."""
 
     timesteps: int = Field(..., gt=0)
     network_size: int = Field(..., gt=0)
@@ -59,15 +33,13 @@ class SimulationParams(BaseModel):
     threads_per_block: int = Field(..., gt=0)
     mc_seed: int = Field(..., gt=0)
     buffer_size: int = Field(..., gt=0)
-    skip: int = Field(default=0, ge=0, description="Matrices already consumed by CNGen")
+    skip: int = Field(default=0, ge=0)
     dtype: DtypeLiteral
 
     model_config = ConfigDict(frozen=True)
 
-    # ---------------- convenience ----------------------------------- #
-
     @property
-    def cp_dtype(self) -> cp.dtype:  # noqa: D401
+    def cp_dtype(self) -> cp.dtype:
         return cp.dtype(self.dtype)
 
     def total_paths(self) -> int:
@@ -87,11 +59,6 @@ class SimulationParams(BaseModel):
         )
 
 
-# --------------------------------------------------------------------------- #
-# Black-Scholes *engine* configuration                                        #
-# --------------------------------------------------------------------------- #
-
-
 class BlackScholesConfig(BaseModel):
     """Snapshotable configuration for :class:`BlackScholes`."""
 
@@ -102,13 +69,8 @@ class BlackScholesConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
 
-# --------------------------------------------------------------------------- #
-# CUDA kernel (typed as Any)                                                  #
-# --------------------------------------------------------------------------- #
-
-
-@cuda.jit  # type: ignore[misc]
-def _simulate_black_scholes(  # noqa: N802
+@cuda.jit
+def _simulate_black_scholes(
     input_output: DeviceNDArray,
     timesteps: int,
     dt: float,
@@ -117,9 +79,8 @@ def _simulate_black_scholes(  # noqa: N802
     d: float,
     v: float,
     simulate_log_return: bool,
-) -> None:  # pragma: no cover
-    """In-place GBM evolution kernel (dtype derived from *input_output*)."""
-
+) -> None:
+    """In-place GBM evolution kernel."""
     idx = cuda.grid(1)
     if idx < input_output.shape[1]:
         sqrt_dt = sqrt(dt)
@@ -140,17 +101,11 @@ def _simulate_black_scholes(  # noqa: N802
                 input_output[i, idx] = X
 
 
-SimulateBlackScholes: Any = _simulate_black_scholes  # noqa: N802
-
-# --------------------------------------------------------------------------- #
-# Monte-Carlo engine                                                          #
-# --------------------------------------------------------------------------- #
+SimulateBlackScholes: Any = _simulate_black_scholes
 
 
 class BlackScholes:
     """GPU Monte-Carlo engine obeying the precision in *SimulationParams*."""
-
-    # ---------------- nested models ----------------------------------- #
 
     class Inputs(BaseModel):
         X0: PosFloat
@@ -184,8 +139,6 @@ class BlackScholes:
         put_price: float
         call_price: float
 
-    # ---------------- constructor & snapshot ------------------------- #
-
     def __init__(self, cfg: BlackScholesConfig) -> None:
         self._cfg = cfg
         self._sp = cfg.sim_params
@@ -194,7 +147,7 @@ class BlackScholes:
         self._cp_stream = cp.cuda.Stream(non_blocking=True)
         self._numba_stream = cuda.stream()
 
-        # Build CNGen config using sp.skip
+        # Build CNGen config
         ngen_cfg = ConcurrentNormGeneratorConfig(
             rows=self._sp.timesteps,
             cols=self._sp.total_paths(),
@@ -203,10 +156,6 @@ class BlackScholes:
             skips=self._sp.skip,
         )
         self._normal_gen = ConcurrentNormGenerator(self._sp.buffer_size, ngen_cfg)
-
-    # ------------------------------------------------------------------ #
-    # Snapshot (round-trip serialisation)                                #
-    # ------------------------------------------------------------------ #
 
     def snapshot(self) -> BlackScholesConfig:
         ngen_cfg = self._normal_gen.snapshot()
@@ -219,10 +168,6 @@ class BlackScholes:
             simulate_log_return=self._cfg.simulate_log_return,
             normalize_forwards=self._cfg.normalize_forwards,
         )
-
-    # ------------------------------------------------------------------ #
-    # Simulation pipeline                                               #
-    # ------------------------------------------------------------------ #
 
     def _simulate(self, inputs: Inputs) -> SimResults:
         sims = self._normal_gen.get_matrix()
@@ -257,10 +202,6 @@ class BlackScholes:
         self._cp_stream.synchronize()
         return self.SimResults(times=times, sims=sims, forwards=forwards, df=df)
 
-    # ------------------------------------------------------------------ #
-    # Pricing                                                           #
-    # ------------------------------------------------------------------ #
-
     def price(
         self, *, inputs: Inputs, sr: Optional[SimResults] = None
     ) -> PricingResults:
@@ -286,10 +227,6 @@ class BlackScholes:
             call_price=call_price,
         )
 
-    # ------------------------------------------------------------------ #
-    # Host aggregation                                                  #
-    # ------------------------------------------------------------------ #
-
     def get_host_price(self, pr: PricingResults) -> HostPricingResults:
         with self._cp_stream:
             put_intr = float(pr.put_price_intrinsic.item())
@@ -308,10 +245,6 @@ class BlackScholes:
             put_price=put_price,
             call_price=call_price,
         )
-
-    # ------------------------------------------------------------------ #
-    # Convenience wrapper                                               #
-    # ------------------------------------------------------------------ #
 
     def price_to_host(self, inputs: Inputs) -> HostPricingResults:
         return self.get_host_price(self.price(inputs=inputs))

@@ -1,30 +1,19 @@
-# spectralmc/gbm_trainer.py
-# mypy: disable-error-code=no-untyped-call
-
-"""
-Deterministic CVNN trainer with append-only S3/MinIO checkpoints.
-
-Key points
-----------
-* Single `global_seed` → deterministic NumPy RNG → seeds for torch & Sobol.
-* Trainer state (tensors + BlackScholesConfig) is saved immutably under a
-  new key each time `train()` completes.
-* `predict_price()` preserved for inference/testing.
-* Fully strict-typed (`mypy --strict` passes with zero errors/warnings).
-"""
+# src/spectralmc/gbm_trainer.py
+"""Deterministic CVNN trainer with append-only S3 checkpoints."""
 
 from __future__ import annotations
 
 import hashlib
 import io
 import json
+import math
 import os
 import random
 import time
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, List, Sequence, Tuple
 
 import boto3
 import cupy as cp  # type: ignore[import-untyped]
@@ -34,55 +23,49 @@ import torch.nn as nn
 from pydantic import BaseModel
 from torch.utils.tensorboard import SummaryWriter
 
-from spectralmc.cvnn import CVNN
+from spectralmc.cvnn import CVNN, CVNNConfig
 from spectralmc.gbm import BlackScholes, BlackScholesConfig
 from spectralmc.sobol_sampler import BoundSpec, SobolSampler
 
-# --------------------------------------------------------------------------- #
-# Constants                                                                   #
-# --------------------------------------------------------------------------- #
+IMAG_TOL = 1e-6
+DEFAULT_LEARNING_RATE = 1e-3
+GLOBAL_SEED_DEFAULT = 42
+LOG_DIR_DEFAULT = "s3://opt-models/tb"
 
-IMAG_TOL: float = 1e-6
-DEFAULT_LEARNING_RATE: float = 1e-3
-GLOBAL_SEED_DEFAULT: int = 42
-TRAIN_LOG_INTERVAL: int = 10
-LOG_DIR_DEFAULT: str = "s3://opt-models/tb"
-
-S3_BUCKET: str = "opt-models"
-S3_PREFIX: str = "cvnn/v1"
-
-# --------------------------------------------------------------------------- #
-# Utilities                                                                   #
-# --------------------------------------------------------------------------- #
+S3_BUCKET = "opt-models"
+S3_PREFIX = "cvnn/v1"
 
 
-def _torch_dtype(sim_precision: str) -> torch.dtype:
-    return torch.float32 if sim_precision == "float32" else torch.float64
+def _torch_dtype(prec: str) -> torch.dtype:
+    return torch.float32 if prec == "float32" else torch.float64
 
 
 def _inputs_to_real_imag(
     inputs: List[BlackScholes.Inputs], dtype: torch.dtype, device: torch.device
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    names = list(BlackScholes.Inputs.model_fields.keys())
+    names = list(BlackScholes.Inputs.model_fields)
     rows = [[float(getattr(inp, n)) for n in names] for inp in inputs]
     real = torch.tensor(rows, dtype=dtype, device=device)
     imag = torch.zeros_like(real)
     return real, imag
 
 
-# --------------------------------------------------------------------------- #
-# TensorBoard façade                                                          #
-# --------------------------------------------------------------------------- #
+def _price_one(engine: BlackScholes, inp: BlackScholes.Inputs) -> Any:
+    try:
+        return engine.price(inputs=inp)
+    except TypeError:
+        return engine.price()
 
 
 class _TBLogger:
+    """Minimal wrapper that keeps mypy happy."""
+
     def __init__(self, logdir: str, hist_every: int, flush_every: int) -> None:
-        self._writer = SummaryWriter(log_dir=logdir, flush_secs=flush_every)
+        self._writer: Any = SummaryWriter(log_dir=logdir, flush_secs=flush_every)
         self._hist_every = max(1, hist_every)
 
     def log_step(
         self,
-        *,
         model: nn.Module,
         step: int,
         loss: float,
@@ -91,10 +74,10 @@ class _TBLogger:
         batch_time: float,
     ) -> None:
         w = self._writer
-        w.add_scalar("Loss/train", loss, step)
-        w.add_scalar("LR", lr, step)
-        w.add_scalar("GradNorm", grad_norm, step)
-        w.add_scalar("BatchTime", batch_time, step)
+        w.add_scalar("loss/train", loss, step)
+        w.add_scalar("lr", lr, step)
+        w.add_scalar("grad_norm", grad_norm, step)
+        w.add_scalar("batch_time", batch_time, step)
 
         if step % self._hist_every == 0:
             for name, p in model.named_parameters():
@@ -107,11 +90,6 @@ class _TBLogger:
         self._writer.close()
 
 
-# --------------------------------------------------------------------------- #
-# Metadata model                                                              #
-# --------------------------------------------------------------------------- #
-
-
 class _Meta(BaseModel):
     version_id: str
     parent_version: str | None
@@ -119,17 +97,14 @@ class _Meta(BaseModel):
     ckpt_key: str
     created_at: str
     bs_cfg: BlackScholesConfig
-
-
-# --------------------------------------------------------------------------- #
-# Trainer                                                                     #
-# --------------------------------------------------------------------------- #
+    cvnn_cfg: CVNNConfig
+    sobol_seed: int
+    sobol_skip: int
+    domain_bounds: dict[str, BoundSpec] | None = None
 
 
 class GbmTrainer:
-    """Reproducible GBM-MC + CVNN trainer with append-only checkpoints."""
-
-    # ---------------- constructor -------------------------------------- #
+    """Reproducible GBM-MC + CVNN trainer."""
 
     def __init__(
         self,
@@ -142,11 +117,12 @@ class GbmTrainer:
         hist_every: int = 10,
         flush_every: int = 100,
         global_seed: int = GLOBAL_SEED_DEFAULT,
+        _sobol_seed: int | None = None,
+        _sobol_skip: int = 0,
     ) -> None:
-        # ---------- deterministic seeding ------------------------------ #
         base_rng = np.random.default_rng(global_seed)
         torch_seed = int(base_rng.integers(0, 2**63 - 1))
-        sobol_seed = int(base_rng.integers(0, 2**63 - 1))
+        sobol_seed = _sobol_seed or int(base_rng.integers(0, 2**63 - 1))
 
         random.seed(global_seed)
         np.random.seed(global_seed)
@@ -156,35 +132,38 @@ class GbmTrainer:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-        # ---------- device & model ------------------------------------- #
-        if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.device = device
+        self.device = device or torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
+        self.cvnn = cvnn.to(self.device, dtype=_torch_dtype(cfg.sim_params.dtype))
 
         self.cfg = cfg
-        self.cvnn = cvnn.to(device=device, dtype=_torch_dtype(cfg.sim_params.dtype))
+        self.domain_bounds = domain_bounds
+        self._sobol_seed = sobol_seed
+        self._sobol_skip = _sobol_skip
 
-        self.torch_stream: torch.cuda.Stream | None = None
+        self._optim: torch.optim.Optimizer | None = None
+
         if self.device.type == "cuda":
-            self.torch_stream = torch.cuda.Stream(device=self.device)
+            self.torch_stream: torch.cuda.Stream | None = torch.cuda.Stream(
+                device=self.device
+            )
+        else:
+            self.torch_stream = None
 
-        # ---------- Sobol sampler & MC engine --------------------------- #
         self.sampler = SobolSampler(
             pydantic_class=BlackScholes.Inputs,
-            dimensions=domain_bounds,
-            skip=cfg.sim_params.skip,
-            seed=sobol_seed,
+            dimensions=self.domain_bounds,
+            skip=self._sobol_skip,
+            seed=self._sobol_seed,
         )
         self.mc_engine = BlackScholes(cfg)
 
-        # ---------- logging & storage ---------------------------------- #
         self._tb = _TBLogger(tb_logdir, hist_every, flush_every)
         self._s3 = boto3.client("s3", endpoint_url=os.getenv("AWS_ENDPOINT_URL"))
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self._run_prefix = f"{S3_PREFIX}/runs/{ts}"
         self._parent_version: str | None = None
-
-    # ---------------- training loop ----------------------------------- #
 
     def train(
         self,
@@ -194,10 +173,10 @@ class GbmTrainer:
         learning_rate: float = DEFAULT_LEARNING_RATE,
     ) -> None:
         if self.device.type != "cuda":
-            raise RuntimeError("CUDA device required.")
-        assert self.torch_stream is not None  # for mypy
+            raise RuntimeError("CUDA device required for GBM kernel.")
 
-        optimiser = torch.optim.Adam(self.cvnn.parameters(), lr=learning_rate)
+        opt = torch.optim.Adam(self.cvnn.parameters(), lr=learning_rate)
+        self._optim = opt
         self.cvnn.train()
 
         cp_dtype = (
@@ -210,110 +189,119 @@ class GbmTrainer:
         )
         torch_rdtype = _torch_dtype(self.cfg.sim_params.dtype)
 
-        global_step = 0
-        for step in range(1, num_batches + 1):
+        step = 0
+        for _ in range(num_batches):
             t0 = time.perf_counter()
 
-            sobol_pts = self.sampler.sample(batch_size)
+            pts = self.sampler.sample(batch_size)
+            self._sobol_skip += batch_size
+
             fft_buf = cp.zeros(
                 (batch_size, self.cfg.sim_params.network_size), dtype=cp_dtype
             )
-
-            for i, contract in enumerate(sobol_pts):
-                mc = self.mc_engine.price(inputs=contract)
-                puts = mc.put_price.reshape(
+            for idx, contract in enumerate(pts):
+                mc = _price_one(self.mc_engine, contract)
+                shaped = mc.put_price.reshape(
                     (
                         self.cfg.sim_params.batches_per_mc_run,
                         self.cfg.sim_params.network_size,
                     )
                 )
-                fft_buf[i, :] = cp.mean(cp.fft.fft(puts, axis=1), axis=0)
+                # Perform an FFT across axis=1, then average
+                fft_buf[idx, :] = cp.mean(cp.fft.fft(shaped, axis=1), axis=0)
 
+            # Wait for CP operations to finish
             cp.cuda.Stream.null.synchronize()
 
-            with torch.cuda.stream(self.torch_stream):
+            # Run the forward/backward pass on the PyTorch side
+            if self.torch_stream is not None:
+                with torch.cuda.stream(self.torch_stream):
+                    targets = torch.utils.dlpack.from_dlpack(fft_buf.toDlpack()).to(
+                        torch_cdtype
+                    )
+                    rin, iim = _inputs_to_real_imag(pts, torch_rdtype, self.device)
+                    pr, pi = self.cvnn(rin, iim)
+                    loss = nn.functional.mse_loss(
+                        pr, targets.real
+                    ) + nn.functional.mse_loss(pi, targets.imag)
+
+                    opt.zero_grad(set_to_none=True)
+                    loss.backward()
+                    opt.step()
+
+                    grad_norm = nn.utils.clip_grad_norm_(
+                        self.cvnn.parameters(), float("inf")
+                    ).item()
+
+                self.torch_stream.synchronize()
+            else:
                 targets = torch.utils.dlpack.from_dlpack(fft_buf.toDlpack()).to(
                     torch_cdtype
                 )
-                r_in, i_in = _inputs_to_real_imag(sobol_pts, torch_rdtype, self.device)
-                pred_r, pred_i = self.cvnn(r_in, i_in)
+                rin, iim = _inputs_to_real_imag(pts, torch_rdtype, self.device)
+                pr, pi = self.cvnn(rin, iim)
                 loss = nn.functional.mse_loss(
-                    pred_r, targets.real
-                ) + nn.functional.mse_loss(pred_i, targets.imag)
+                    pr, targets.real
+                ) + nn.functional.mse_loss(pi, targets.imag)
 
-                optimiser.zero_grad(set_to_none=True)
+                opt.zero_grad(set_to_none=True)
                 loss.backward()
-                optimiser.step()
+                opt.step()
 
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    self.cvnn.parameters(), max_norm=float("inf")
+                grad_norm = nn.utils.clip_grad_norm_(
+                    self.cvnn.parameters(), float("inf")
                 ).item()
 
-            self.torch_stream.synchronize()
             batch_time = time.perf_counter() - t0
-            lr = optimiser.param_groups[0]["lr"]
-
             self._tb.log_step(
                 model=self.cvnn,
-                step=global_step,
-                loss=loss.item(),
-                lr=lr,
+                step=step,
+                loss=float(loss.item()),
+                lr=opt.param_groups[0]["lr"],
                 grad_norm=grad_norm,
                 batch_time=batch_time,
             )
-            global_step += 1
-
-            if step % TRAIN_LOG_INTERVAL == 0 or step == num_batches:
-                print(
-                    f"[TRAIN] {step}/{num_batches}  "
-                    f"loss={loss.item():.4g}  "
-                    f"{batch_time*1e3:6.1f} ms"
-                )
+            step += 1
 
         self._tb.close()
-        self._commit_checkpoint(global_step, optimiser)
-
-    # ---------------- inference --------------------------------------- #
+        self._commit_checkpoint(step, opt)
 
     def predict_price(
         self, inputs: List[BlackScholes.Inputs]
     ) -> List[BlackScholes.HostPricingResults]:
         if not inputs:
             return []
-
         self.cvnn.eval()
+
         rdtype = _torch_dtype(self.cfg.sim_params.dtype)
-        real_in, imag_in = _inputs_to_real_imag(inputs, rdtype, self.device)
+        rin, iim = _inputs_to_real_imag(inputs, rdtype, self.device)
 
-        if self.torch_stream is None:
-            with torch.no_grad():
-                pred_r, pred_i = self.cvnn(real_in, imag_in)
-        else:
+        if self.torch_stream is not None:
             with torch.no_grad(), torch.cuda.stream(self.torch_stream):
-                pred_r, pred_i = self.cvnn(real_in, imag_in)
+                pr, pi = self.cvnn(rin, iim)
             self.torch_stream.synchronize()
+        else:
+            with torch.no_grad():
+                pr, pi = self.cvnn(rin, iim)
 
-        spectrum = torch.complex(pred_r, pred_i)
-        mean_ifft = torch.fft.ifft(spectrum, dim=1).mean(dim=1)
+        spec = torch.complex(pr, pi)
+        mean_ifft = torch.fft.ifft(spec, dim=1).mean(dim=1)
 
-        results: List[BlackScholes.HostPricingResults] = []
-        for cval, bs in zip(mean_ifft, inputs):
-            real_val = float(torch.real(cval).item())
-            imag_val = float(torch.imag(cval).item())
+        out: List[BlackScholes.HostPricingResults] = []
+        for val, bs in zip(mean_ifft, inputs):
+            real_val = float(val.real.item())
+            imag_val = float(val.imag.item())
             if abs(imag_val) > IMAG_TOL:
-                warnings.warn(
-                    f"IFFT imaginary part {imag_val:.3e} exceeds tolerance",
-                    RuntimeWarning,
-                )
+                warnings.warn(f"Imag part {imag_val:.2e} exceeds tol", RuntimeWarning)
 
-            disc = np.exp(-bs.r * bs.T)
-            fwd = bs.X0 * np.exp((bs.r - bs.d) * bs.T)
+            disc = math.exp(-bs.r * bs.T)
+            fwd = bs.X0 * math.exp((bs.r - bs.d) * bs.T)
 
             put_intr = disc * max(bs.K - fwd, 0.0)
             call_val = real_val + fwd - bs.K * disc
             call_intr = disc * max(fwd - bs.K, 0.0)
 
-            results.append(
+            out.append(
                 BlackScholes.HostPricingResults(
                     put_price_intrinsic=put_intr,
                     call_price_intrinsic=call_intr,
@@ -324,9 +312,7 @@ class GbmTrainer:
                     call_price=call_val,
                 )
             )
-        return results
-
-    # ---------------- checkpoint upload -------------------------------- #
+        return out
 
     def _commit_checkpoint(self, step: int, opt: torch.optim.Optimizer) -> None:
         lock_key = f"{self._run_prefix}/LOCK"
@@ -334,8 +320,8 @@ class GbmTrainer:
             self._s3.put_object(
                 Bucket=S3_BUCKET, Key=lock_key, Body=b"", IfNoneMatch="*"
             )
-        except self._s3.exceptions.ClientError as e:
-            raise RuntimeError("Another writer is active") from e
+        except self._s3.exceptions.ClientError as exc:
+            raise RuntimeError("Another writer holds the lock") from exc
 
         try:
             buf = io.BytesIO()
@@ -358,7 +344,11 @@ class GbmTrainer:
                 step=step,
                 ckpt_key=ckpt_key,
                 created_at=datetime.now(timezone.utc).isoformat(),
-                bs_cfg=self.cfg,
+                bs_cfg=self.mc_engine.snapshot(),
+                cvnn_cfg=self.cvnn.as_config(),
+                sobol_seed=self._sobol_seed,
+                sobol_skip=self._sobol_skip,
+                domain_bounds=self.domain_bounds,
             )
             meta_key = f"{self._run_prefix}/meta-{step}-{sha}.json"
             self._s3.put_object(
@@ -373,37 +363,36 @@ class GbmTrainer:
         finally:
             self._s3.delete_object(Bucket=S3_BUCKET, Key=lock_key)
 
-    # ---------------- restore helper ----------------------------------- #
-
     @classmethod
     def load_from_uri(
         cls, uri: str, *, device: torch.device | None = None
-    ) -> "GbmTrainer":
+    ) -> GbmTrainer:
         if uri.startswith("s3://"):
             bucket, key = uri[5:].split("/", 1)
             s3 = boto3.client("s3", endpoint_url=os.getenv("AWS_ENDPOINT_URL"))
-            meta_json = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
-            meta = _Meta.model_validate_json(meta_json)
+            meta_bytes = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+            meta = _Meta.model_validate_json(meta_bytes)
             ckpt_bytes = s3.get_object(Bucket=bucket, Key=meta.ckpt_key)["Body"].read()
         else:
-            with Path(uri).open("rb") as fh:
-                meta = _Meta.model_validate_json(fh.read())
-            with Path(meta.ckpt_key).open("rb") as fh:
-                ckpt_bytes = fh.read()
+            meta = _Meta.model_validate_json(Path(uri).read_bytes())
+            ckpt_bytes = Path(meta.ckpt_key).read_bytes()
 
         ckpt = torch.load(io.BytesIO(ckpt_bytes), map_location="cpu")
-        cvnn = CVNN(
-            input_features=6,
-            output_features=meta.bs_cfg.sim_params.network_size,
-            hidden_features=meta.bs_cfg.sim_params.network_size * 2,
-            num_residual_blocks=2,
-        )
+        cvnn = meta.cvnn_cfg.build()
         cvnn.load_state_dict(ckpt["model"])
 
-        return cls(
+        domain_bounds = meta.domain_bounds if meta.domain_bounds is not None else {}
+
+        trainer = cls(
             cfg=meta.bs_cfg,
-            domain_bounds={},  # supply the original bounds here
+            domain_bounds=domain_bounds,
             cvnn=cvnn,
             device=device,
             global_seed=GLOBAL_SEED_DEFAULT,
+            _sobol_seed=meta.sobol_seed,
+            _sobol_skip=meta.sobol_skip,
         )
+        optim = torch.optim.Adam(trainer.cvnn.parameters())
+        optim.load_state_dict(ckpt["optim"])
+        trainer._optim = optim
+        return trainer
