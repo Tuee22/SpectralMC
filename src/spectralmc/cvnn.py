@@ -1,6 +1,3 @@
-# src/spectralmc/cvnn.py
-"""Complex-valued feed-forward network utilities & reference implementation."""
-
 from __future__ import annotations
 
 import math
@@ -28,7 +25,6 @@ __all__: Sequence[str] = [
     "CVNNConfig",
     "CVNN",
 ]
-
 
 ###############################################################################
 # Layers & activations                                                        #
@@ -133,10 +129,9 @@ class _ActProto(Protocol):
 def _make_act(
     activation: Union[Type[nn.Module], nn.Module], num_features: int
 ) -> _ActProto:
-    """Make an activation instance that takes (real, imag) -> (real, imag)."""
     if isinstance(activation, type):
         try:
-            act: nn.Module = activation(num_features)
+            act = activation(num_features)
         except TypeError:
             act = activation()
     else:
@@ -182,16 +177,10 @@ class ResidualBlock(nn.Module):
         r, i = self.linear1(input_real, input_imag)
         r, i = self.bn1(r, i)
         r, i = self.act1(r, i)
-
         r2, i2 = self.linear2(r, i)
         r2, i2 = self.bn2(r2, i2)
-        r2, i2 = r2 + r, i2 + i
+        r2, i2 = r2 + res_r, i2 + res_i
         return self.act2(r2, i2)
-
-
-###############################################################################
-# Config & CVNN                                                               #
-###############################################################################
 
 
 class CVNNConfig(BaseModel):
@@ -204,8 +193,7 @@ class CVNNConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    def build(self) -> CVNN:
-        """Instantiate a fresh network from this config."""
+    def build(self) -> "CVNN":
         return CVNN(
             input_features=self.input_features,
             output_features=self.output_features,
@@ -255,7 +243,6 @@ class CVNN(nn.Module):
         return self.output_linear(r, i)
 
     def as_config(self) -> CVNNConfig:
-        """Return a config that can rebuild **this** architecture."""
         return CVNNConfig(
             input_features=self.input_features,
             output_features=self.output_features,

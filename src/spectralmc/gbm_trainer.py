@@ -1,6 +1,3 @@
-# src/spectralmc/gbm_trainer.py
-"""Deterministic CVNN trainer with append-only S3 checkpoints."""
-
 from __future__ import annotations
 
 import hashlib
@@ -21,7 +18,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from pydantic import BaseModel
-from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter  # type: ignore[no-untyped-call]
 
 from spectralmc.cvnn import CVNN, CVNNConfig
 from spectralmc.gbm import BlackScholes, BlackScholesConfig
@@ -51,17 +48,14 @@ def _inputs_to_real_imag(
 
 
 def _price_one(engine: BlackScholes, inp: BlackScholes.Inputs) -> Any:
-    try:
-        return engine.price(inputs=inp)
-    except TypeError:
-        return engine.price()
+    return engine.price(inputs=inp)
 
 
 class _TBLogger:
     """Minimal wrapper that keeps mypy happy."""
 
     def __init__(self, logdir: str, hist_every: int, flush_every: int) -> None:
-        self._writer: Any = SummaryWriter(log_dir=logdir, flush_secs=flush_every)
+        self._writer: Any = SummaryWriter(log_dir=logdir, flush_secs=flush_every)  # type: ignore[no-untyped-call]
         self._hist_every = max(1, hist_every)
 
     def log_step(
@@ -74,20 +68,20 @@ class _TBLogger:
         batch_time: float,
     ) -> None:
         w = self._writer
-        w.add_scalar("loss/train", loss, step)
-        w.add_scalar("lr", lr, step)
-        w.add_scalar("grad_norm", grad_norm, step)
-        w.add_scalar("batch_time", batch_time, step)
+        w.add_scalar("loss/train", loss, step)  # type: ignore[no-untyped-call]
+        w.add_scalar("lr", lr, step)  # type: ignore[no-untyped-call]
+        w.add_scalar("grad_norm", grad_norm, step)  # type: ignore[no-untyped-call]
+        w.add_scalar("batch_time", batch_time, step)  # type: ignore[no-untyped-call]
 
         if step % self._hist_every == 0:
             for name, p in model.named_parameters():
-                w.add_histogram(name, p, step)
+                w.add_histogram(name, p, step)  # type: ignore[no-untyped-call]
                 if p.grad is not None:
-                    w.add_histogram(f"{name}.grad", p.grad, step)
+                    w.add_histogram(f"{name}.grad", p.grad, step)  # type: ignore[no-untyped-call]
 
     def close(self) -> None:
-        self._writer.flush()
-        self._writer.close()
+        self._writer.flush()  # type: ignore[no-untyped-call]
+        self._writer.close()  # type: ignore[no-untyped-call]
 
 
 class _Meta(BaseModel):
@@ -145,9 +139,8 @@ class GbmTrainer:
         self._optim: torch.optim.Optimizer | None = None
 
         if self.device.type == "cuda":
-            self.torch_stream: torch.cuda.Stream | None = torch.cuda.Stream(
-                device=self.device
-            )
+            # type ignore to silence mypy no-untyped-call
+            self.torch_stream: torch.cuda.Stream | None = torch.cuda.Stream(device=self.device)  # type: ignore[no-untyped-call]
         else:
             self.torch_stream = None
 
@@ -207,15 +200,12 @@ class GbmTrainer:
                         self.cfg.sim_params.network_size,
                     )
                 )
-                # Perform an FFT across axis=1, then average
                 fft_buf[idx, :] = cp.mean(cp.fft.fft(shaped, axis=1), axis=0)
 
-            # Wait for CP operations to finish
             cp.cuda.Stream.null.synchronize()
 
-            # Run the forward/backward pass on the PyTorch side
             if self.torch_stream is not None:
-                with torch.cuda.stream(self.torch_stream):
+                with torch.cuda.stream(self.torch_stream):  # type: ignore[no-untyped-call]
                     targets = torch.utils.dlpack.from_dlpack(fft_buf.toDlpack()).to(
                         torch_cdtype
                     )
@@ -226,7 +216,7 @@ class GbmTrainer:
                     ) + nn.functional.mse_loss(pi, targets.imag)
 
                     opt.zero_grad(set_to_none=True)
-                    loss.backward()
+                    loss.backward()  # type: ignore[no-untyped-call]
                     opt.step()
 
                     grad_norm = nn.utils.clip_grad_norm_(
@@ -245,7 +235,7 @@ class GbmTrainer:
                 ) + nn.functional.mse_loss(pi, targets.imag)
 
                 opt.zero_grad(set_to_none=True)
-                loss.backward()
+                loss.backward()  # type: ignore[no-untyped-call]
                 opt.step()
 
                 grad_norm = nn.utils.clip_grad_norm_(
@@ -277,7 +267,7 @@ class GbmTrainer:
         rin, iim = _inputs_to_real_imag(inputs, rdtype, self.device)
 
         if self.torch_stream is not None:
-            with torch.no_grad(), torch.cuda.stream(self.torch_stream):
+            with torch.no_grad(), torch.cuda.stream(self.torch_stream):  # type: ignore[no-untyped-call]
                 pr, pi = self.cvnn(rin, iim)
             self.torch_stream.synchronize()
         else:

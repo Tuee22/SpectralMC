@@ -1,10 +1,10 @@
-# tests/test_cvnn.py
 """Unit-tests for `spectralmc.cvnn` that satisfy *pytest* and *mypy --strict*."""
+
 from __future__ import annotations
 
 import pytest
 import torch
-from torch import Tensor
+from torch import Tensor, nn
 
 from spectralmc.cvnn import (
     ComplexLinear,
@@ -35,6 +35,19 @@ def assert_close(
         raise AssertionError(
             f"Tensor mismatch (abs={diff_abs:.1e}, rel={diff_rel:.1e})"
         )
+
+
+class ComplexIdentityBN(nn.Module):
+    """Fake BN that just returns (r,i), but has a constructor param for `n`."""
+
+    def __init__(self, num_features: int) -> None:
+        super().__init__()
+        self.n = num_features  # store but never use
+
+    def forward(
+        self, input_real: torch.Tensor, input_imag: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return input_real, input_imag
 
 
 def test_complex_linear_manual() -> None:
@@ -82,23 +95,28 @@ def test_modrelu() -> None:
 
 
 def test_residual_block_identity() -> None:
-    block = ResidualBlock(2, activation=zReLU, bn_class=NaiveComplexBatchNorm)
+    # Use a "BN" that is actually an identity so zeroed-out layers + zReLU => partial identity
+    block = ResidualBlock(2, activation=zReLU, bn_class=ComplexIdentityBN)
     block.eval()
     with torch.no_grad():
         for mod in block.modules():
             if isinstance(mod, ComplexLinear):
                 mod.real_weight.zero_()
                 mod.imag_weight.zero_()
-                if mod.real_bias is not None and mod.imag_bias is not None:
+                if mod.real_bias is not None:
                     mod.real_bias.zero_()
+                if mod.imag_bias is not None:
                     mod.imag_bias.zero_()
 
     xr = torch.tensor([[0.3, -0.1]])
     xi = torch.tensor([[0.2, 0.2]])
     or_, oi = block(xr, xi)
+
     mask = (xr >= 0) & (xi >= 0)
-    assert_close(or_, xr * mask)
-    assert_close(oi, xi * mask)
+    exp_r = xr * mask
+    exp_i = xi * mask
+    assert_close(or_, exp_r)
+    assert_close(oi, exp_i)
 
 
 @pytest.mark.parametrize(

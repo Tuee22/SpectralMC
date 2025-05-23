@@ -1,6 +1,3 @@
-# src/spectralmc/gbm.py
-"""GPU-accelerated Geometric-Brownian Monte-Carlo paths."""
-
 from __future__ import annotations
 
 from math import exp, sqrt
@@ -69,7 +66,7 @@ class BlackScholesConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
 
-@cuda.jit
+@cuda.jit  # type: ignore[misc]
 def _simulate_black_scholes(
     input_output: DeviceNDArray,
     timesteps: int,
