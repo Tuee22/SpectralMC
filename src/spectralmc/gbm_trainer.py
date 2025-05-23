@@ -1,33 +1,37 @@
 # spectralmc/gbm_trainer.py
 # mypy: disable-error-code=no-untyped-call
-"""
-Train a complex-valued neural network (``CVNN``) to learn the discrete Fourier
-transform of discounted Black-Scholes put-pay-off distributions while logging
-diagnostics to TensorBoard – all under ``mypy --strict``.
 
-Key implementation details
---------------------------
-* **GPU-only training** – `train()` raises unless the selected device is CUDA.
-* **Dedicated CUDA stream** – each trainer instance owns **one** `torch.cuda.Stream`
-  (`self.torch_stream`) that is created in ``__init__`` *only when* the device is
-  CUDA.  All PyTorch kernels inside the training loop run on that stream, never
-  on the device-default stream.  This allows several trainers to coexist in one
-  process without serialising their kernels.
-* **CPU/GPU inference** – `predict_price()` works on either CPU or GPU; if the
-  trainer was constructed on a CPU device no stream is created and the code
-  simply uses ordinary synchronous PyTorch ops.
+"""
+Deterministic CVNN trainer with append-only S3/MinIO checkpoints.
+
+Key points
+----------
+* Single `global_seed` → deterministic NumPy RNG → seeds for torch & Sobol.
+* Trainer state (tensors + BlackScholesConfig) is saved immutably under a
+  new key each time `train()` completes.
+* `predict_price()` preserved for inference/testing.
+* Fully strict-typed (`mypy --strict` passes with zero errors/warnings).
 """
 
 from __future__ import annotations
 
-import math
+import hashlib
+import io
+import json
+import os
+import random
 import time
 import warnings
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Tuple
 
+import boto3
 import cupy as cp  # type: ignore[import-untyped]
+import numpy as np
 import torch
 import torch.nn as nn
+from pydantic import BaseModel
 from torch.utils.tensorboard import SummaryWriter
 
 from spectralmc.cvnn import CVNN
@@ -40,45 +44,41 @@ from spectralmc.sobol_sampler import BoundSpec, SobolSampler
 
 IMAG_TOL: float = 1e-6
 DEFAULT_LEARNING_RATE: float = 1e-3
+GLOBAL_SEED_DEFAULT: int = 42
 TRAIN_LOG_INTERVAL: int = 10
-LOG_DIR_DEFAULT: str = ".logs/gbm_trainer"
+LOG_DIR_DEFAULT: str = "s3://opt-models/tb"
+
+S3_BUCKET: str = "opt-models"
+S3_PREFIX: str = "cvnn/v1"
 
 # --------------------------------------------------------------------------- #
-# Helper utilities                                                            #
+# Utilities                                                                   #
 # --------------------------------------------------------------------------- #
 
 
-def _get_torch_dtype(sim_precision: str) -> torch.dtype:
-    """Return the torch dtype that matches a simulation precision string."""
-    if sim_precision == "float32":
-        return torch.float32
-    if sim_precision == "float64":
-        return torch.float64
-    raise ValueError(f"Unsupported dtype: {sim_precision!r}")
+def _torch_dtype(sim_precision: str) -> torch.dtype:
+    return torch.float32 if sim_precision == "float32" else torch.float64
 
 
 def _inputs_to_real_imag(
-    inputs: List[BlackScholes.Inputs],
-    dtype: torch.dtype,
-    device: torch.device,
+    inputs: List[BlackScholes.Inputs], dtype: torch.dtype, device: torch.device
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Convert Black-Scholes inputs to real/imag tensors for a CVNN."""
-    param_names: List[str] = list(BlackScholes.Inputs.model_fields.keys())
-    rows: List[List[float]] = [
-        [float(getattr(inp, name)) for name in param_names] for inp in inputs
-    ]
+    names = list(BlackScholes.Inputs.model_fields.keys())
+    rows = [[float(getattr(inp, n)) for n in names] for inp in inputs]
     real = torch.tensor(rows, dtype=dtype, device=device)
     imag = torch.zeros_like(real)
     return real, imag
 
 
-class _TBLogger:
-    """Thin facade around :class:`torch.utils.tensorboard.SummaryWriter`."""
+# --------------------------------------------------------------------------- #
+# TensorBoard façade                                                          #
+# --------------------------------------------------------------------------- #
 
+
+class _TBLogger:
     def __init__(self, logdir: str, hist_every: int, flush_every: int) -> None:
-        self._writer: SummaryWriter = SummaryWriter(log_dir=logdir)
-        self._hist_every: int = max(1, hist_every)
-        self._flush_every: int = max(1, flush_every)
+        self._writer = SummaryWriter(log_dir=logdir, flush_secs=flush_every)
+        self._hist_every = max(1, hist_every)
 
     def log_step(
         self,
@@ -97,13 +97,10 @@ class _TBLogger:
         w.add_scalar("BatchTime", batch_time, step)
 
         if step % self._hist_every == 0:
-            for name, param in model.named_parameters():
-                w.add_histogram(name, param, step)
-                if param.grad is not None:
-                    w.add_histogram(f"{name}.grad", param.grad, step)
-
-        if step % self._flush_every == 0:
-            w.flush()
+            for name, p in model.named_parameters():
+                w.add_histogram(name, p, step)
+                if p.grad is not None:
+                    w.add_histogram(f"{name}.grad", p.grad, step)
 
     def close(self) -> None:
         self._writer.flush()
@@ -111,72 +108,83 @@ class _TBLogger:
 
 
 # --------------------------------------------------------------------------- #
-# Main trainer                                                                #
+# Metadata model                                                              #
+# --------------------------------------------------------------------------- #
+
+
+class _Meta(BaseModel):
+    version_id: str
+    parent_version: str | None
+    step: int
+    ckpt_key: str
+    created_at: str
+    bs_cfg: BlackScholesConfig
+
+
+# --------------------------------------------------------------------------- #
+# Trainer                                                                     #
 # --------------------------------------------------------------------------- #
 
 
 class GbmTrainer:
-    """Train a :pyclass:`spectralmc.cvnn.CVNN` on GPU Monte-Carlo GBM data."""
+    """Reproducible GBM-MC + CVNN trainer with append-only checkpoints."""
 
-    # ------------------------------------------------------------------ #
-    # Construction                                                       #
-    # ------------------------------------------------------------------ #
+    # ---------------- constructor -------------------------------------- #
 
     def __init__(
         self,
         *,
         cfg: BlackScholesConfig,
         domain_bounds: dict[str, BoundSpec],
-        skip_sobol: int,
-        sobol_seed: int,
         cvnn: CVNN,
         device: torch.device | None = None,
         tb_logdir: str = LOG_DIR_DEFAULT,
         hist_every: int = 10,
         flush_every: int = 100,
+        global_seed: int = GLOBAL_SEED_DEFAULT,
     ) -> None:
-        # Persist configuration -------------------------------------------------
-        self.cfg = cfg
-        self.sim_params = cfg.sim_params
-        self.cvnn = cvnn
-        self.skip_sobol = skip_sobol
-        self.sobol_seed = sobol_seed
+        # ---------- deterministic seeding ------------------------------ #
+        base_rng = np.random.default_rng(global_seed)
+        torch_seed = int(base_rng.integers(0, 2**63 - 1))
+        sobol_seed = int(base_rng.integers(0, 2**63 - 1))
 
-        # Device selection ------------------------------------------------------
+        random.seed(global_seed)
+        np.random.seed(global_seed)
+        torch.manual_seed(torch_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(torch_seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+        # ---------- device & model ------------------------------------- #
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device = device
 
-        # ------------------------------------------------------------------ #
-        # Per-trainer CUDA stream (only if running on GPU)                   #
-        # ------------------------------------------------------------------ #
+        self.cfg = cfg
+        self.cvnn = cvnn.to(device=device, dtype=_torch_dtype(cfg.sim_params.dtype))
+
         self.torch_stream: torch.cuda.Stream | None = None
         if self.device.type == "cuda":
-            # priority=0 -> default priority; you can choose -1 (low) or 1 (high)
-            self.torch_stream = torch.cuda.Stream(device=self.device, priority=0)
+            self.torch_stream = torch.cuda.Stream(device=self.device)
 
-        # Sobol sampler over the six-dimensional input space --------------------
+        # ---------- Sobol sampler & MC engine --------------------------- #
         self.sampler = SobolSampler(
             pydantic_class=BlackScholes.Inputs,
             dimensions=domain_bounds,
-            skip=skip_sobol,
+            skip=cfg.sim_params.skip,
             seed=sobol_seed,
         )
-
-        # GPU-accelerated Black-Scholes pricer ----------------------------------
         self.mc_engine = BlackScholes(cfg)
 
-        # Move CVNN to chosen device/dtype --------------------------------------
-        self.cvnn.to(device=device, dtype=_get_torch_dtype(self.sim_params.dtype))
+        # ---------- logging & storage ---------------------------------- #
+        self._tb = _TBLogger(tb_logdir, hist_every, flush_every)
+        self._s3 = boto3.client("s3", endpoint_url=os.getenv("AWS_ENDPOINT_URL"))
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        self._run_prefix = f"{S3_PREFIX}/runs/{ts}"
+        self._parent_version: str | None = None
 
-        # TensorBoard logger ----------------------------------------------------
-        self._tb = _TBLogger(
-            logdir=tb_logdir, hist_every=hist_every, flush_every=flush_every
-        )
-
-    # ------------------------------------------------------------------ #
-    # Training loop                                                      #
-    # ------------------------------------------------------------------ #
+    # ---------------- training loop ----------------------------------- #
 
     def train(
         self,
@@ -185,93 +193,65 @@ class GbmTrainer:
         batch_size: int,
         learning_rate: float = DEFAULT_LEARNING_RATE,
     ) -> None:
-        """Optimise *cvnn* parameters on Monte-Carlo data."""
         if self.device.type != "cuda":
-            raise RuntimeError("Training must be executed on a CUDA device.")
+            raise RuntimeError("CUDA device required.")
         assert self.torch_stream is not None  # for mypy
 
-        optimiser: torch.optim.Adam = torch.optim.Adam(
-            self.cvnn.parameters(), lr=learning_rate
-        )
+        optimiser = torch.optim.Adam(self.cvnn.parameters(), lr=learning_rate)
         self.cvnn.train()
 
-        cupy_cdtype = (
-            cp.complex64 if self.sim_params.dtype == "float32" else cp.complex128
+        cp_dtype = (
+            cp.complex64 if self.cfg.sim_params.dtype == "float32" else cp.complex128
         )
         torch_cdtype = (
-            torch.complex64 if self.sim_params.dtype == "float32" else torch.complex128
+            torch.complex64
+            if self.cfg.sim_params.dtype == "float32"
+            else torch.complex128
         )
-        torch_rdtype = _get_torch_dtype(self.sim_params.dtype)
+        torch_rdtype = _torch_dtype(self.cfg.sim_params.dtype)
 
-        global_step: int = 0
+        global_step = 0
         for step in range(1, num_batches + 1):
-            step_start = time.perf_counter()
+            t0 = time.perf_counter()
 
-            # ------------------------------------------------------------------
-            # 1) Sobol sample Black-Scholes inputs
-            # ------------------------------------------------------------------
-            sobol_points: List[BlackScholes.Inputs] = self.sampler.sample(batch_size)
-
-            # ------------------------------------------------------------------
-            # 2) Allocate target FFT matrix on GPU (CuPy)
-            # ------------------------------------------------------------------
-            payoff_fft_cp = cp.zeros(
-                (batch_size, self.sim_params.network_size), dtype=cupy_cdtype
+            sobol_pts = self.sampler.sample(batch_size)
+            fft_buf = cp.zeros(
+                (batch_size, self.cfg.sim_params.network_size), dtype=cp_dtype
             )
 
-            # ------------------------------------------------------------------
-            # 3) Monte-Carlo pricing contract-by-contract
-            # ------------------------------------------------------------------
-            for i, contract in enumerate(sobol_points):
-                mc_result = self.mc_engine.price(inputs=contract)
-                put_prices_cp: cp.ndarray = mc_result.put_price  # shape (paths,)
-
-                put_mat = put_prices_cp.reshape(
-                    (self.sim_params.batches_per_mc_run, self.sim_params.network_size)
+            for i, contract in enumerate(sobol_pts):
+                mc = self.mc_engine.price(inputs=contract)
+                puts = mc.put_price.reshape(
+                    (
+                        self.cfg.sim_params.batches_per_mc_run,
+                        self.cfg.sim_params.network_size,
+                    )
                 )
-                payoff_fft_cp[i, :] = cp.mean(cp.fft.fft(put_mat, axis=1), axis=0)
+                fft_buf[i, :] = cp.mean(cp.fft.fft(puts, axis=1), axis=0)
 
-            # ------------------------------------------------------------------
-            # 4) Barrier: ensure CuPy work finished before the DLPack transfer
-            # ------------------------------------------------------------------
             cp.cuda.Stream.null.synchronize()
 
-            # ------------------------------------------------------------------
-            # 5) PyTorch work: run entirely on our private stream
-            # ------------------------------------------------------------------
             with torch.cuda.stream(self.torch_stream):
-                # a) Zero-copy CuPy → Torch (DLPack) – Occurs in *this* stream
-                targets = torch.utils.dlpack.from_dlpack(payoff_fft_cp.toDlpack()).to(
+                targets = torch.utils.dlpack.from_dlpack(fft_buf.toDlpack()).to(
                     torch_cdtype
                 )
-
-                # b) Forward / loss / backward / optimiser step
-                real_in, imag_in = _inputs_to_real_imag(
-                    sobol_points, torch_rdtype, self.device
-                )
-                pred_r, pred_i = self.cvnn(real_in, imag_in)
-
+                r_in, i_in = _inputs_to_real_imag(sobol_pts, torch_rdtype, self.device)
+                pred_r, pred_i = self.cvnn(r_in, i_in)
                 loss = nn.functional.mse_loss(
-                    pred_r, targets.real, reduction="mean"
-                ) + nn.functional.mse_loss(pred_i, targets.imag, reduction="mean")
+                    pred_r, targets.real
+                ) + nn.functional.mse_loss(pred_i, targets.imag)
 
                 optimiser.zero_grad(set_to_none=True)
                 loss.backward()
                 optimiser.step()
 
-                # c) Gradient norm (in the same stream so it sees the grads)
-                grad_norm: float = torch.nn.utils.clip_grad_norm_(
+                grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.cvnn.parameters(), max_norm=float("inf")
                 ).item()
 
-            # Optional: wait so that timing / logging sees finished work
             self.torch_stream.synchronize()
-
-            # ------------------------------------------------------------------
-            # 6) TensorBoard diagnostics (CPU-side)
-            # ------------------------------------------------------------------
-            batch_time: float = time.perf_counter() - step_start
-            lr: float = optimiser.param_groups[0]["lr"]
+            batch_time = time.perf_counter() - t0
+            lr = optimiser.param_groups[0]["lr"]
 
             self._tb.log_step(
                 model=self.cvnn,
@@ -285,56 +265,52 @@ class GbmTrainer:
 
             if step % TRAIN_LOG_INTERVAL == 0 or step == num_batches:
                 print(
-                    f"[TRAIN] step={step}/{num_batches}  "
-                    f"loss={loss.item():.6g}  "
-                    f"time={batch_time*1000:6.1f} ms"
+                    f"[TRAIN] {step}/{num_batches}  "
+                    f"loss={loss.item():.4g}  "
+                    f"{batch_time*1e3:6.1f} ms"
                 )
 
         self._tb.close()
+        self._commit_checkpoint(global_step, optimiser)
 
-    # ------------------------------------------------------------------ #
-    # Inference                                                          #
-    # ------------------------------------------------------------------ #
+    # ---------------- inference --------------------------------------- #
 
     def predict_price(
-        self,
-        inputs: List[BlackScholes.Inputs],
+        self, inputs: List[BlackScholes.Inputs]
     ) -> List[BlackScholes.HostPricingResults]:
-        """Infer discounted put & call prices for a batch of contracts."""
         if not inputs:
             return []
 
         self.cvnn.eval()
-        rdtype = _get_torch_dtype(self.sim_params.dtype)
+        rdtype = _torch_dtype(self.cfg.sim_params.dtype)
         real_in, imag_in = _inputs_to_real_imag(inputs, rdtype, self.device)
 
-        with torch.no_grad():
-            if self.torch_stream is None:
-                # CPU inference or GPU without dedicated stream
+        if self.torch_stream is None:
+            with torch.no_grad():
                 pred_r, pred_i = self.cvnn(real_in, imag_in)
-            else:
-                with torch.cuda.stream(self.torch_stream):
-                    pred_r, pred_i = self.cvnn(real_in, imag_in)
-                self.torch_stream.synchronize()
+        else:
+            with torch.no_grad(), torch.cuda.stream(self.torch_stream):
+                pred_r, pred_i = self.cvnn(real_in, imag_in)
+            self.torch_stream.synchronize()
 
         spectrum = torch.complex(pred_r, pred_i)
-        mean_ifft: torch.Tensor = torch.fft.ifft(spectrum, dim=1).mean(dim=1)
+        mean_ifft = torch.fft.ifft(spectrum, dim=1).mean(dim=1)
 
         results: List[BlackScholes.HostPricingResults] = []
-        for complex_val, bs in zip(mean_ifft, inputs):
-            real_part: float = float(torch.real(complex_val).item())
-            imag_part: float = float(torch.imag(complex_val).item())
-            if abs(imag_part) > IMAG_TOL:
+        for cval, bs in zip(mean_ifft, inputs):
+            real_val = float(torch.real(cval).item())
+            imag_val = float(torch.imag(cval).item())
+            if abs(imag_val) > IMAG_TOL:
                 warnings.warn(
-                    f"IFFT imaginary component {imag_part:.3e} exceeds tolerance",
+                    f"IFFT imaginary part {imag_val:.3e} exceeds tolerance",
                     RuntimeWarning,
                 )
 
-            disc = math.exp(-bs.r * bs.T)
-            fwd = bs.X0 * math.exp((bs.r - bs.d) * bs.T)
+            disc = np.exp(-bs.r * bs.T)
+            fwd = bs.X0 * np.exp((bs.r - bs.d) * bs.T)
 
             put_intr = disc * max(bs.K - fwd, 0.0)
-            call_val = real_part + fwd - bs.K * disc
+            call_val = real_val + fwd - bs.K * disc
             call_intr = disc * max(fwd - bs.K, 0.0)
 
             results.append(
@@ -342,10 +318,92 @@ class GbmTrainer:
                     put_price_intrinsic=put_intr,
                     call_price_intrinsic=call_intr,
                     underlying=fwd,
-                    put_convexity=real_part - put_intr,
+                    put_convexity=real_val - put_intr,
                     call_convexity=call_val - call_intr,
-                    put_price=real_part,
+                    put_price=real_val,
                     call_price=call_val,
                 )
             )
         return results
+
+    # ---------------- checkpoint upload -------------------------------- #
+
+    def _commit_checkpoint(self, step: int, opt: torch.optim.Optimizer) -> None:
+        lock_key = f"{self._run_prefix}/LOCK"
+        try:
+            self._s3.put_object(
+                Bucket=S3_BUCKET, Key=lock_key, Body=b"", IfNoneMatch="*"
+            )
+        except self._s3.exceptions.ClientError as e:
+            raise RuntimeError("Another writer is active") from e
+
+        try:
+            buf = io.BytesIO()
+            torch.save(
+                {
+                    "model": self.cvnn.state_dict(),
+                    "optim": opt.state_dict(),
+                    "step": step,
+                },
+                buf,
+            )
+            payload = buf.getvalue()
+            sha = hashlib.sha256(payload).hexdigest()
+            ckpt_key = f"{self._run_prefix}/ckpt-{step}-{sha[:8]}.pt"
+            self._s3.put_object(Bucket=S3_BUCKET, Key=ckpt_key, Body=payload)
+
+            meta = _Meta(
+                version_id=sha,
+                parent_version=self._parent_version,
+                step=step,
+                ckpt_key=ckpt_key,
+                created_at=datetime.now(timezone.utc).isoformat(),
+                bs_cfg=self.cfg,
+            )
+            meta_key = f"{self._run_prefix}/meta-{step}-{sha}.json"
+            self._s3.put_object(
+                Bucket=S3_BUCKET,
+                Key=meta_key,
+                Body=json.dumps(meta.model_dump(), indent=2).encode(),
+            )
+            self._s3.put_object(
+                Bucket=S3_BUCKET, Key=f"{self._run_prefix}/HEAD", Body=meta_key.encode()
+            )
+            self._parent_version = sha
+        finally:
+            self._s3.delete_object(Bucket=S3_BUCKET, Key=lock_key)
+
+    # ---------------- restore helper ----------------------------------- #
+
+    @classmethod
+    def load_from_uri(
+        cls, uri: str, *, device: torch.device | None = None
+    ) -> "GbmTrainer":
+        if uri.startswith("s3://"):
+            bucket, key = uri[5:].split("/", 1)
+            s3 = boto3.client("s3", endpoint_url=os.getenv("AWS_ENDPOINT_URL"))
+            meta_json = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+            meta = _Meta.model_validate_json(meta_json)
+            ckpt_bytes = s3.get_object(Bucket=bucket, Key=meta.ckpt_key)["Body"].read()
+        else:
+            with Path(uri).open("rb") as fh:
+                meta = _Meta.model_validate_json(fh.read())
+            with Path(meta.ckpt_key).open("rb") as fh:
+                ckpt_bytes = fh.read()
+
+        ckpt = torch.load(io.BytesIO(ckpt_bytes), map_location="cpu")
+        cvnn = CVNN(
+            input_features=6,
+            output_features=meta.bs_cfg.sim_params.network_size,
+            hidden_features=meta.bs_cfg.sim_params.network_size * 2,
+            num_residual_blocks=2,
+        )
+        cvnn.load_state_dict(ckpt["model"])
+
+        return cls(
+            cfg=meta.bs_cfg,
+            domain_bounds={},  # supply the original bounds here
+            cvnn=cvnn,
+            device=device,
+            global_seed=GLOBAL_SEED_DEFAULT,
+        )

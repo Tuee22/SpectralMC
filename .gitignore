@@ -163,3 +163,4 @@ cython_debug/
 setup.sh
 .failed_artifacts/
 .logs/
+.data/
