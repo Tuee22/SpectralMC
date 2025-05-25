@@ -18,7 +18,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from pydantic import BaseModel
-from torch.utils.tensorboard import SummaryWriter  # type: ignore[no-untyped-call]
+from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard.writer import SummaryWriter as SummaryWriterType
 
 from spectralmc.cvnn import CVNN, CVNNConfig
 from spectralmc.gbm import BlackScholes, BlackScholesConfig
@@ -55,7 +56,11 @@ class _TBLogger:
     """Minimal wrapper that keeps mypy happy."""
 
     def __init__(self, logdir: str, hist_every: int, flush_every: int) -> None:
-        self._writer: Any = SummaryWriter(log_dir=logdir, flush_secs=flush_every)  # type: ignore[no-untyped-call]
+        # The SummaryWriter constructor is untyped, so ignore here
+        self._writer: SummaryWriterType = SummaryWriter(  # type: ignore[no-untyped-call]
+            log_dir=logdir,
+            flush_secs=flush_every,
+        )
         self._hist_every = max(1, hist_every)
 
     def log_step(
@@ -68,6 +73,7 @@ class _TBLogger:
         batch_time: float,
     ) -> None:
         w = self._writer
+        # All of these calls are untyped in the library stubs, so we ignore them
         w.add_scalar("loss/train", loss, step)  # type: ignore[no-untyped-call]
         w.add_scalar("lr", lr, step)  # type: ignore[no-untyped-call]
         w.add_scalar("grad_norm", grad_norm, step)  # type: ignore[no-untyped-call]
@@ -139,8 +145,9 @@ class GbmTrainer:
         self._optim: torch.optim.Optimizer | None = None
 
         if self.device.type == "cuda":
-            # type ignore to silence mypy no-untyped-call
-            self.torch_stream: torch.cuda.Stream | None = torch.cuda.Stream(device=self.device)  # type: ignore[no-untyped-call]
+            self.torch_stream: torch.cuda.Stream | None = torch.cuda.Stream(  # type: ignore[no-untyped-call]
+                device=self.device
+            )
         else:
             self.torch_stream = None
 
@@ -205,7 +212,7 @@ class GbmTrainer:
             cp.cuda.Stream.null.synchronize()
 
             if self.torch_stream is not None:
-                with torch.cuda.stream(self.torch_stream):  # type: ignore[no-untyped-call]
+                with torch.cuda.stream(self.torch_stream):
                     targets = torch.utils.dlpack.from_dlpack(fft_buf.toDlpack()).to(
                         torch_cdtype
                     )
@@ -267,7 +274,7 @@ class GbmTrainer:
         rin, iim = _inputs_to_real_imag(inputs, rdtype, self.device)
 
         if self.torch_stream is not None:
-            with torch.no_grad(), torch.cuda.stream(self.torch_stream):  # type: ignore[no-untyped-call]
+            with torch.no_grad(), torch.cuda.stream(self.torch_stream):
                 pr, pi = self.cvnn(rin, iim)
             self.torch_stream.synchronize()
         else:
@@ -308,7 +315,10 @@ class GbmTrainer:
         lock_key = f"{self._run_prefix}/LOCK"
         try:
             self._s3.put_object(
-                Bucket=S3_BUCKET, Key=lock_key, Body=b"", IfNoneMatch="*"
+                Bucket=S3_BUCKET,
+                Key=lock_key,
+                Body=b"",
+                IfNoneMatch="*",
             )
         except self._s3.exceptions.ClientError as exc:
             raise RuntimeError("Another writer holds the lock") from exc
@@ -347,7 +357,9 @@ class GbmTrainer:
                 Body=json.dumps(meta.model_dump(), indent=2).encode(),
             )
             self._s3.put_object(
-                Bucket=S3_BUCKET, Key=f"{self._run_prefix}/HEAD", Body=meta_key.encode()
+                Bucket=S3_BUCKET,
+                Key=f"{self._run_prefix}/HEAD",
+                Body=meta_key.encode(),
             )
             self._parent_version = sha
         finally:
@@ -355,7 +367,10 @@ class GbmTrainer:
 
     @classmethod
     def load_from_uri(
-        cls, uri: str, *, device: torch.device | None = None
+        cls,
+        uri: str,
+        *,
+        device: torch.device | None = None,
     ) -> GbmTrainer:
         if uri.startswith("s3://"):
             bucket, key = uri[5:].split("/", 1)

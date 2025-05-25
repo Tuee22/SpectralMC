@@ -65,7 +65,7 @@ class ComplexLinear(nn.Module):
 
     def forward(
         self, input_real: torch.Tensor, input_imag: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         r = input_real @ self.real_weight.T - input_imag @ self.imag_weight.T
         i = input_real @ self.imag_weight.T + input_imag @ self.real_weight.T
         if self.real_bias is not None and self.imag_bias is not None:
@@ -79,7 +79,7 @@ class zReLU(nn.Module):
 
     def forward(
         self, input_real: torch.Tensor, input_imag: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         mask = (input_real >= 0) & (input_imag >= 0)
         return input_real * mask, input_imag * mask
 
@@ -93,7 +93,7 @@ class modReLU(nn.Module):
 
     def forward(
         self, input_real: torch.Tensor, input_imag: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         mag = torch.sqrt(input_real**2 + input_imag**2 + 1e-9)
         thr = torch.relu(mag + self.bias.unsqueeze(0))
         scale = thr / mag
@@ -110,12 +110,12 @@ class NaiveComplexBatchNorm(nn.Module):
 
     def forward(
         self, input_real: torch.Tensor, input_imag: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         return self.bn_real(input_real), self.bn_imag(input_imag)
 
 
 ###############################################################################
-# Helper factories (single source of truth)                                   #
+# Helper factories                                                            #
 ###############################################################################
 
 
@@ -123,11 +123,12 @@ class NaiveComplexBatchNorm(nn.Module):
 class _ActProto(Protocol):
     def __call__(
         self, input_real: torch.Tensor, input_imag: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]: ...
+    ) -> tuple[torch.Tensor, torch.Tensor]: ...
 
 
 def _make_act(
-    activation: Union[Type[nn.Module], nn.Module], num_features: int
+    activation: Union[Type[nn.Module], nn.Module],
+    num_features: int,
 ) -> _ActProto:
     if isinstance(activation, type):
         try:
@@ -140,10 +141,7 @@ def _make_act(
 
 
 def _make_bn(bn_cls: Union[Type[nn.Module], nn.Module], n: int) -> nn.Module:
-    if isinstance(bn_cls, type):
-        return bn_cls(n)
-    else:
-        return bn_cls
+    return bn_cls(n) if isinstance(bn_cls, type) else bn_cls
 
 
 ###############################################################################
@@ -153,6 +151,9 @@ def _make_bn(bn_cls: Union[Type[nn.Module], nn.Module], n: int) -> nn.Module:
 
 class ResidualBlock(nn.Module):
     """Two-layer residual block for complex data."""
+
+    act1: _ActProto
+    act2: _ActProto
 
     def __init__(
         self,
@@ -172,19 +173,24 @@ class ResidualBlock(nn.Module):
 
     def forward(
         self, input_real: torch.Tensor, input_imag: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         res_r, res_i = input_real, input_imag
-        r, i = self.linear1(input_real, input_imag)
+        r, i = self.linear1.forward(input_real, input_imag)
         r, i = self.bn1(r, i)
         r, i = self.act1(r, i)
-        r2, i2 = self.linear2(r, i)
+        r2, i2 = self.linear2.forward(r, i)
         r2, i2 = self.bn2(r2, i2)
         r2, i2 = r2 + res_r, i2 + res_i
         return self.act2(r2, i2)
 
 
+###############################################################################
+# Config & CVNN                                                               #
+###############################################################################
+
+
 class CVNNConfig(BaseModel):
-    """Frozen architectural description of a `CVNN`."""
+    """Frozen architectural description of a ``CVNN``."""
 
     input_features: int
     output_features: int
@@ -203,7 +209,9 @@ class CVNNConfig(BaseModel):
 
 
 class CVNN(nn.Module):
-    """Simple residual CVNN used by `spectralmc.gbm_trainer`."""
+    """Simple residual CVNN used by ``spectralmc.gbm_trainer``."""
+
+    input_act: _ActProto
 
     def __init__(
         self,
@@ -226,7 +234,11 @@ class CVNN(nn.Module):
 
         self.residuals = nn.ModuleList(
             [
-                ResidualBlock(hidden_features, activation=activation, bn_class=bn_class)
+                ResidualBlock(
+                    hidden_features,
+                    activation=activation,
+                    bn_class=bn_class,
+                )
                 for _ in range(num_residual_blocks)
             ]
         )
@@ -234,13 +246,13 @@ class CVNN(nn.Module):
 
     def forward(
         self, input_real: torch.Tensor, input_imag: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        r, i = self.input_linear(input_real, input_imag)
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        r, i = self.input_linear.forward(input_real, input_imag)
         r, i = self.input_bn(r, i)
         r, i = self.input_act(r, i)
         for block in self.residuals:
             r, i = block(r, i)
-        return self.output_linear(r, i)
+        return self.output_linear.forward(r, i)
 
     def as_config(self) -> CVNNConfig:
         return CVNNConfig(

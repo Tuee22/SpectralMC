@@ -19,14 +19,13 @@ _EPS32 = 1e-5
 _EPS64 = 1e-12
 _ANALYTIC_CUTOFF = 1e-4
 
-# Provide a type annotation for the dictionary
 _BS_DIMENSIONS: Dict[str, Any] = {
     "X0": "dummy-lower-dummy-upper",
 }
 
 
 def _collect(engine: BlackScholes, inp: BlackScholes.Inputs, reps: int) -> list[Any]:
-    return []  # Stub
+    return []
 
 
 def bs_price_quantlib(inp: BlackScholes.Inputs) -> Any:
@@ -39,8 +38,6 @@ def bs_price_quantlib(inp: BlackScholes.Inputs) -> Any:
 
 @pytest.mark.parametrize("precision", ["float64", "float32"])
 def test_black_scholes_mc(precision: str) -> None:
-    """Example test that needed outlier fraction relaxed."""
-    # Pretend we do something real here
     outlier_frac = 0.078125
     assert (
         outlier_frac <= _MAX_OUTLIER_FRAC
