@@ -34,11 +34,11 @@ def linspace(
 ) -> ndarray: ...
 def exp(x: object, /) -> ndarray: ...
 def mean(
-    a: ndarray, *, axis: int | Tuple[int, ...] | None = ..., keepdims: bool = ...
+    a: Any, *, axis: int | Tuple[int, ...] | None = ..., keepdims: bool = ...
 ) -> ndarray: ...
 def maximum(a: object, b: object, /) -> ndarray: ...
 def asarray(obj: object, *, dtype: dtype | None = ...) -> ndarray: ...
-def expand_dims(a: ndarray, axis: int) -> ndarray: ...
+def expand_dims(a: Any, axis: int) -> ndarray: ...
 
 newaxis: object
 
@@ -65,3 +65,28 @@ __all__ = [
     "Stream",
     "Event",
 ]
+
+# ------------------------------------------------------------------
+# >>> ADDED BY patch_async_normals.sh (async_normals support) <<<
+# NumPy-compatible helpers required by the test-suite
+# ------------------------------------------------------------------
+from typing import Any
+import numpy as np
+
+def allclose(
+    a: Any,
+    b: Any,
+    *,
+    rtol: float = ...,
+    atol: float = ...,
+    equal_nan: bool = ...,
+) -> bool: ...
+
+# ------------------------------------------------------------------
+# Re-export the cuda sub-module so attribute access ``cp.cuda`` works
+# ------------------------------------------------------------------
+from . import cuda as cuda  # noqa: E402
+
+# ------------------------------------------------------------------
+# <<< END OF PATCH
+# ------------------------------------------------------------------

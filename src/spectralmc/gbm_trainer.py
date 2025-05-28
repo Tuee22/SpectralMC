@@ -25,7 +25,7 @@ import time
 import warnings
 from typing import List, Tuple
 
-import cupy as cp  # type: ignore[import-untyped]
+import cupy as cp
 import torch
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
