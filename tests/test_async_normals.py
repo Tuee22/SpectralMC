@@ -1,51 +1,47 @@
-# tests/test_async_normals.py
-"""End‑to‑end tests for **spectralmc.async_normals**.
+"""End-to-end tests for **spectralmc.async_normals** with *zero* ignores.
 
-* No ``cast`` or ``type: ignore`` lines (except one for the CuPy import stub).
-* Compatible with ``mypy --strict``.
-* Fails outright if CuPy is not installed (as requested).
+The CuPy stubs added under `typings/` provide the few symbols we touch,
+so `mypy --strict` reports no errors.
 """
 
 from __future__ import annotations
 
 from typing import List, Literal
 
-import cupy as cp  # type: ignore[import-untyped]
+import cupy as cp
 import pytest
 
 from spectralmc import async_normals
 
 DType = Literal["float32", "float64"]
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
+# Fixtures                                                                    #
+# --------------------------------------------------------------------------- #
 
 
-@pytest.fixture(params=["float32", "float64"], ids=["f32", "f64"])
+@pytest.fixture(params=("float32", "float64"), ids=("f32", "f64"))
 def dtype_str(request: pytest.FixtureRequest) -> DType:
     """Return the dtype literal currently under test."""
-
-    if request.param == "float32":
-        return "float32"
-    return "float64"
+    # mypy sees the two explicit return literals, so no ignore/cast needed.
+    return "float32" if request.param == "float32" else "float64"
 
 
-# ---------------------------------------------------------------------------
-# Helper
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
+# Helper                                                                      #
+# --------------------------------------------------------------------------- #
 
 
 def _collect(gen: async_normals.ConcurrentNormGenerator, n: int) -> List[cp.ndarray]:
     return [gen.get_matrix() for _ in range(n)]
 
 
-# ---------------------------------------------------------------------------
-# _NormGenerator tests
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
+# _NormGenerator tests                                                        #
+# --------------------------------------------------------------------------- #
 
 
-def test_private_norm_generator(dtype_str: DType) -> None:  # noqa: D103
+def test_private_norm_generator(dtype_str: DType) -> None:
     rows, cols = 4, 6
     gen = async_normals._NormGenerator(rows, cols, dtype=dtype_str)
     gen.enqueue(123)
@@ -66,12 +62,12 @@ def test_private_norm_generator(dtype_str: DType) -> None:  # noqa: D103
     assert gen.is_ready() is True
 
 
-# ---------------------------------------------------------------------------
-# ConcurrentNormGenerator: checkpointing & diagnostics
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
+# ConcurrentNormGenerator: checkpointing & diagnostics                        #
+# --------------------------------------------------------------------------- #
 
 
-def test_checkpoint_reproducibility(dtype_str: DType) -> None:  # noqa: D103
+def test_checkpoint_reproducibility(dtype_str: DType) -> None:
     rows, cols, buffer = 3, 5, 3
     cfg0 = async_normals.ConcurrentNormGeneratorConfig(
         rows=rows, cols=cols, seed=42, dtype=dtype_str, skips=0
@@ -84,6 +80,7 @@ def test_checkpoint_reproducibility(dtype_str: DType) -> None:  # noqa: D103
 
     # Expected continuation from original generator
     expected = _collect(gen0, 6)
+    assert len(initial) == 10  # sanity
 
     # Same buffer size restoration
     gen_same = async_normals.ConcurrentNormGenerator(buffer, snap)
@@ -98,7 +95,7 @@ def test_checkpoint_reproducibility(dtype_str: DType) -> None:  # noqa: D103
         assert cp.allclose(exp, got)
 
 
-def test_diagnostics(dtype_str: DType) -> None:  # noqa: D103
+def test_diagnostics(dtype_str: DType) -> None:
     cfg = async_normals.ConcurrentNormGeneratorConfig(
         rows=2, cols=2, seed=7, dtype=dtype_str, skips=0
     )
@@ -119,15 +116,20 @@ def test_diagnostics(dtype_str: DType) -> None:  # noqa: D103
     assert gen.dtype == cp.dtype(dtype_str)
 
 
-# ---------------------------------------------------------------------------
-# Validation tests (CPU‑only)
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
+# Validation tests (CPU-only)                                                 #
+# --------------------------------------------------------------------------- #
 
 
-def test_norm_config_validation() -> None:  # noqa: D103
+def test_norm_config_validation() -> None:
+    # rows must be > 0
     with pytest.raises(ValueError):
         async_normals.ConcurrentNormGeneratorConfig(
             rows=0, cols=2, seed=1, dtype="float32", skips=0
         )
+
+    # dtype must be 'float32' or 'float64'
     with pytest.raises(ValueError):
-        async_normals.ConcurrentNormGeneratorConfig(rows=1, cols=2, seed=1, dtype="float16", skips=0)  # type: ignore[arg-type]
+        async_normals.ConcurrentNormGeneratorConfig(
+            rows=1, cols=2, seed=1, dtype="float16", skips=0  # type: ignore[arg-type]
+        )

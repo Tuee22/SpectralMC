@@ -97,6 +97,7 @@ build-backend = "poetry.core.masonry.api"
 #                       T O O L   C O N F I G U R A T I O N                   #
 # --------------------------------------------------------------------------- #
 [tool.mypy]
+mypy_path = "typings"
 python_version = "3.12"
 strict         = true
 files          = ["src/spectralmc", "tests"]

@@ -1,15 +1,10 @@
-# spectralmc/async_normals.py
-"""Asynchronous normal-matrix generation for GPU-based Monte-Carlo.
+"""
+spectralmc.async_normals
+========================
+Asynchronous generation of standard-normal matrices on the GPU
+with latency hiding and deterministic checkpointing.
 
-Features
---------
-* **Latency hiding** – several CUDA streams keep the GPU busy while the host
-  consumes previous batches.
-* **Deterministic checkpointing** via :class:`ConcurrentNormGeneratorConfig` – only two integers
-  (``seed`` and ``skips``) are needed to resume a stream, independent of
-  *buffer_size*.
-* **Strict typing** – passes ``mypy --strict`` without suppressions (except for
-  the unavoidable CuPy stub ignore).
+This version is **mypy --strict clean** without any ``# type: ignore``.
 """
 
 from __future__ import annotations
@@ -18,21 +13,26 @@ from itertools import cycle
 from time import time
 from typing import List, Literal, Optional, Union
 
-import cupy as cp  # type: ignore[import-untyped]
+import cupy as cp  # needs the stubs in typings/cupy
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__: list[str] = ["ConcurrentNormGeneratorConfig", "ConcurrentNormGenerator"]
+__all__ = ["ConcurrentNormGeneratorConfig", "ConcurrentNormGenerator"]
 
 # --------------------------------------------------------------------------- #
-# Constants & aliases                                                         #
+# Type aliases                                                                #
 # --------------------------------------------------------------------------- #
-
-_SEED_LIMIT: int = 1_000_000_000  # exclusive upper bound for CuPy seeds
 
 FloatStr = Literal["float32", "float64"]
 FloatScalar = Union[np.float32, np.float64]
 _InputDType = Union[FloatStr, FloatScalar]
+
+# --------------------------------------------------------------------------- #
+# Constants                                                                   #
+# --------------------------------------------------------------------------- #
+
+_SEED_LIMIT: int = 1_000_000_000  # exclusive upper bound for CuPy seeds
+
 
 # --------------------------------------------------------------------------- #
 # Configuration model                                                         #
@@ -58,14 +58,14 @@ class ConcurrentNormGeneratorConfig(BaseModel):
 
 def _normalize_dtype(dtype: _InputDType) -> cp.dtype:
     """Validate and convert *dtype* to ``cp.dtype`` (float32 or float64)."""
-    cupy_dtype: cp.dtype = cp.dtype(dtype)
+    cupy_dtype = cp.dtype(dtype)
     if cupy_dtype not in (cp.float32, cp.float64):
         raise ValueError("dtype must be either 'float32' or 'float64'")
     return cupy_dtype
 
 
 # --------------------------------------------------------------------------- #
-# Internal generator (not in __all__)                                         #
+# Internal generator (not exported)                                           #
 # --------------------------------------------------------------------------- #
 
 
@@ -106,11 +106,11 @@ class _NormGenerator:
         if self._generated is None:
             raise RuntimeError("No matrix available; call enqueue() first")
 
-        t0: float = time()
+        t0 = time()
         self._stream.synchronize()
         self._sync_time += time() - t0
 
-        ready: cp.ndarray = self._generated
+        ready = self._generated
         self._generated = None
         self.enqueue(next_seed)
         return ready
@@ -123,7 +123,7 @@ class _NormGenerator:
     def is_ready(self) -> bool:  # noqa: D401
         if self._event is None:
             return False
-        status: int = int(cp.cuda.runtime.eventQuery(self._event.ptr))
+        status = int(cp.cuda.runtime.eventQuery(self._event.ptr))
         return status == 0  # 0 == cudaSuccess
 
     @property
@@ -143,25 +143,26 @@ class ConcurrentNormGenerator:
     # Construction                                                       #
     # ------------------------------------------------------------------ #
 
-    def __init__(self, buffer_size: int, config: ConcurrentNormGeneratorConfig) -> None:
+    def __init__(self, buffer_size: int, config: ConcurrentNormGeneratorConfig):
         if buffer_size <= 0:
             raise ValueError("buffer_size must be positive")
 
-        self._rows: int = config.rows
-        self._cols: int = config.cols
-        self._dtype: cp.dtype = _normalize_dtype(config.dtype)
-        self._base_seed: int = config.seed
-        self._served: int = config.skips
+        self._rows = config.rows
+        self._cols = config.cols
+        self._dtype = _normalize_dtype(config.dtype)
+        self._base_seed = config.seed
+        self._served = config.skips
 
         # Master NumPy RNG advanced to current position
-        self._np_rng: np.random.Generator = np.random.default_rng(self._base_seed)
+        self._np_rng = np.random.default_rng(self._base_seed)
         if self._served:
             self._np_rng.integers(0, _SEED_LIMIT, size=self._served)
 
         # Helper to build & prime a stream-bound generator
         def _make() -> _NormGenerator:
-            seed: int = int(self._np_rng.integers(0, _SEED_LIMIT))
-            gen = _NormGenerator(self._rows, self._cols, dtype=self._dtype)
+            dtype_str: FloatStr = "float32" if self._dtype == cp.float32 else "float64"
+            seed = int(self._np_rng.integers(0, _SEED_LIMIT))
+            gen = _NormGenerator(self._rows, self._cols, dtype=dtype_str)
             gen.enqueue(seed)
             return gen
 
@@ -177,8 +178,8 @@ class ConcurrentNormGenerator:
     # ------------------------------------------------------------------ #
 
     def _update_idle_state(self) -> None:
-        all_ready: bool = all(gen.is_ready() for gen in self._pool)
-        now: float = time()
+        all_ready = all(gen.is_ready() for gen in self._pool)
+        now = time()
         if all_ready:
             if self._idle_start is None:
                 self._idle_start = now
@@ -192,9 +193,9 @@ class ConcurrentNormGenerator:
     # ------------------------------------------------------------------ #
 
     def get_matrix(self) -> cp.ndarray:
-        gen: _NormGenerator = next(self._it)
-        next_seed: int = int(self._np_rng.integers(0, _SEED_LIMIT))
-        mat: cp.ndarray = gen.get_matrix(next_seed)
+        gen = next(self._it)
+        next_seed = int(self._np_rng.integers(0, _SEED_LIMIT))
+        mat = gen.get_matrix(next_seed)
         self._served += 1
         self._update_idle_state()
         return mat
