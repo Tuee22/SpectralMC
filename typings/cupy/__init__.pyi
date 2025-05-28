@@ -90,3 +90,17 @@ from . import cuda as cuda  # noqa: E402
 # ------------------------------------------------------------------
 # <<< END OF PATCH
 # ------------------------------------------------------------------
+
+# ------------------------------------------------------------------
+# >>> ADDED BY fix_mypy.sh (async_normals test support) <<<
+# Minimal memory-pool API required by tests/conftest.py
+# ------------------------------------------------------------------
+class _MemoryPool:
+    def free_all_blocks(self) -> None: ...
+
+def get_default_memory_pool() -> _MemoryPool: ...
+def get_default_pinned_memory_pool() -> _MemoryPool: ...
+
+# ------------------------------------------------------------------
+# <<< END OF PATCH
+# ------------------------------------------------------------------

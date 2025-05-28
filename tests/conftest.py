@@ -11,7 +11,7 @@ import gc
 import warnings
 from typing import Generator
 
-import cupy as cp  # type: ignore[import-untyped]
+import cupy as cp
 import pytest
 import torch
 
