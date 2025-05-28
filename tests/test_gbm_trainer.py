@@ -29,6 +29,7 @@ def test_trainer_integration(precision: Literal["float32", "float64"]) -> None:
     # 1) Simulation parameters & engine config                           #
     # ------------------------------------------------------------------ #
     sim_params = SimulationParams(
+        skip=0,
         timesteps=1,
         network_size=64,
         batches_per_mc_run=2**20,  # 64 × 2²⁰ total paths

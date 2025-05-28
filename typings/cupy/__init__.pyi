@@ -1,23 +1,56 @@
-"""Slim CuPy stubs for spectralmc (generated 2025-05-28)."""
+"""Minimal CuPy stubs that satisfy spectralmc & its test-suite.
+
+* No `type: ignore` comments.
+* Everything lives in a single declaration block, so classes are defined once.
+"""
 
 from __future__ import annotations
 from typing import Any, Tuple
 from numpy.typing import NDArray
 
-# ── dtypes ──────────────────────────────────────────────────────────────────
+# ── dtypes ────────────────────────────────────────────────────────────────
 class dtype:
     itemsize: int
     def __init__(self, obj: object, align: bool | None = ...) -> None: ...
 
 float32: dtype
 float64: dtype
+complex64: dtype
+complex128: dtype
 
-# ── ndarray ────────────────────────────────────────────────────────────────
+# ── core ndarray ──────────────────────────────────────────────────────────
 class ndarray(NDArray[Any]):
+    # Arithmetic subset we touch
     def __mul__(self, other: object) -> "ndarray": ...
     def __imul__(self, other: object) -> "ndarray": ...
 
-# ── random namespace ───────────────────────────────────────────────────────
+    # Needed by gbm_trainer.py for zero-copy transfer
+    def toDlpack(self) -> Any: ...
+
+# ── array helpers used in code/tests ──────────────────────────────────────
+def zeros(
+    shape: Any, dtype: dtype | None = ..., order: str | None = ...
+) -> ndarray: ...
+def linspace(
+    start: float, stop: float, num: int = ..., *, dtype: dtype | None = ...
+) -> ndarray: ...
+def exp(x: Any, /) -> ndarray: ...
+def mean(a: Any, *, axis: Any = ..., keepdims: bool = ...) -> ndarray: ...
+def maximum(a: Any, b: Any, /) -> ndarray: ...
+def asarray(x: Any, *, dtype: dtype | None = ...) -> ndarray: ...
+def expand_dims(a: Any, axis: int) -> ndarray: ...
+
+# numpy-compat helper required by tests
+def allclose(
+    a: Any,
+    b: Any,
+    *,
+    rtol: float = ...,
+    atol: float = ...,
+    equal_nan: bool = ...,
+) -> bool: ...
+
+# ── random namespace ──────────────────────────────────────────────────────
 class _Generator:
     def standard_normal(
         self, shape: Tuple[int, ...], *, dtype: dtype | None = ...
@@ -28,79 +61,47 @@ class _RandomNS:
 
 random: _RandomNS
 
-# ── array helpers ──────────────────────────────────────────────────────────
-def linspace(
-    start: float, stop: float, num: int = ..., *, dtype: dtype | None = ...
-) -> ndarray: ...
-def exp(x: object, /) -> ndarray: ...
-def mean(
-    a: Any, *, axis: int | Tuple[int, ...] | None = ..., keepdims: bool = ...
-) -> ndarray: ...
-def maximum(a: object, b: object, /) -> ndarray: ...
-def asarray(obj: object, *, dtype: dtype | None = ...) -> ndarray: ...
-def expand_dims(a: Any, axis: int) -> ndarray: ...
+# ── cp.fft.fft helper ─────────────────────────────────────────────────────
+class _FFTModule:
+    def fft(self, a: Any, axis: int = ..., n: int | None = ...) -> ndarray: ...
 
-newaxis: object
+fft: _FFTModule
 
-# ── cuda re-export ─────────────────────────────────────────────────────────
-from . import cuda as cuda
+# ── cuda sub-module stubs ─────────────────────────────────────────────────
+class Stream:
+    null: "Stream"
+    def __init__(self, non_blocking: bool | None = ...) -> None: ...
+    def synchronize(self) -> None: ...
+    def __enter__(self) -> "Stream": ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: Any,
+    ) -> None: ...
 
-Stream = cuda.Stream
-Event = cuda.Event
+class Event:
+    ptr: int
+    def __init__(self, disable_timing: bool = ...) -> None: ...
+    def record(self) -> None: ...
 
-__all__ = [
-    "dtype",
-    "float32",
-    "float64",
-    "ndarray",
-    "random",
-    "linspace",
-    "exp",
-    "mean",
-    "maximum",
-    "asarray",
-    "expand_dims",
-    "newaxis",
-    "cuda",
-    "Stream",
-    "Event",
-]
+class runtime:
+    @staticmethod
+    def eventQuery(ptr: int) -> int: ...
 
-# ------------------------------------------------------------------
-# >>> ADDED BY patch_async_normals.sh (async_normals support) <<<
-# NumPy-compatible helpers required by the test-suite
-# ------------------------------------------------------------------
-from typing import Any
-import numpy as np
+class Device:
+    def __init__(self, id: int = ...) -> None: ...
+    def synchronize(self) -> None: ...
 
-def allclose(
-    a: Any,
-    b: Any,
-    *,
-    rtol: float = ...,
-    atol: float = ...,
-    equal_nan: bool = ...,
-) -> bool: ...
-
-# ------------------------------------------------------------------
-# Re-export the cuda sub-module so attribute access ``cp.cuda`` works
-# ------------------------------------------------------------------
-from . import cuda as cuda  # noqa: E402
-
-# ------------------------------------------------------------------
-# <<< END OF PATCH
-# ------------------------------------------------------------------
-
-# ------------------------------------------------------------------
-# >>> ADDED BY fix_mypy.sh (async_normals test support) <<<
-# Minimal memory-pool API required by tests/conftest.py
-# ------------------------------------------------------------------
+# memory-pool API used in tests/conftest.py
 class _MemoryPool:
     def free_all_blocks(self) -> None: ...
 
 def get_default_memory_pool() -> _MemoryPool: ...
 def get_default_pinned_memory_pool() -> _MemoryPool: ...
 
-# ------------------------------------------------------------------
-# <<< END OF PATCH
-# ------------------------------------------------------------------
+# Re-export cuda as a sub-module (cp.cuda)
+import types as _t
+
+# re-export sub-module so mypy finds cp.cuda
+from . import cuda as cuda
