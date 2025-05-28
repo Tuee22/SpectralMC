@@ -108,3 +108,7 @@ addopts   = "-ra -q -m 'not gpu'"
 markers   = [
     "gpu: needs CUDA"
 ]
+filterwarnings = [
+    # Hide SWIG-generated DeprecationWarnings raised while importing QuantLib
+    "ignore::DeprecationWarning:.*QuantLib.*",
+]

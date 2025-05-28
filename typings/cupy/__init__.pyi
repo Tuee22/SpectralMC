@@ -1,49 +1,48 @@
-"""
-Minimal CuPy stubs needed by spectralmc.async_normals.
-Last generated: 2025-05-28
-"""
+"""Slim CuPy stubs for spectralmc (generated 2025-05-28)."""
 
 from __future__ import annotations
 from typing import Any, Tuple
 from numpy.typing import NDArray
 
-# ── fundamental types ──────────────────────────────────────────────────────
+# ── dtypes ──────────────────────────────────────────────────────────────────
 class dtype:
+    itemsize: int
     def __init__(self, obj: object, align: bool | None = ...) -> None: ...
 
 float32: dtype
 float64: dtype
 
-class ndarray(NDArray[Any]): ...
-
-# allow `cp.ndarray` annotations
+# ── ndarray ────────────────────────────────────────────────────────────────
+class ndarray(NDArray[Any]):
+    def __mul__(self, other: object) -> "ndarray": ...
+    def __imul__(self, other: object) -> "ndarray": ...
 
 # ── random namespace ───────────────────────────────────────────────────────
-class Generator:
+class _Generator:
     def standard_normal(
-        self,
-        shape: Tuple[int, ...],
-        *,
-        dtype: dtype | None = ...,
+        self, shape: Tuple[int, ...], *, dtype: dtype | None = ...
     ) -> ndarray: ...
 
 class _RandomNS:
-    def default_rng(self, seed: int) -> Generator: ...
+    def default_rng(self, seed: int) -> _Generator: ...
 
-# numerical helper
+random: _RandomNS
 
-def allclose(
-    a: ndarray,
-    b: ndarray,
-    *,
-    rtol: float = ...,
-    atol: float = ...,
-    equal_nan: bool = ...,
-) -> bool: ...
+# ── array helpers ──────────────────────────────────────────────────────────
+def linspace(
+    start: float, stop: float, num: int = ..., *, dtype: dtype | None = ...
+) -> ndarray: ...
+def exp(x: object, /) -> ndarray: ...
+def mean(
+    a: ndarray, *, axis: int | Tuple[int, ...] | None = ..., keepdims: bool = ...
+) -> ndarray: ...
+def maximum(a: object, b: object, /) -> ndarray: ...
+def asarray(obj: object, *, dtype: dtype | None = ...) -> ndarray: ...
+def expand_dims(a: ndarray, axis: int) -> ndarray: ...
 
-random: _RandomNS  # instance, not class
+newaxis: object
 
-# ── cuda sub-module re-export ───────────────────────────────────────────────
+# ── cuda re-export ─────────────────────────────────────────────────────────
 from . import cuda as cuda
 
 Stream = cuda.Stream
@@ -54,8 +53,14 @@ __all__ = [
     "float32",
     "float64",
     "ndarray",
-    "Generator",
     "random",
+    "linspace",
+    "exp",
+    "mean",
+    "maximum",
+    "asarray",
+    "expand_dims",
+    "newaxis",
     "cuda",
     "Stream",
     "Event",

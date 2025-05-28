@@ -3,6 +3,7 @@ from typing import Tuple, Union, Type, Optional
 import torch
 import torch.nn as nn
 
+
 class ComplexLinear(nn.Module):
     """A fully-connected linear layer for complex-valued inputs.
 
