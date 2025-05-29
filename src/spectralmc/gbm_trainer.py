@@ -8,14 +8,12 @@ diagnostics to TensorBoard – all under ``mypy --strict``.
 Key implementation details
 --------------------------
 * **GPU-only training** – `train()` raises unless the selected device is CUDA.
-* **Dedicated CUDA stream** – each trainer instance owns **one** `torch.cuda.Stream`
-  (`self.torch_stream`) that is created in ``__init__`` *only when* the device is
-  CUDA.  All PyTorch kernels inside the training loop run on that stream, never
-  on the device-default stream.  This allows several trainers to coexist in one
-  process without serialising their kernels.
-* **CPU/GPU inference** – `predict_price()` works on either CPU or GPU; if the
-  trainer was constructed on a CPU device no stream is created and the code
-  simply uses ordinary synchronous PyTorch ops.
+* **Dedicated CUDA streams**
+  * **CuPy stream**  → ``self._cupy_stream`` (Monte-Carlo pricing & FFT).
+  * **Torch stream** → ``self._torch_stream`` (all PyTorch ops).
+  Each trainer keeps its work off the device-default stream.
+* **CPU/GPU inference** – `predict_price()` also works on CPU; on CPU builds
+  neither stream is created and the code falls back to synchronous execution.
 """
 
 from __future__ import annotations
@@ -73,7 +71,7 @@ def _inputs_to_real_imag(
 
 
 class _TBLogger:
-    """Thin facade around :class:`torch.utils.tensorboard.SummaryWriter`."""
+    """Thin façade around :class:`torch.utils.tensorboard.SummaryWriter`."""
 
     def __init__(self, logdir: str, hist_every: int, flush_every: int) -> None:
         self._writer: SummaryWriter = SummaryWriter(log_dir=logdir)
@@ -132,23 +130,26 @@ class GbmTrainer:
         hist_every: int = 10,
         flush_every: int = 100,
     ) -> None:
-        # Persist configuration -------------------------------------------------
+        # Persist configuration -----------------------------------------------
         self._cfg = cfg
         self._cvnn = cvnn
 
-        # Device selection ------------------------------------------------------
+        # Device selection -----------------------------------------------------
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # ------------------------------------------------------------------ #
-        # Per-trainer CUDA stream (only if running on GPU)                   #
-        # ------------------------------------------------------------------ #
-        self._torch_stream = (
-            torch.cuda.Stream(device=self._device, priority=0)
-            if self._device.type == "cuda"
-            else None
-        )
+        # Per-trainer CUDA streams (only on GPU) -------------------------------
+        if self._device.type == "cuda":
+            self._torch_stream: torch.cuda.Stream | None = torch.cuda.Stream(
+                device=self._device, priority=0
+            )
+            self._cupy_stream: cp.cuda.Stream | None = cp.cuda.Stream(
+                non_blocking=False
+            )
+        else:
+            self._torch_stream = None
+            self._cupy_stream = None
 
-        # Sobol sampler over the six-dimensional input space --------------------
+        # Sobol sampler --------------------------------------------------------
         self._sampler = SobolSampler(
             pydantic_class=BlackScholes.Inputs,
             dimensions=domain_bounds,
@@ -156,15 +157,15 @@ class GbmTrainer:
             seed=self._cfg.sim_params.mc_seed,
         )
 
-        # GPU-accelerated Black-Scholes pricer ----------------------------------
+        # Black-Scholes MC engine ---------------------------------------------
         self._mc_engine = BlackScholes(cfg)
 
-        # Move CVNN to chosen device/dtype --------------------------------------
+        # Move CVNN to device/dtype -------------------------------------------
         self._cvnn.to(
             device=self._device, dtype=_get_torch_dtype(self._cfg.sim_params.dtype)
         )
 
-        # TensorBoard logger ----------------------------------------------------
+        # TensorBoard logger ---------------------------------------------------
         self._tb = _TBLogger(
             logdir=tb_logdir, hist_every=hist_every, flush_every=flush_every
         )
@@ -183,11 +184,10 @@ class GbmTrainer:
         """Optimise *cvnn* parameters on Monte-Carlo data."""
         if self._device.type != "cuda":
             raise RuntimeError("Training must be executed on a CUDA device.")
-        assert self._torch_stream is not None  # for mypy
+        assert self._torch_stream is not None
+        assert self._cupy_stream is not None
 
-        optimiser: torch.optim.Adam = torch.optim.Adam(
-            self._cvnn.parameters(), lr=learning_rate
-        )
+        optimiser = torch.optim.Adam(self._cvnn.parameters(), lr=learning_rate)
         self._cvnn.train()
 
         cupy_cdtype = (
@@ -200,52 +200,40 @@ class GbmTrainer:
         )
         torch_rdtype = _get_torch_dtype(self._cfg.sim_params.dtype)
 
-        global_step: int = 0
+        global_step = 0
         for step in range(1, num_batches + 1):
             step_start = time.perf_counter()
 
-            # ------------------------------------------------------------------
-            # 1) Sobol sample Black-Scholes inputs
-            # ------------------------------------------------------------------
-            sobol_points: List[BlackScholes.Inputs] = self._sampler.sample(batch_size)
+            # 1) Sobol sample inputs ------------------------------------------
+            sobol_points = self._sampler.sample(batch_size)
 
-            # ------------------------------------------------------------------
-            # 2) Allocate target FFT matrix on GPU (CuPy)
-            # ------------------------------------------------------------------
-            payoff_fft_cp = cp.zeros(
-                (batch_size, self._cfg.sim_params.network_size), dtype=cupy_cdtype
-            )
-
-            # ------------------------------------------------------------------
-            # 3) Monte-Carlo pricing contract-by-contract
-            # ------------------------------------------------------------------
-            for i, contract in enumerate(sobol_points):
-                mc_result = self._mc_engine.price(inputs=contract)
-                put_prices_cp: cp.ndarray = mc_result.put_price  # shape (paths,)
-
-                put_mat = put_prices_cp.reshape(
-                    (
-                        self._cfg.sim_params.batches_per_mc_run,
-                        self._cfg.sim_params.network_size,
-                    )
+            # 2-3) Monte-Carlo pricing & FFT – in the CuPy stream -------------
+            with self._cupy_stream:
+                payoff_fft_cp = cp.zeros(
+                    (batch_size, self._cfg.sim_params.network_size), dtype=cupy_cdtype
                 )
-                payoff_fft_cp[i, :] = cp.mean(cp.fft.fft(put_mat, axis=1), axis=0)
 
-            # ------------------------------------------------------------------
-            # 4) Barrier: ensure CuPy work finished before the DLPack transfer
-            # ------------------------------------------------------------------
-            cp.cuda.Stream.null.synchronize()
+                for i, contract in enumerate(sobol_points):
+                    mc_result = self._mc_engine.price(inputs=contract)
+                    put_prices_cp: cp.ndarray = mc_result.put_price
 
-            # ------------------------------------------------------------------
-            # 5) PyTorch work: run entirely on our private stream
-            # ------------------------------------------------------------------
+                    put_mat = put_prices_cp.reshape(
+                        (
+                            self._cfg.sim_params.batches_per_mc_run,
+                            self._cfg.sim_params.network_size,
+                        )
+                    )
+                    payoff_fft_cp[i] = cp.mean(cp.fft.fft(put_mat, axis=1), axis=0)
+
+            # 4) Barrier – wait for CuPy work to finish ------------------------
+            self._cupy_stream.synchronize()
+
+            # 5) PyTorch work – in the Torch stream ---------------------------
             with torch.cuda.stream(self._torch_stream):
-                # a) Zero-copy CuPy → Torch (DLPack) – Occurs in *this* stream
                 targets = torch.utils.dlpack.from_dlpack(payoff_fft_cp.toDlpack()).to(
                     torch_cdtype
                 )
 
-                # b) Forward / loss / backward / optimiser step
                 real_in, imag_in = _inputs_to_real_imag(
                     sobol_points, torch_rdtype, self._device
                 )
@@ -259,19 +247,16 @@ class GbmTrainer:
                 loss.backward()
                 optimiser.step()
 
-                # c) Gradient norm (in the same stream so it sees the grads)
-                grad_norm: float = torch.nn.utils.clip_grad_norm_(
+                grad_norm = torch.nn.utils.clip_grad_norm_(
                     self._cvnn.parameters(), max_norm=float("inf")
                 ).item()
 
-            # Optional: wait so that timing / logging sees finished work
+            # Optional: ensure timing/logging sees finished Torch work
             self._torch_stream.synchronize()
 
-            # ------------------------------------------------------------------
-            # 6) TensorBoard diagnostics (CPU-side)
-            # ------------------------------------------------------------------
-            batch_time: float = time.perf_counter() - step_start
-            lr: float = optimiser.param_groups[0]["lr"]
+            # 6) TensorBoard ---------------------------------------------------
+            batch_time = time.perf_counter() - step_start
+            lr = optimiser.param_groups[0]["lr"]
 
             self._tb.log_step(
                 model=self._cvnn,
@@ -310,7 +295,6 @@ class GbmTrainer:
 
         with torch.no_grad():
             if self._torch_stream is None:
-                # CPU inference or GPU without dedicated stream
                 pred_r, pred_i = self._cvnn(real_in, imag_in)
             else:
                 with torch.cuda.stream(self._torch_stream):
@@ -318,12 +302,12 @@ class GbmTrainer:
                 self._torch_stream.synchronize()
 
         spectrum = torch.complex(pred_r, pred_i)
-        mean_ifft: torch.Tensor = torch.fft.ifft(spectrum, dim=1).mean(dim=1)
+        mean_ifft = torch.fft.ifft(spectrum, dim=1).mean(dim=1)
 
         results: List[BlackScholes.HostPricingResults] = []
         for complex_val, bs in zip(mean_ifft, inputs):
-            real_part: float = float(torch.real(complex_val).item())
-            imag_part: float = float(torch.imag(complex_val).item())
+            real_part = float(torch.real(complex_val).item())
+            imag_part = float(torch.imag(complex_val).item())
             if abs(imag_part) > IMAG_TOL:
                 warnings.warn(
                     f"IFFT imaginary component {imag_part:.3e} exceeds tolerance",
