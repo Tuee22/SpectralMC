@@ -40,8 +40,8 @@ class SobolSampler(Generic[PointT]):
         pydantic_class: Type[PointT],
         dimensions: Dict[str, BoundSpec],
         *,
+        seed: int,
         skip: int = 0,
-        seed: int | None = None,
     ) -> None:
         model_fields = set(pydantic_class.model_fields)
         dim_names = set(dimensions)
@@ -54,7 +54,7 @@ class SobolSampler(Generic[PointT]):
             )
         if skip < 0:
             raise ValueError("`skip` must be a non-negative integer")
-        if seed is not None and seed < 0:
+        if seed < 0:
             raise ValueError("`seed` must be a non-negative integer or None")
 
         self._pydantic_class: Type[PointT] = pydantic_class

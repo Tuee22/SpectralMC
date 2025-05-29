@@ -70,10 +70,7 @@ def test_trainer_integration(precision: Literal["float32", "float64"]) -> None:
     trainer = GbmTrainer(
         cfg=bs_cfg,
         domain_bounds=domain_example,
-        skip_sobol=0,
-        sobol_seed=42,
         cvnn=net,
-        device=torch.device("cuda"),
     )
 
     # Train for a handful of steps to catch regressions -----------------
