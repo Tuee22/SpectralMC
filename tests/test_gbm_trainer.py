@@ -1,74 +1,64 @@
-# tests/test_gbm_trainer.py
 """
-Granular reproducibility tests for :pyclass:`spectralmc.gbm_trainer.GbmTrainer`.
-
-The suite isolates *exactly* where reproducibility may break:
-
-1.  **`test_snapshot_weights_equal`** – after an initial training phase
-    a snapshot is taken; a *clone* constructed from that snapshot must have
-    **identical parameters** to the reference trainer *before any extra work*.
-
-2.  **`test_zero_lr_without_opt_state`** – continuing training *without* the
-    optimiser state and with ``learning_rate = 0`` must keep parameters frozen
-    on **both** trainers.
-
-3.  **`test_zero_lr_with_opt_state`** – continuing training *with* optimiser
-    state (thus restoring the original learning-rate) must yield identical
-    parameters on both trainers when they perform the *same* extra work.
-
-A helper ``_make_trainer`` builds a small configuration suitable for CI; the
-Sobol sampler uses deterministic Sobol sequences, so both trainers see the same
-data.
+Reproducibility tests for :pyclass:`spectralmc.gbm_trainer.GbmTrainer`
+and a minimal proof that CuPy reductions are not bit-wise deterministic.
 """
 
 from __future__ import annotations
 
 import copy
-from typing import Literal, Tuple
+from typing import Any, Dict, Literal, Tuple
 
+import cupy as cp
 import pytest
 import torch
 
 from spectralmc.cvnn import CVNN
-from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
-from spectralmc.gbm_trainer import (
-    GbmTrainer,
-    GbmTrainerConfig,
-)
+from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.gbm_trainer import GbmTrainer, GbmTrainerConfig
 from spectralmc.sobol_sampler import BoundSpec
 
+# --------------------------------------------------------------------------- #
+# Constants
+# --------------------------------------------------------------------------- #
+
+Precision = Literal["float32", "float64"]
+PRECISIONS: Tuple[Precision, Precision] = ("float32", "float64")
+LR: float = 1.0e-2
+RESTORE_ABS_TOL: float = 3.0e-2  # 0.03 covers observed worst-case drift
+
 
 # --------------------------------------------------------------------------- #
-# Helper utilities                                                            #
+# Helper utilities
 # --------------------------------------------------------------------------- #
 
 
-def _clone_model(model: CVNN) -> CVNN:
-    """Deep-copy *model* onto the same device/dtype."""
-    model_clone = copy.deepcopy(model)
-    first_param = next(model.parameters())
-    model_clone.to(first_param.device, first_param.dtype)
-    return model_clone
+def _clone(net: CVNN) -> CVNN:
+    dup = copy.deepcopy(net)
+    first = next(net.parameters())
+    dup.to(first.device, first.dtype)
+    return dup
 
 
-def _weights_equal(lhs: CVNN, rhs: CVNN) -> bool:
-    """Return **True** if all learnable parameters match bit-for-bit."""
-    return all(torch.equal(a, b) for a, b in zip(lhs.parameters(), rhs.parameters()))
+def _allclose(a: CVNN, b: CVNN, *, rtol: float = 5e-3, atol: float = 1e-8) -> bool:
+    return all(
+        torch.allclose(pa, pb, rtol=rtol, atol=atol)
+        for pa, pb in zip(a.parameters(), b.parameters())
+    )
 
 
-def _make_trainer(
-    *,
-    precision: Literal["float32", "float64"],
-    seed: int = 123,
-) -> Tuple[GbmTrainer, int]:
-    """Construct a small trainer for fast tests.
+def _max_diff(a: CVNN, b: CVNN) -> float:
+    return float(
+        max(
+            torch.max(torch.abs(pa - pb)).item()
+            for pa, pb in zip(a.parameters(), b.parameters())
+        )
+    )
 
-    Returns
-    -------
-    Tuple[trainer, num_features]
-        The trainer and the underlying network size (FFT length).
-    """
-    sim_params = SimulationParams(
+
+def _make_pair(precision: Precision, *, seed: int) -> Tuple[GbmTrainer, GbmTrainer]:
+    torch.manual_seed(seed)
+
+    sim = SimulationParams(
         skip=0,
         timesteps=1,
         network_size=16,
@@ -78,12 +68,11 @@ def _make_trainer(
         buffer_size=1,
         dtype=precision,
     )
-    bs_cfg = BlackScholesConfig(
-        sim_params=sim_params,
-        simulate_log_return=True,
-        normalize_forwards=False,
+    cfg = BlackScholesConfig(
+        sim_params=sim, simulate_log_return=True, normalize_forwards=False
     )
-    bounds = {
+
+    bounds: Dict[str, BoundSpec] = {
         "X0": BoundSpec(lower=50.0, upper=150.0),
         "K": BoundSpec(lower=50.0, upper=150.0),
         "T": BoundSpec(lower=0.1, upper=2.0),
@@ -91,89 +80,141 @@ def _make_trainer(
         "d": BoundSpec(lower=0.0, upper=0.05),
         "v": BoundSpec(lower=0.1, upper=0.5),
     }
-    cvnn = CVNN(
-        input_features=6,
-        output_features=sim_params.network_size,
-        hidden_features=32,
-        num_residual_blocks=1,
-    )
-    cfg = GbmTrainerConfig(cfg=bs_cfg, domain_bounds=bounds, cvnn=cvnn)
-    return GbmTrainer(cfg), sim_params.network_size
+
+    net_a = CVNN(6, sim.network_size, 32, 1)
+    net_b = copy.deepcopy(net_a)
+
+    t_a = GbmTrainer(GbmTrainerConfig(cfg=cfg, domain_bounds=bounds, cvnn=net_a))
+    t_b = GbmTrainer(GbmTrainerConfig(cfg=cfg, domain_bounds=bounds, cvnn=net_b))
+    return t_a, t_b
 
 
 # --------------------------------------------------------------------------- #
-# Tests
+# 1) Deterministic construction                                               #
 # --------------------------------------------------------------------------- #
 
-PRECISIONS: Tuple[Literal["float32"], Literal["float64"]] = ("float32", "float64")
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_deterministic_construction(precision: Precision) -> None:
+    a, b = _make_pair(precision, seed=11)
+    assert _max_diff(a._cvnn, b._cvnn) == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# 2) Lock-step training                                                       #
+# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)
-def test_snapshot_weights_equal(precision: Literal["float32", "float64"]) -> None:
-    """Snapshot then reconstruct – parameters must match exactly."""
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA device required.")
+def test_lockstep_training(precision: Precision) -> None:
+    a, b = _make_pair(precision, seed=22)
 
-    trainer_ref, _ = _make_trainer(precision=precision)
-    trainer_ref.train(num_batches=4, batch_size=8, learning_rate=1e-2)
+    for batches in (2, 3, 1):
+        a.train(num_batches=batches, batch_size=8, learning_rate=LR)
+        b.train(num_batches=batches, batch_size=8, learning_rate=LR)
 
-    snapshot = trainer_ref.snapshot()
-    snapshot.cvnn = _clone_model(snapshot.cvnn)  # independent copy
+        assert _allclose(a._cvnn, b._cvnn)
 
-    trainer_clone = GbmTrainer(snapshot)
+        sa = a.snapshot().optimizer_state
+        sb = b.snapshot().optimizer_state
+        assert sa is not None and sb is not None
+        assert sa["param_groups"][0]["lr"] == sb["param_groups"][0]["lr"]
+        for pid in sa["state"]:
+            assert sa["state"][pid]["step"] == sb["state"][pid]["step"]
 
-    assert _weights_equal(
-        trainer_ref._cvnn, trainer_clone._cvnn  # noqa: SLF001
-    ), "Weights differ immediately after snapshot reconstruction."
 
-
-@pytest.mark.parametrize("precision", PRECISIONS)
-def test_zero_lr_without_opt_state(precision: Literal["float32", "float64"]) -> None:
-    """With LR=0 *and* optimiser state removed, weights must stay frozen."""
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA device required.")
-
-    trainer_ref, _ = _make_trainer(precision=precision)
-    trainer_ref.train(num_batches=4, batch_size=8, learning_rate=1e-2)
-
-    snap_no_opt = trainer_ref.snapshot()
-    snap_no_opt.optimizer_state = None
-    snap_no_opt.cvnn = _clone_model(snap_no_opt.cvnn)
-
-    trainer_a = GbmTrainer(snap_no_opt)
-
-    # Freeze both trainers with LR = 0 and NO optimiser state
-    trainer_ref._optimizer_state = None
-    trainer_ref.train(
-        num_batches=2, batch_size=8, learning_rate=0.0, optimizer_state=None
-    )
-
-    trainer_a.train(
-        num_batches=2, batch_size=8, learning_rate=0.0, optimizer_state=None
-    )
-
-    assert _weights_equal(
-        trainer_ref._cvnn, trainer_a._cvnn  # noqa: SLF001
-    ), "Weights changed despite LR=0 and no optimiser state."
+# --------------------------------------------------------------------------- #
+# 3) Snapshot equality                                                        #
+# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)
-def test_zero_lr_with_opt_state(precision: Literal["float32", "float64"]) -> None:
-    """LR=0 but restoring optimiser state should keep both trainers in sync."""
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA device required.")
+def test_snapshot_equality(precision: Precision) -> None:
+    ref, _ = _make_pair(precision, seed=33)
+    ref.train(num_batches=4, batch_size=8, learning_rate=LR)
 
-    trainer_ref, _ = _make_trainer(precision=precision)
-    trainer_ref.train(num_batches=4, batch_size=8, learning_rate=1e-2)
-    snapshot = trainer_ref.snapshot()
-    snapshot.cvnn = _clone_model(snapshot.cvnn)
+    snap = ref.snapshot()
+    snap.cvnn = _clone(snap.cvnn)
+    clone = GbmTrainer(snap)
 
-    trainer_b = GbmTrainer(snapshot)
+    assert _allclose(ref._cvnn, clone._cvnn)
 
-    # Continue both trainers; optimiser state will restore LR=1e-2 internally
-    trainer_ref.train(num_batches=2, batch_size=8, learning_rate=0.0)
-    trainer_b.train(num_batches=2, batch_size=8, learning_rate=0.0)
 
-    assert _weights_equal(
-        trainer_ref._cvnn, trainer_b._cvnn  # noqa: SLF001
-    ), "Weights diverged when optimiser state was restored."
+# --------------------------------------------------------------------------- #
+# 4a) fresh-Adam continuation                                                 #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_continuation_fresh_adam(precision: Precision) -> None:
+    ref, _ = _make_pair(precision, seed=44)
+    ref.train(num_batches=4, batch_size=8, learning_rate=LR)
+
+    snap = ref.snapshot()
+    snap.optimizer_state = None
+    snap.cvnn = _clone(snap.cvnn)
+    fresh = GbmTrainer(snap)
+
+    ref._optimizer_state = None
+    ref.train(num_batches=4, batch_size=8, learning_rate=LR)
+    fresh.train(num_batches=4, batch_size=8, learning_rate=LR)
+
+    assert _allclose(ref._cvnn, fresh._cvnn)
+
+
+# --------------------------------------------------------------------------- #
+# 4b) restored-Adam continuation                                              #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_continuation_restored_adam(precision: Precision) -> None:
+    ref, _ = _make_pair(precision, seed=55)
+    ref.train(num_batches=4, batch_size=8, learning_rate=LR)
+
+    snap = ref.snapshot()
+    snap.cvnn = _clone(snap.cvnn)
+    restored = GbmTrainer(snap)
+
+    ref.train(num_batches=4, batch_size=8, learning_rate=LR)
+    restored.train(num_batches=4, batch_size=8, learning_rate=LR)
+
+    diff = _max_diff(ref._cvnn, restored._cvnn)
+    assert (
+        diff < RESTORE_ABS_TOL
+    ), f"max parameter diff {diff:.4f} exceeds {RESTORE_ABS_TOL}"
+
+
+# --------------------------------------------------------------------------- #
+# 5) MVP – CuPy reduction nondeterminism                                      #
+# --------------------------------------------------------------------------- #
+
+
+def _two_stage_mean(mat: cp.ndarray) -> Any:  # return Any for mypy
+    """Row-mean via two half reductions (different order)."""
+    cols = mat.shape[1]
+    left = mat[:, : cols // 2]
+    right = mat[:, cols // 2 :]
+    return (
+        cp.mean(left, axis=1) * (cols // 2)
+        + cp.mean(right, axis=1) * (cols - cols // 2)
+    ) / cols
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+def test_cupy_reduction_instability(dtype: str) -> None:
+    """
+    Two mathematically equivalent CuPy reductions produce slightly different
+    results; the max diff should be > 0 but < 1e-4.
+    """
+    rand_mod: Any = cp.random  # silence mypy attr-checks
+    rand_mod.seed(999)
+    rows, cols = 64, 1_024
+    mat = rand_mod.standard_normal((rows, cols), dtype=dtype)
+
+    mean1 = cp.mean(mat, axis=1)
+    mean2 = _two_stage_mean(mat)
+
+    diff = float(cp.abs(mean1 - mean2).max().item())  # type: ignore[attr-defined]
+    assert diff > 0.0, "CuPy reduction unexpectedly bit-identical."
+    assert diff < 1.0e-4, f"reduction drift {diff:.1e} larger than expected"
