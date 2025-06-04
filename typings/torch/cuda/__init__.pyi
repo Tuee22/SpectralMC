@@ -1,9 +1,11 @@
 from __future__ import annotations
-from typing import Any
+from types import TracebackType
 
 class Stream:
     def __init__(
-        self, device: Any | None = ..., priority: int | None = ...
+        self,
+        device: object | None = ...,  # accepts int, str, torch.device, etc.
+        priority: int | None = ...,
     ) -> None: ...
     def synchronize(self) -> None: ...
     def __enter__(self) -> "Stream": ...
@@ -11,7 +13,7 @@ class Stream:
         self,
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
-        tb: Any,
+        tb: TracebackType | None,
     ) -> None: ...
 
 def empty_cache() -> None: ...

@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray, ArrayLike
-from typing import Callable, ParamSpec, TypeVar
+from typing import Callable, ParamSpec, TypeVar, Protocol
 
 P = ParamSpec("P")
 R = TypeVar("R")
 
+# Kernel-launch protocol returned by .jit
+class _CUDALaunchable(Protocol):
+    def __getitem__(
+        self, launch_cfg: tuple[int, int, "Stream"]
+    ) -> Callable[..., None]: ...
+
 # decorators ------------------------------------------------------------------
 
-def jit(func: Callable[P, R], /) -> Callable[P, R]: ...
+def jit(func: Callable[P, R], /) -> _CUDALaunchable: ...
 
 # helpers ---------------------------------------------------------------------
 

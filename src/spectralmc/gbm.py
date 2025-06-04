@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from math import exp, sqrt
-from typing import Annotated, Any, Literal, Optional, TypeAlias
+from typing import Annotated, Literal, Optional, TypeAlias
 
 import cupy as cp
+import numpy as np
 from numba import cuda
 from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field
@@ -22,7 +23,7 @@ from spectralmc.async_normals import (
 PosFloat = Annotated[float, Field(gt=0)]
 NonNegFloat = Annotated[float, Field(ge=0)]
 DtypeLiteral = Literal["float32", "float64"]
-DeviceNDArray: TypeAlias = NDArray[Any]
+DeviceNDArray: TypeAlias = NDArray[np.generic]
 
 # --------------------------------------------------------------------------- #
 # Simulation-parameter model                                                  #
@@ -74,7 +75,7 @@ class BlackScholesConfig(BaseModel):
 
 
 @cuda.jit
-def _simulate_black_scholes(  # noqa: N802
+def SimulateBlackScholes(  # noqa: N802
     io: DeviceNDArray,
     timesteps: int,
     dt: float,
@@ -103,8 +104,6 @@ def _simulate_black_scholes(  # noqa: N802
                 X = abs(X)
                 io[i, idx] = X
 
-
-SimulateBlackScholes: Any = _simulate_black_scholes  # expose for dispatch
 
 # --------------------------------------------------------------------------- #
 # Monte-Carlo engine                                                          #
