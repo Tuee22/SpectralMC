@@ -1,10 +1,11 @@
-"""Stubbed subset of cupy.cuda used by spectralmc."""
+"""Strict subset of cupy.cuda used by spectralmc."""
 
 from __future__ import annotations
-from typing import Any
+from types import TracebackType
 
 class Stream:
     null: "Stream"
+
     def __init__(self, non_blocking: bool | None = ...) -> None: ...
     def synchronize(self) -> None: ...
     def __enter__(self) -> "Stream": ...
@@ -12,7 +13,7 @@ class Stream:
         self,
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
-        tb: Any,
+        tb: TracebackType | None,
     ) -> None: ...
 
 class Event:
@@ -28,7 +29,6 @@ class Device:
     def __init__(self, id: int = ...) -> None: ...
     def synchronize(self) -> None: ...
 
-# Memory-pool helpers needed by tests/conftest.py
 class _MemoryPool:
     def free_all_blocks(self) -> None: ...
 
