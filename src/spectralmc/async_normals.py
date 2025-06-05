@@ -4,7 +4,6 @@ spectralmc.async_normals
 Asynchronous generation of standard-normal matrices on the GPU
 with latency hiding and deterministic checkpointing.
 
-This version is **mypy --strict clean** without any ``# type: ignore``.
 """
 
 from __future__ import annotations

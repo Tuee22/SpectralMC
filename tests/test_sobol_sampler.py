@@ -10,7 +10,6 @@ Features
 
 Design constraints
 ~~~~~~~~~~~~~~~~~~
-* **No** ``Any``, ``cast`` or ``# type: ignore``.
 * Passes ``mypy --strict`` assuming third-party stubs are present.
 * Uses power-of-two sample counts to silence SciPy Sobol balance warnings.
 """

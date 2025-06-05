@@ -131,5 +131,5 @@ def test_norm_config_validation() -> None:
     # dtype must be 'float32' or 'float64'
     with pytest.raises(ValueError):
         async_normals.ConcurrentNormGeneratorConfig(
-            rows=1, cols=2, seed=1, dtype="float16", skips=0  # type: ignore[arg-type]
+            rows=1, cols=2, seed=1, dtype="float16", skips=0
         )

@@ -215,6 +215,6 @@ def test_cupy_reduction_instability(dtype: str) -> None:
     mean1 = cp.mean(mat, axis=1)
     mean2 = _two_stage_mean(mat)
 
-    diff = float(cp.abs(mean1 - mean2).max().item())  # type: ignore[attr-defined]
+    diff = float(cp.abs(mean1 - mean2).max().item())
     assert diff > 0.0, "CuPy reduction unexpectedly bit-identical."
     assert diff < 1.0e-4, f"reduction drift {diff:.1e} larger than expected"
