@@ -12,6 +12,7 @@ import cupy as cp
 import pytest
 
 from spectralmc import async_normals
+from pydantic import ValidationError
 
 DType = Literal["float32", "float64"]
 
@@ -123,13 +124,13 @@ def test_diagnostics(dtype_str: DType) -> None:
 
 def test_norm_config_validation() -> None:
     # rows must be > 0
-    with pytest.raises(ValueError):
-        async_normals.ConcurrentNormGeneratorConfig(
-            rows=0, cols=2, seed=1, dtype="float32", skips=0
+    with pytest.raises(ValidationError):
+        async_normals.ConcurrentNormGeneratorConfig.model_validate(
+            {"rows": 0, "cols": 2, "seed": 1, "dtype": "float32", "skips": 0}
         )
 
     # dtype must be 'float32' or 'float64'
-    with pytest.raises(ValueError):
-        async_normals.ConcurrentNormGeneratorConfig(
-            rows=1, cols=2, seed=1, dtype="float16", skips=0
+    with pytest.raises(ValidationError):
+        async_normals.ConcurrentNormGeneratorConfig.model_validate(
+            {"rows": 1, "cols": 2, "seed": 1, "dtype": "float16", "skips": 0}
         )
