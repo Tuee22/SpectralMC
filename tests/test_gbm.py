@@ -150,4 +150,4 @@ def test_snapshot_determinism(precision: DtypeLiteral) -> None:
 
     for e, r in zip(expected, reproduced, strict=True):
         assert math.isclose(e.put_price, r.put_price, rel_tol=_DET_REL_TOL)
-        assert math.isclose(e.put_price, r.put_price, rel_tol=_DET_REL_TOL)
+        assert math.isclose(e.call_price, r.call_price, rel_tol=_DET_REL_TOL)
