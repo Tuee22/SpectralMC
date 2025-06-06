@@ -11,5 +11,3 @@ class Option:
 def blackFormula(
     optionType: int, strike: float, forward: float, stdDev: float, discount: float
 ) -> float: ...
-
-__all__ = ["Option", "blackFormula"]

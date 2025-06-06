@@ -85,9 +85,6 @@ fft: _FFTModule
 # ---------------------------------------------------------------------------
 # CUDA sub‑module re-export + memory‑pool helpers expected at top level
 # ---------------------------------------------------------------------------
-from . import cuda as cuda  # re-export so ``import cupy.cuda`` works
-
-from .cuda import (
-    get_default_memory_pool as get_default_memory_pool,
-    get_default_pinned_memory_pool as get_default_pinned_memory_pool,
-)
+from .cuda import _MemoryPool
+def get_default_memory_pool() -> _MemoryPool: ...
+def get_default_pinned_memory_pool() -> _MemoryPool: ...
