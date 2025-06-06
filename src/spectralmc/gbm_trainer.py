@@ -223,7 +223,6 @@ class StepMetrics(BaseModel):
     grad_norm: float
     lr: float
     optimizer: optim.Adam
-    optimizer_state: AdamOptimizerState
     model: CVNN
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -446,9 +445,6 @@ class GbmTrainer:
                         grad_norm=grad_norm_val,
                         lr=float(adam.param_groups[0]["lr"]),
                         optimizer=adam,
-                        optimizer_state=AdamOptimizerState.from_torch(
-                            adam.state_dict()
-                        ),
                         model=self._cvnn,
                     )
                 )
