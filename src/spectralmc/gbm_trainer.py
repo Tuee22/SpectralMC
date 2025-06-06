@@ -27,7 +27,7 @@ from cupy.cuda import Stream as CuPyStream
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from torch.utils.tensorboard import SummaryWriter
 
 from spectralmc.cvnn import CVNN
@@ -116,12 +116,18 @@ class AdamParamState(BaseModel):
 
     @staticmethod
     def from_torch(state: Mapping[str, object]) -> "AdamParamState":
-        step = int(state["step"])
-        exp_avg = AdamTensorState.from_tensor(state["exp_avg"])
-        exp_avg_sq = AdamTensorState.from_tensor(state["exp_avg_sq"])
+        step = TypeAdapter(int).validate_python(state["step"])
+        exp_avg = AdamTensorState.from_tensor(
+            TypeAdapter(torch.Tensor).validate_python(state["exp_avg"])
+        )
+        exp_avg_sq = AdamTensorState.from_tensor(
+            TypeAdapter(torch.Tensor).validate_python(state["exp_avg_sq"])
+        )
         max_exp: Optional[AdamTensorState]
         if "max_exp_avg_sq" in state and state["max_exp_avg_sq"] is not None:
-            max_exp = AdamTensorState.from_tensor(state["max_exp_avg_sq"])
+            max_exp = AdamTensorState.from_tensor(
+                TypeAdapter(torch.Tensor).validate_python(state["max_exp_avg_sq"])
+            )
         else:
             max_exp = None
         return AdamParamState(
