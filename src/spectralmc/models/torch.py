@@ -100,7 +100,7 @@ class AdamTensorState(BaseModel):
 
     # Converters ----------------------------------------------------------- #
     @staticmethod
-    def from_tensor(tensor: torch.Tensor) -> "AdamTensorState":
+    def from_tensor(tensor: torch.Tensor) -> AdamTensorState:
         """Detaches *tensor* to CPU and creates a serialisable view."""
         t_cpu = tensor.detach().cpu()
         return AdamTensorState(
@@ -132,7 +132,7 @@ class AdamParamState(BaseModel):
     @classmethod
     def from_torch(
         cls, state: Mapping[str, Union[int, torch.Tensor, None]]
-    ) -> "AdamParamState":
+    ) -> AdamParamState:
         """Convert a raw PyTorch mapping → :class:`AdamParamState`."""
         step_int = _coerce_to_int(state["step"])
 
@@ -209,7 +209,7 @@ class AdamOptimizerState(BaseModel):
 
     # Converters ----------------------------------------------------------- #
     @classmethod
-    def from_torch(cls, sd: Mapping[str, object]) -> "AdamOptimizerState":
+    def from_torch(cls, sd: Mapping[str, object]) -> AdamOptimizerState:
         if "state" not in sd or "param_groups" not in sd:
             raise KeyError("state_dict must contain 'state' and 'param_groups'.")
 
