@@ -36,6 +36,7 @@ class Event:
 # helpers your project references                                    #
 # ------------------------------------------------------------------ #
 def is_available() -> bool: ...
+def empty_cache() -> None: ...
 
 """Return ``True`` if CUDA is compiled in and a device is visible."""
 
