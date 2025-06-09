@@ -24,7 +24,7 @@ import torch
 from torch import Tensor
 
 from spectralmc.cvnn import CVNN
-from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
 from spectralmc.gbm_trainer import GbmTrainer, GbmTrainerConfig
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.sobol_sampler import BoundSpec
@@ -222,3 +222,35 @@ def test_snapshot_optimizer_serialization_roundtrip(precision: Precision) -> Non
     for key in ("state", "param_groups"):
         assert key in torch_state and key in reloaded_state
         assert _tree_equal(torch_state[key], reloaded_state[key])
+
+
+# --------------------------------------------------------------------------- #
+# 6. Smoke test for predict_price                                             #
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_predict_price_smoke(precision: Precision) -> None:
+    """Ensure predict_price executes end-to-end without error."""
+    trainer = _make_gbm_trainer(precision, seed=60)
+    # Optional: one tiny training step just to exercise the whole pipeline
+    trainer.train(num_batches=1, batch_size=4, learning_rate=LEARNING_RATE)
+
+    contracts = [
+        BlackScholes.Inputs(
+            X0=100.0, K=100.0, T=1.0, r=0.05, d=0.02, v=0.20
+        ),
+        BlackScholes.Inputs(
+            X0=120.0, K=110.0, T=0.5, r=0.03, d=0.01, v=0.25
+        ),
+    ]
+
+    results = trainer.predict_price(contracts)
+
+    # Same number of outputs as inputs
+    assert len(results) == len(contracts)
+
+    # All returned fields are finite numbers
+    for res in results:
+        for value in res.model_dump(mode="python").values():
+            assert isinstance(value, float)
+            assert math.isfinite(value)
