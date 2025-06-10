@@ -228,6 +228,7 @@ def test_snapshot_optimizer_serialization_roundtrip(precision: Precision) -> Non
 # 6. Smoke test for predict_price                                             #
 # --------------------------------------------------------------------------- #
 
+
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_predict_price_smoke(precision: Precision) -> None:
     """Ensure predict_price executes end-to-end without error."""
@@ -236,12 +237,8 @@ def test_predict_price_smoke(precision: Precision) -> None:
     trainer.train(num_batches=1, batch_size=4, learning_rate=LEARNING_RATE)
 
     contracts = [
-        BlackScholes.Inputs(
-            X0=100.0, K=100.0, T=1.0, r=0.05, d=0.02, v=0.20
-        ),
-        BlackScholes.Inputs(
-            X0=120.0, K=110.0, T=0.5, r=0.03, d=0.01, v=0.25
-        ),
+        BlackScholes.Inputs(X0=100.0, K=100.0, T=1.0, r=0.05, d=0.02, v=0.20),
+        BlackScholes.Inputs(X0=120.0, K=110.0, T=0.5, r=0.03, d=0.01, v=0.25),
     ]
 
     results = trainer.predict_price(contracts)
