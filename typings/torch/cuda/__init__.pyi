@@ -13,7 +13,7 @@ from types import TracebackType
 from typing import Optional, TypeAlias, Union
 
 import torch
-from torch.cuda.streams import Stream as Stream  # public re-export
+from .streams import Stream as Stream  # public re-export
 
 Device: TypeAlias = torch.device
 
