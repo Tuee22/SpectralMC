@@ -1,3 +1,4 @@
+#src/spectralmc/typings/torch/__init__.pyi
 from __future__ import annotations
 
 from types import ModuleType

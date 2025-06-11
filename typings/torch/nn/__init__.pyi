@@ -1,3 +1,4 @@
+#src/spectralmc/typings/torch/nn/__init__.pyi
 from __future__ import annotations
 
 from typing import Iterator, Sequence, overload
