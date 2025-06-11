@@ -218,7 +218,7 @@ class GbmTrainer:
                 )
             self._global_step += 1
 
-        self._optimizer_state = AdamOptimizerState.from_torch(adam.state_dict())
+        self._optimizer_state = AdamOptimizerState.from_torch(adam)
 
     def predict_price(
         self, inputs: List[BlackScholes.Inputs]
