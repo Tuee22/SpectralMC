@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import ModuleType
-from typing import Sequence, Tuple
+from typing import Sequence, Tuple, overload
 import builtins as _b  # keep built-in float / int distinct
 
 # ────── value-level dtype sentinels ──────
@@ -10,11 +10,19 @@ class dtype: ...
 float32: dtype
 float64: dtype
 int64: dtype
+float16: dtype
+bfloat16: dtype
+complex64: dtype
+complex128: dtype
 
 # runtime aliases that real torch exports
 float: dtype  # torch.float32
 double: dtype  # torch.float64
 long: dtype  # torch.int64
+
+# ────── minimal torch.device sentinel ──────
+class device:
+    def __init__(self, type: str, index: int | None = ...): ...
 
 # ────── minimal Tensor object (only methods/operators used) ──────
 class Tensor:
@@ -62,6 +70,22 @@ class Tensor:
     # indexing
     def __getitem__(self, item: object) -> Tensor: ...
 
+    # ── attributes / helpers used by the serializer ──
+    @property
+    def dtype(self) -> dtype: ...
+    @property
+    def shape(self) -> tuple[int, ...]: ...
+    @property
+    def ndim(self) -> int: ...
+    def detach(self) -> Tensor: ...
+    def cpu(self) -> Tensor: ...
+    def clone(self) -> Tensor: ...
+    def reshape(
+        self, shape: tuple[int, ...] | list[int] | int, *more: int
+    ) -> Tensor: ...
+    def tolist(self) -> list[_b.int | _b.float]: ...
+    def item(self) -> _b.int | _b.float: ...
+
 # ────── functional helpers referenced in cvnn.py ──────
 def zeros(*size: int, dtype: dtype | None = ...) -> Tensor: ...
 def full(
@@ -79,6 +103,22 @@ def clamp(
 ) -> Tensor: ...
 def relu(a: Tensor) -> Tensor: ...
 def stack(tensors: Sequence[Tensor], dim: int = ...) -> Tensor: ...
+
+# ────── factory helpers ──────
+@overload
+def tensor(
+    data: _b.int | _b.float,
+    *,
+    dtype: dtype | None = ...,
+    device: device | str | None = ...,
+) -> Tensor: ...
+@overload
+def tensor(
+    data: Sequence[_b.int | _b.float],
+    *,
+    dtype: dtype | None = ...,
+    device: device | str | None = ...,
+) -> Tensor: ...
 
 # ────── no_grad context manager ──────
 class _NoGrad:
