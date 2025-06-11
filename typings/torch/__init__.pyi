@@ -1,15 +1,16 @@
-#src/spectralmc/typings/torch/__init__.pyi
+# src/spectralmc/typings/torch/__init__.pyi
 from __future__ import annotations
 
+import builtins as _b
 from types import ModuleType
 from typing import Sequence, Tuple, overload
-import builtins as _b
 
 # ─────────────────────────────────────────────────────
-# dtype sentinel  (public name: torch.dtype)
+# Sentinel for dtypes (exported as torch.dtype)
 # ─────────────────────────────────────────────────────
 class dtype: ...
 
+# public singletons
 float32: dtype
 float64: dtype
 int64: dtype
@@ -21,6 +22,9 @@ float: dtype
 double: dtype
 long: dtype
 
+# internal alias used only inside this file to avoid name-clashes
+_DType = dtype
+
 # ─────────────────────────────────────────────────────
 # torch.device sentinel
 # ─────────────────────────────────────────────────────
@@ -28,30 +32,42 @@ class device:
     def __init__(self, type: str, index: int | None = ...) -> None: ...
 
 # ─────────────────────────────────────────────────────
-# Tensor (only members touched by your code/tests)
+# Tensor (only members touched by project code/tests)
 # ─────────────────────────────────────────────────────
 class Tensor:
     # construction / autograd
     def __init__(
-        self, *size: int, dtype: dtype | None = ..., requires_grad: bool = ...
+        self,
+        *size: int,
+        dtype: _DType | None = ...,
+        requires_grad: bool = ...,
     ) -> None: ...
     def backward(self, gradient: Tensor | None = ...) -> None: ...
     grad: Tensor | None
+    requires_grad: bool
 
     # shape & properties
     @property
-    def dtype(self) -> dtype: ...
+    def dtype(self) -> _DType: ...
     @property
     def shape(self) -> tuple[int, ...]: ...
     @property
     def ndim(self) -> int: ...
     def mean(self, dim: int | None = ..., **kw: object) -> Tensor: ...
     def var(
-        self, dim: int | None = ..., *, unbiased: bool = ..., **kw: object
+        self,
+        dim: int | None = ...,
+        *,
+        unbiased: bool = ...,
+        **kw: object,
     ) -> Tensor: ...
     def max(self, dim: int | None = ..., keepdim: bool = ...) -> Tensor: ...
     def sum(
-        self, dim: int | None = ..., keepdim: bool = ..., *, dtype: dtype | None = ...
+        self,
+        dim: int | None = ...,
+        keepdim: bool = ...,
+        *,
+        dtype: _DType | None = ...,
     ) -> Tensor: ...
     def unsqueeze(self, dim: int) -> Tensor: ...
     def squeeze(self, dim: int | None = ...) -> Tensor: ...
@@ -85,7 +101,7 @@ class Tensor:
     __rand__ = __and__
     def __getitem__(self, item: object) -> Tensor: ...
 
-    # in-place
+    # in-place ops
     def mul_(self, other: Tensor | _b.float | _b.int) -> Tensor: ...
     def add_(self, other: Tensor | _b.float | _b.int) -> Tensor: ...
     def copy_(self, other: Tensor) -> Tensor: ...
@@ -97,26 +113,32 @@ class Tensor:
     def cpu(self) -> Tensor: ...
     def clone(self) -> Tensor: ...
     def reshape(
-        self, shape: tuple[int, ...] | Sequence[int] | int, *more: int
+        self,
+        shape: tuple[int, ...] | Sequence[int] | int,
+        *more: int,
     ) -> Tensor: ...
     def tolist(self) -> list[_b.int | _b.float]: ...
     def item(self) -> _b.int | _b.float: ...
 
 # ─────────────────────────────────────────────────────
-# functional helpers
+# Functional helpers
 # ─────────────────────────────────────────────────────
-def zeros(*size: int, dtype: dtype | None = ...) -> Tensor: ...
+def zeros(*size: int, dtype: _DType | None = ...) -> Tensor: ...
 def ones(
-    *size: int, dtype: dtype | None = ..., device: device | str | None = ...
+    *size: int,
+    dtype: _DType | None = ...,
+    device: device | str | None = ...,
 ) -> Tensor: ...
 def full(
-    size: Tuple[int, ...], fill_value: _b.int | _b.float, dtype: dtype | None = ...
+    size: Tuple[int, ...],
+    fill_value: _b.int | _b.float,
+    dtype: _DType | None = ...,
 ) -> Tensor: ...
 def full_like(
     a: Tensor,
     fill_value: _b.int | _b.float,
     *,
-    dtype: dtype | None = ...,
+    dtype: _DType | None = ...,
     device: device | str | None = ...,
 ) -> Tensor: ...
 def zeros_like(a: Tensor) -> Tensor: ...
@@ -133,7 +155,11 @@ def stack(tensors: Sequence[Tensor], dim: int = ...) -> Tensor: ...
 def square(a: Tensor) -> Tensor: ...
 def all(a: Tensor) -> _b.bool: ...
 def allclose(
-    a: Tensor, b: Tensor, *, atol: _b.float = ..., rtol: _b.float = ...
+    a: Tensor,
+    b: Tensor,
+    *,
+    atol: _b.float = ...,
+    rtol: _b.float = ...,
 ) -> _b.bool: ...
 def isfinite(a: Tensor) -> Tensor: ...
 
@@ -141,7 +167,7 @@ def isfinite(a: Tensor) -> Tensor: ...
 def manual_seed(seed: int) -> None: ...
 def randn(
     *size: int,
-    dtype: dtype | None = ...,
+    dtype: _DType | None = ...,
     device: device | str | None = ...,
     requires_grad: bool = ...,
 ) -> Tensor: ...
@@ -151,7 +177,7 @@ def randn(
 def tensor(
     data: _b.int | _b.float,
     *,
-    dtype: dtype | None = ...,
+    dtype: _DType | None = ...,
     device: device | str | None = ...,
     requires_grad: _b.bool = ...,
 ) -> Tensor: ...
@@ -159,7 +185,7 @@ def tensor(
 def tensor(
     data: Sequence[_b.int | _b.float],
     *,
-    dtype: dtype | None = ...,
+    dtype: _DType | None = ...,
     device: device | str | None = ...,
     requires_grad: _b.bool = ...,
 ) -> Tensor: ...
@@ -167,12 +193,14 @@ def tensor(
 def tensor(
     data: Sequence[Sequence[_b.int | _b.float]],
     *,
-    dtype: dtype | None = ...,
+    dtype: _DType | None = ...,
     device: device | str | None = ...,
     requires_grad: _b.bool = ...,
 ) -> Tensor: ...
 
-# no_grad
+# ─────────────────────────────────────────────────────
+# no_grad context manager
+# ─────────────────────────────────────────────────────
 class _NoGrad:
     def __enter__(self) -> None: ...
     def __exit__(
@@ -185,10 +213,8 @@ class _NoGrad:
 def no_grad() -> _NoGrad: ...
 
 # ─────────────────────────────────────────────────────
-# torch.nn placeholder with visible Module attribute
+# Re-export sub-packages so mypy can resolve them
 # ─────────────────────────────────────────────────────
-class _NNStub(ModuleType):
-    Module: type
+from . import nn as nn  # the real nn stub lives in typings/torch/nn
 
-nn: _NNStub
-linalg: ModuleType
+linalg: ModuleType  # present only to satisfy harmless imports
