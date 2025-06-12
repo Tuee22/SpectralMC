@@ -115,7 +115,7 @@ class GbmTrainer:
             skip=self._sim_params.skip,
             seed=self._sim_params.mc_seed,
         )
-        self._mc_engine = BlackScholes(cfg.cfg)
+        self._mc_engine = BlackScholes(cfg.cfg) if self._device.type == "cuda" else None
 
         self._cvnn.to(self._device, _torch_precision_dtype(self._sim_params.dtype))
 
@@ -130,6 +130,7 @@ class GbmTrainer:
         self._torch_rdtype = _torch_precision_dtype(self._sim_params.dtype)
 
     def snapshot(self) -> GbmTrainerConfig:
+        assert self._device.type == "cuda" and self._mc_engine is not None, 'Error: can only snapshot from cuda device'
         return GbmTrainerConfig(
             cfg=self._mc_engine.snapshot(),
             domain_bounds=self._domain_bounds,
@@ -139,6 +140,7 @@ class GbmTrainer:
         )
 
     def _simulate_fft(self, contract: BlackScholes.Inputs) -> cp.ndarray:
+        assert self._device.type == "cuda" and self._mc_engine is not None, 'Error: can only simulate on cuda device'
         prices = self._mc_engine.price(inputs=contract).put_price
         price_mat = prices.reshape(self._batches_per_mc_run, self._network_size)
         return cp.mean(cp.fft.fft(price_mat, axis=1), axis=0)

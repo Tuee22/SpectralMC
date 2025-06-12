@@ -114,7 +114,7 @@ class TensorState(BaseModel):
     # --------------------------------------------------------------------- #
 
     @staticmethod
-    def from_tensor(tensor: torch.Tensor) -> "TensorState":
+    def from_tensor(tensor: torch.Tensor) -> TensorState:
         """
         Capture *tensor*.
 
@@ -410,7 +410,7 @@ class AdamOptimizerState(BaseModel):
     # --------------------------------------------------------------------- #
 
     @classmethod
-    def from_torch(cls, optimizer: _HasStateDict) -> "AdamOptimizerState":
+    def from_torch(cls, optimizer: _HasStateDict) -> AdamOptimizerState:
         """
         Capture *optimizer*.
 
