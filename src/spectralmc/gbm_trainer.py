@@ -100,6 +100,17 @@ class GbmTrainer:
         self._global_step = cfg.global_step
 
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._torch_rdtype = (
+            torch.float32 if self._sim_params.dtype == "float32" else torch.float64
+        )
+        self._cvnn.to(self._device, self._torch_rdtype)
+        self._cp_cdtype = (
+            cp.complex64 if self._sim_params.dtype == "float32" else cp.complex128
+        )
+        self._torch_cdtype = (
+            torch.complex64 if self._sim_params.dtype == "float32" else torch.complex128
+        )
+
         self._torch_stream: Optional[torch.cuda.Stream] = (
             torch.cuda.Stream(device=self._device)
             if self._device.type == "cuda"
@@ -109,28 +120,19 @@ class GbmTrainer:
             CuPyStream(non_blocking=False) if self._device.type == "cuda" else None
         )
 
+        self._mc_engine = BlackScholes(cfg.cfg) if self._device.type == "cuda" else None
+
         self._sampler: SobolSampler[BlackScholes.Inputs] = SobolSampler(
             pydantic_class=BlackScholes.Inputs,
             dimensions=self._domain_bounds,
             skip=self._sim_params.skip,
             seed=self._sim_params.mc_seed,
         )
-        self._mc_engine = BlackScholes(cfg.cfg) if self._device.type == "cuda" else None
-
-        self._cvnn.to(self._device, _torch_precision_dtype(self._sim_params.dtype))
-
-        self._network_size = self._sim_params.network_size
-        self._batches_per_mc_run = self._sim_params.batches_per_mc_run
-        self._cp_cdtype = (
-            cp.complex64 if self._sim_params.dtype == "float32" else cp.complex128
-        )
-        self._torch_cdtype = (
-            torch.complex64 if self._sim_params.dtype == "float32" else torch.complex128
-        )
-        self._torch_rdtype = _torch_precision_dtype(self._sim_params.dtype)
 
     def snapshot(self) -> GbmTrainerConfig:
-        assert self._device.type == "cuda" and self._mc_engine is not None, 'Error: can only snapshot from cuda device'
+        assert (
+            self._device.type == "cuda" and self._mc_engine is not None
+        ), "Error: can only snapshot from cuda device"
         return GbmTrainerConfig(
             cfg=self._mc_engine.snapshot(),
             domain_bounds=self._domain_bounds,
@@ -140,9 +142,13 @@ class GbmTrainer:
         )
 
     def _simulate_fft(self, contract: BlackScholes.Inputs) -> cp.ndarray:
-        assert self._device.type == "cuda" and self._mc_engine is not None, 'Error: can only simulate on cuda device'
+        assert (
+            self._device.type == "cuda" and self._mc_engine is not None
+        ), "Error: can only simulate on cuda device"
         prices = self._mc_engine.price(inputs=contract).put_price
-        price_mat = prices.reshape(self._batches_per_mc_run, self._network_size)
+        price_mat = prices.reshape(
+            self._sim_params.batches_per_mc_run, self._sim_params.network_size
+        )
         return cp.mean(cp.fft.fft(price_mat, axis=1), axis=0)
 
     def _torch_step(
@@ -271,10 +277,6 @@ class GbmTrainer:
             )
 
         return results
-
-
-def _torch_precision_dtype(precision: str) -> torch.dtype:
-    return torch.float32 if precision == "float32" else torch.float64
 
 
 def _split_inputs(

@@ -43,14 +43,13 @@ class SobolSampler(Generic[PointT]):
         seed: int,
         skip: int = 0,
     ) -> None:
-        model_fields = set(pydantic_class.model_fields)
-        dim_names = set(dimensions)
+        self._dimension_names = list(pydantic_class.model_fields)
 
-        if model_fields != dim_names:
+        if set(self._dimension_names) != set(dimensions.keys()):
             raise ValueError(
                 "Dimension keys do not match model fields.\n"
-                f" → model fields   : {sorted(model_fields)}\n"
-                f" → dimension keys : {sorted(dim_names)}"
+                f" → model fields   : {self._dimension_names}\n"
+                f" → dimension keys : {dimensions.keys()}"
             )
         if skip < 0:
             raise ValueError("`skip` must be a non-negative integer")
@@ -58,12 +57,11 @@ class SobolSampler(Generic[PointT]):
             raise ValueError("`seed` must be a non-negative integer or None")
 
         self._pydantic_class: Type[PointT] = pydantic_class
-        self._dimension_names = list(dimensions)
 
-        self._lower_bounds = np.array([v.lower for v in dimensions.values()])
-        self._upper_bounds = np.array([v.upper for v in dimensions.values()])
+        self._lower_bounds = np.array([dimensions[d].lower for d in self._dimension_names])
+        self._upper_bounds = np.array([dimensions[d].upper for d in self._dimension_names])
 
-        self._d = len(dimensions)
+        self._d = len(self._dimension_names)
         self._sampler: Sobol = Sobol(d=self._d, scramble=True, seed=seed)
         if skip:
             self._sampler.fast_forward(skip)
