@@ -58,8 +58,12 @@ class SobolSampler(Generic[PointT]):
 
         self._pydantic_class: Type[PointT] = pydantic_class
 
-        self._lower_bounds = np.array([dimensions[d].lower for d in self._dimension_names])
-        self._upper_bounds = np.array([dimensions[d].upper for d in self._dimension_names])
+        self._lower_bounds = np.array(
+            [dimensions[d].lower for d in self._dimension_names]
+        )
+        self._upper_bounds = np.array(
+            [dimensions[d].upper for d in self._dimension_names]
+        )
 
         self._d = len(self._dimension_names)
         self._sampler: Sobol = Sobol(d=self._d, scramble=True, seed=seed)
