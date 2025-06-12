@@ -12,7 +12,7 @@ Checks
 6. Loss-less optimiser JSON ⇄ torch round-trip
 """
 
-from typing import Dict, Literal, Tuple, TypeGuard, Any
+from typing import Dict, Literal, Tuple, TypeGuard
 
 import copy
 import math
