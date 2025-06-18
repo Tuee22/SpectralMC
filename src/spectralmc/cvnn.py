@@ -1,3 +1,4 @@
+# src/spectralmc/cvnn.py
 import math
 from typing import Tuple, Union, Type, Optional
 import torch
@@ -93,7 +94,7 @@ class zReLU(nn.Module):
     Trabelsi et al. (2018) as a non-holomorphic activation for complex networks.
     """
 
-    def __init__(self, num_features: Optional[int] = None) -> None:
+    def __init__(self) -> None:
         super().__init__()
 
     def forward(
@@ -137,7 +138,6 @@ class modReLU(nn.Module):
 
     def __init__(self, num_features: int) -> None:
         super().__init__()
-        self.num_features: int = num_features
         self.bias = nn.Parameter(torch.zeros(num_features))
 
     def forward(
@@ -418,205 +418,4 @@ class CovarianceComplexBatchNorm(nn.Module):
             out_real = whitened_real
             out_imag = whitened_imag
 
-        return out_real, out_imag
-
-
-class ResidualBlock(nn.Module):
-    """A residual block for complex-valued networks.
-
-    This block consists of two complex linear layers (with optional batch normalization and activation),
-    with a skip connection that adds the input to the output of the second layer before the final activation.
-    It is the complex-valued analog of a real-valued residual block as in ResNet.
-
-    Structure:
-        Input -> ComplexLinear -> BatchNorm -> Activation -> ComplexLinear -> BatchNorm -> Add Input (skip) -> Activation -> Output.
-
-    Args:
-        num_features (int): Number of features (channels) in the input (and output) of this block.
-        activation: The complex activation class to use (e.g., zReLU or modReLU).
-        bn_class: The batch normalization class to use (e.g., NaiveComplexBatchNorm or CovarianceComplexBatchNorm).
-    """
-
-    def __init__(
-        self,
-        num_features: int,
-        activation: Union[Type[nn.Module], nn.Module] = modReLU,
-        bn_class: Union[Type[nn.Module], nn.Module] = NaiveComplexBatchNorm,
-    ) -> None:
-        super().__init__()
-        self.linear1 = ComplexLinear(num_features, num_features)
-        self.bn1 = bn_class(num_features) if isinstance(bn_class, type) else bn_class
-        if isinstance(activation, type):
-            try:
-                self.act1 = activation(num_features)
-            except TypeError:
-                self.act1 = activation()
-        else:
-            self.act1 = activation
-
-        self.linear2 = ComplexLinear(num_features, num_features)
-        self.bn2 = bn_class(num_features) if isinstance(bn_class, type) else bn_class
-        if isinstance(activation, type):
-            try:
-                self.act2 = activation(num_features)
-            except TypeError:
-                self.act2 = activation()
-        else:
-            self.act2 = activation
-
-    def forward(
-        self, input_real: torch.Tensor, input_imag: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass for the complex residual block.
-
-        Args:
-            input_real (torch.Tensor): Real part of input, shape (batch, num_features).
-            input_imag (torch.Tensor): Imaginary part of input.
-
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Real and imaginary parts of the output of the residual block.
-        """
-        residual_real, residual_imag = input_real, input_imag
-        out_real, out_imag = self.linear1(input_real, input_imag)
-        out_real, out_imag = self.bn1(out_real, out_imag)
-        out_real, out_imag = self.act1(out_real, out_imag)
-
-        out_real2, out_imag2 = self.linear2(out_real, out_imag)
-        out_real2, out_imag2 = self.bn2(out_real2, out_imag2)
-        # skip connection
-        out_real2 = out_real2 + residual_real
-        out_imag2 = out_imag2 + residual_imag
-        out_real2, out_imag2 = self.act2(out_real2, out_imag2)
-        return out_real2, out_imag2
-
-
-class CVNN(nn.Module):
-    """A configurable complex-valued neural network (CVNN) example.
-
-    This network demonstrates how to assemble complex-valued layers into a full model. It consists of an initial
-    complex linear layer (with batch normalization and activation), followed by one or more complex residual blocks,
-    and a final complex linear layer for output.
-
-    By default, it uses modReLU as the activation and naive complex batch normalization, but these can be overridden.
-
-    Args:
-        input_features (int): Number of input features.
-        output_features (int): Number of output features.
-        hidden_features (int): Number of hidden features in the hidden layer(s).
-        num_residual_blocks (int): Number of residual blocks to include. Default: 1.
-        activation: The complex activation class to use (default modReLU).
-        bn_class: The batch normalization class to use (default NaiveComplexBatchNorm).
-    """
-
-    def __init__(
-        self,
-        input_features: int,
-        output_features: int,
-        hidden_features: int,
-        num_residual_blocks: int = 1,
-        activation: Union[Type[nn.Module], nn.Module] = modReLU,
-        bn_class: Union[Type[nn.Module], nn.Module] = NaiveComplexBatchNorm,
-    ) -> None:
-        super().__init__()
-        self.input_features: int = input_features
-        self.output_features: int = output_features
-        self.hidden_features: int = hidden_features
-        self.input_linear = ComplexLinear(input_features, hidden_features)
-        self.input_bn = (
-            bn_class(hidden_features) if isinstance(bn_class, type) else bn_class
-        )
-        if isinstance(activation, type):
-            try:
-                self.input_act = activation(hidden_features)
-            except TypeError:
-                self.input_act = activation()
-        else:
-            self.input_act = activation
-
-        self.residuals = nn.ModuleList()
-        for _ in range(num_residual_blocks):
-            block = ResidualBlock(
-                hidden_features, activation=activation, bn_class=bn_class
-            )
-            self.residuals.append(block)
-
-        self.output_linear = ComplexLinear(hidden_features, output_features)
-
-    def forward(
-        self, input_real: torch.Tensor, input_imag: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass for the CVNN.
-
-        Args:
-            input_real (torch.Tensor): Real part of input, shape (batch, input_features).
-            input_imag (torch.Tensor): Imaginary part of input.
-
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Real and imaginary parts of the network output.
-        """
-        out_real, out_imag = self.input_linear(input_real, input_imag)
-        out_real, out_imag = self.input_bn(out_real, out_imag)
-        out_real, out_imag = self.input_act(out_real, out_imag)
-        for block in self.residuals:
-            out_real, out_imag = block(out_real, out_imag)
-        out_real, out_imag = self.output_linear(out_real, out_imag)
-        return out_real, out_imag
-
-
-class SimpleCVNN(nn.Module):
-    """A simple complex-valued neural network (CVNN) with one hidden layer.
-
-    This simpler network consists of a single hidden complex linear layer followed by an activation
-    (optionally with batch normalization), and a final complex linear layer for output.
-
-    Args:
-        input_features (int): Number of input features.
-        output_features (int): Number of output features.
-        hidden_features (int): Number of hidden features in the hidden layer.
-        activation: The complex activation class to use (default modReLU).
-        bn_class: The batch normalization class to use (default NaiveComplexBatchNorm).
-    """
-
-    def __init__(
-        self,
-        input_features: int,
-        output_features: int,
-        hidden_features: int,
-        activation: Union[Type[nn.Module], nn.Module] = modReLU,
-        bn_class: Union[Type[nn.Module], nn.Module] = NaiveComplexBatchNorm,
-    ) -> None:
-        super().__init__()
-        self.input_features: int = input_features
-        self.output_features: int = output_features
-        self.hidden_features: int = hidden_features
-        self.hidden_linear = ComplexLinear(input_features, hidden_features)
-        self.hidden_bn = (
-            bn_class(hidden_features) if isinstance(bn_class, type) else bn_class
-        )
-        if isinstance(activation, type):
-            try:
-                self.hidden_act = activation(hidden_features)
-            except TypeError:
-                self.hidden_act = activation()
-        else:
-            self.hidden_act = activation
-
-        self.output_linear = ComplexLinear(hidden_features, output_features)
-
-    def forward(
-        self, input_real: torch.Tensor, input_imag: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass for the simple CVNN.
-
-        Args:
-            input_real (torch.Tensor): Real part of input.
-            input_imag (torch.Tensor): Imaginary part of input.
-
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Real and imaginary parts of the output.
-        """
-        out_real, out_imag = self.hidden_linear(input_real, input_imag)
-        out_real, out_imag = self.hidden_bn(out_real, out_imag)
-        out_real, out_imag = self.hidden_act(out_real, out_imag)
-        out_real, out_imag = self.output_linear(out_real, out_imag)
         return out_real, out_imag
