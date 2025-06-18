@@ -419,3 +419,59 @@ class CovarianceComplexBatchNorm(nn.Module):
             out_imag = whitened_imag
 
         return out_real, out_imag
+
+
+class ComplexSequential(nn.Module):
+    """`nn.Sequential` that forwards a `(real, imag)` tensor pair."""
+
+    def __init__(self, *mods: nn.Module) -> None:  # noqa: D401
+        super().__init__()
+        self.layers = nn.ModuleList(mods)
+
+    def forward(  # noqa: D401, N802
+        self,
+        real: torch.Tensor,
+        imag: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Run the pair through each sub-module in order."""
+        cur_r, cur_i = real, imag
+        for mod in self.layers:
+            cur_r, cur_i = mod(cur_r, cur_i)
+        return cur_r, cur_i
+
+
+class ComplexResidual(nn.Module):
+    """Generic add-skip wrapper around an arbitrary *body* sub-network."""
+
+    def __init__(
+        self,
+        body: nn.Module,
+        proj: Optional[nn.Module] = None,
+        post_act: Optional[nn.Module] = None,
+    ) -> None:
+        """
+        Args:
+            body:     Module that computes ``f(x)``.
+            proj:     Optional projection so *x* and *f(x)* share width.
+            post_act: Optional activation applied **after** the addition.
+        """
+        super().__init__()
+        self.body = body
+        self.proj = proj
+        self.post_act = post_act
+
+    def forward(  # noqa: D401, N802
+        self,
+        real: torch.Tensor,
+        imag: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Return ``post_act(f(x) + (proj(x) if proj else x))``."""
+        res_r, res_i = real, imag
+        body_r, body_i = self.body(real, imag)
+        if self.proj is not None:
+            res_r, res_i = self.proj(res_r, res_i)
+        out_r = body_r + res_r
+        out_i = body_i + res_i
+        if self.post_act is not None:
+            out_r, out_i = self.post_act(out_r, out_i)
+        return out_r, out_i
