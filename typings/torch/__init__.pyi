@@ -40,9 +40,27 @@ _TorchDevice: TypeAlias = "torch.device"
 _DType = dtype  # internal alias
 
 class device:
-    """Opaque stand-in for run-time ``torch.device``."""
+    """Typed stand-in for run-time :class:`torch.device`.
 
-    def __init__(self, type: str, index: int | None = ...) -> None: ...
+    * Accepts **either** a string spec (``"cpu"``, ``"cuda:0"``, …),
+      another *device* instance, or ``None``.
+    * Implements the context-manager protocol so
+      ``with torch.device("cuda"): …`` type-checks.
+    """
+
+    # constructor ────────────────────────────────────────────────────────
+    def __init__(self, spec: str | "device" | None = ...) -> None: ...
+
+    # context-manager hooks ──────────────────────────────────────────────
+    def __enter__(self) -> "device": ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object | None,
+    ) -> bool | None: ...
+
+    # read-only attributes ───────────────────────────────────────────────
     @property
     def type(self) -> str: ...
     @property
