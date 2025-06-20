@@ -2,24 +2,16 @@
 """Build **flexible, closed** complex-valued neural networks from a Pydantic
 configuration.
 
-Key ideas
----------
-* **Input / output agnostic** – any ``n_inputs``/``n_outputs`` pair works.  The
-  builder inserts complex-linear projections wherever widths disagree.
-* **Width inference** – a ``ComplexLinear`` whose ``width`` is ``None``
-  propagates the incoming width unchanged.
-* **Optional global activation** – a final activation can be specified once in
-  the root config.
-* **Functional flavour** – helper utilities avoid mutable state and rely on
-  pure functions, recursion, comprehensions, and pattern matching.
-* **mypy-strict clean** – no ``Any`` and no ``# type: ignore``.
+Highlights
+----------
+* Expression‑oriented, purely functional construction (no mutable loops).
+* Helper combinators `_maybe_activate` / `_maybe_project` remove repetition.
+* mypy‑strict clean; compatible with `black`.
 """
 
 from __future__ import annotations
 
-import functools
 from enum import Enum
-from itertools import chain
 from typing import List, Optional, Tuple, TypeAlias, Union
 
 import torch
@@ -42,15 +34,11 @@ from spectralmc.cvnn import (
 
 
 class ActivationKind(str, Enum):
-    """Supported complex activation layers."""
-
     Z_RELU = "zReLU"
     MOD_RELU = "modReLU"
 
 
 class LayerKind(str, Enum):
-    """Atomic and composite layer kinds supported by the builder."""
-
     LINEAR = "ComplexLinear"
     BN_NAIVE = "NaiveComplexBatchNorm"
     BN_COV = "CovarianceComplexBatchNorm"
@@ -59,35 +47,35 @@ class LayerKind(str, Enum):
 
 
 # =============================================================================
-#  Pure helper functions
+#  Helper combinators
 # =============================================================================
 
 
-def _make_activation(kind: ActivationKind, width: int) -> nn.Module:
-    """Return the torch implementation of *kind*."""
-
+def _make_activation(kind: "ActivationKind", width: int) -> nn.Module:
     return zReLU() if kind is ActivationKind.Z_RELU else modReLU(width)
 
 
-def _flatten_module(module: nn.Module) -> List[nn.Module]:
-    """Recursively collect atomic layers, eliminating nested sequentials."""
-
-    if isinstance(module, ComplexSequential):
-        return list(chain.from_iterable(_flatten_module(m) for m in module.layers))
-    return [module]
+def _seq(*mods: nn.Module) -> nn.Module:
+    """Return the lone module unchanged or wrap many in `ComplexSequential`."""
+    return mods[0] if len(mods) == 1 else ComplexSequential(*mods)
 
 
-def _seq(*modules: nn.Module) -> nn.Module:
-    """Compose modules into a single (flattened) :class:`ComplexSequential`."""
+def _maybe_activate(
+    module: nn.Module, act: Optional["ActivationCfg"], width: int
+) -> nn.Module:
+    return _seq(module, _make_activation(act.kind, width)) if act else module
 
-    flat_layers: List[nn.Module] = list(
-        chain.from_iterable(_flatten_module(m) for m in modules)
+
+def _maybe_project(module: nn.Module, in_w: int, out_w: int) -> Tuple[nn.Module, int]:
+    return (
+        (_seq(module, ComplexLinear(in_w, out_w)), out_w)
+        if in_w != out_w
+        else (module, in_w)
     )
-    return flat_layers[0] if len(flat_layers) == 1 else ComplexSequential(*flat_layers)
 
 
 # =============================================================================
-#  Pydantic layer descriptions
+#  Pydantic configs
 # =============================================================================
 
 
@@ -97,7 +85,7 @@ class ActivationCfg(BaseModel):
 
 class LinearCfg(BaseModel):
     kind: LayerKind = LayerKind.LINEAR
-    width: Optional[int] = None  # None ⇒ keep current width
+    width: Optional[int] = None
     bias: bool = True
     activation: Optional[ActivationCfg] = None
 
@@ -144,121 +132,90 @@ class ResidualCfg(BaseModel):
 
 class CVNNConfig(BaseModel):
     layers: List[LayerCfg]
-    seed: PositiveInt = Field(..., description="RNG seed for deterministic init")
+    seed: PositiveInt
     final_activation: Optional[ActivationCfg] = None
 
 
 # =============================================================================
-#  Width-aware recursive builder
+#  Recursive builder
 # =============================================================================
 
 
 def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
-    """Convert *cfg* into a torch module and report its output width."""
-
     match cfg:
         # ─── Linear ────────────────────────────────────────────────────────
-        case LinearCfg() as lin_cfg:
-            out_w = lin_cfg.width if lin_cfg.width is not None else cur_w
-            layer: nn.Module = ComplexLinear(cur_w, out_w, bias=lin_cfg.bias)
-            return (
-                (
-                    _seq(layer, _make_activation(lin_cfg.activation.kind, out_w))
-                    if lin_cfg.activation
-                    else layer
-                ),
-                out_w,
-            )
+        case LinearCfg() as c:
+            out_w = c.width or cur_w
+            lin: nn.Module = ComplexLinear(cur_w, out_w, bias=c.bias)
+            return _maybe_activate(lin, c.activation, out_w), out_w
 
         # ─── Naive BN ──────────────────────────────────────────────────────
-        case NaiveBNCfg() as bn_cfg:
-            layer = NaiveComplexBatchNorm(
+        case NaiveBNCfg() as c:
+            bn_naive: nn.Module = NaiveComplexBatchNorm(
                 num_features=cur_w,
-                eps=bn_cfg.eps,
-                momentum=bn_cfg.momentum,
-                affine=bn_cfg.affine,
-                track_running_stats=bn_cfg.track_running_stats,
+                eps=c.eps,
+                momentum=c.momentum,
+                affine=c.affine,
+                track_running_stats=c.track_running_stats,
             )
-            return (
-                (
-                    _seq(layer, _make_activation(bn_cfg.activation.kind, cur_w))
-                    if bn_cfg.activation
-                    else layer
-                ),
-                cur_w,
-            )
+            return _maybe_activate(bn_naive, c.activation, cur_w), cur_w
 
         # ─── Covariance BN ────────────────────────────────────────────────
-        case CovBNCfg() as cbn_cfg:
-            layer = CovarianceComplexBatchNorm(
+        case CovBNCfg() as c:
+            bn_cov: nn.Module = CovarianceComplexBatchNorm(
                 num_features=cur_w,
-                eps=cbn_cfg.eps,
-                momentum=cbn_cfg.momentum,
-                affine=cbn_cfg.affine,
-                track_running_stats=cbn_cfg.track_running_stats,
+                eps=c.eps,
+                momentum=c.momentum,
+                affine=c.affine,
+                track_running_stats=c.track_running_stats,
             )
-            return (
-                (
-                    _seq(layer, _make_activation(cbn_cfg.activation.kind, cur_w))
-                    if cbn_cfg.activation
-                    else layer
-                ),
-                cur_w,
-            )
+            return _maybe_activate(bn_cov, c.activation, cur_w), cur_w
 
-        # ─── Sequential composite ─────────────────────────────────────────
-        case SequentialCfg() as seq_cfg:
-            State: TypeAlias = Tuple[List[nn.Module], int]
+        # ─── Sequential ───────────────────────────────────────────────────
+        case SequentialCfg() as c:
 
-            def _accumulate(state: State, sub_cfg: LayerCfg) -> State:
-                built, width_in = state
-                sub_mod, width_out = _build_from_cfg(sub_cfg, width_in)
-                return (built + [sub_mod], width_out)
+            def _fold(lst: List[LayerCfg], w_in: int) -> Tuple[List[nn.Module], int]:
+                if not lst:
+                    return ([], w_in)
 
-            init_state: State = ([], cur_w)
-            modules_list, width = functools.reduce(
-                _accumulate,
-                seq_cfg.layers,
-                init_state,
-            )
-            seq_layer = _seq(*modules_list)
-            return (
-                (
-                    _seq(seq_layer, _make_activation(seq_cfg.activation.kind, width))
-                    if seq_cfg.activation
-                    else seq_layer
-                ),
-                width,
+                h, *t = lst
+                h_mod, w_mid = _build_from_cfg(h, w_in)
+                t_mods, w_out = _fold(t, w_mid)
+                return ([h_mod, *t_mods], w_out)
+
+            mods, width = _fold(c.layers, cur_w)
+            seq_mod = _seq(*mods)
+            return _maybe_activate(seq_mod, c.activation, width), width
+
+            # ─── Residual ─────────────────────────────────────────────────────
+        case ResidualCfg() as c:
+            body_mod, body_w = _build_from_cfg(c.body, cur_w)
+
+            proj_mod, proj_w = (
+                _build_from_cfg(c.projection, cur_w)
+                if c.projection is not None
+                else (
+                    (None, body_w)
+                    if body_w == cur_w
+                    else (ComplexLinear(cur_w, body_w), body_w)
+                )
             )
 
-        # ─── Residual composite ───────────────────────────────────────────
-        case ResidualCfg() as res_cfg:
-            body_mod, body_w = _build_from_cfg(res_cfg.body, cur_w)
+            # Guard against accidental mismatch without an explicit `if` chain.
+            assert proj_w == body_w, "Projection width mismatch in Residual block"
 
-            # Decide projection for skip path.
-            if res_cfg.projection is not None:
-                proj_mod, proj_w = _build_from_cfg(res_cfg.projection, cur_w)
-                if proj_w != body_w:
-                    raise ValueError(
-                        f"Projection width {proj_w} must equal body width {body_w}",
-                    )
-            elif body_w != cur_w:
-                proj_mod = ComplexLinear(cur_w, body_w)
-            else:
-                proj_mod = None
-
-            residual_layer = ComplexResidual(
+            res_mod = ComplexResidual(
                 body=body_mod,
                 proj=proj_mod,
                 post_act=(
-                    _make_activation(res_cfg.activation.kind, body_w)
-                    if res_cfg.activation
+                    _make_activation(c.activation.kind, body_w)
+                    if c.activation
                     else None
                 ),
             )
-            return residual_layer, body_w
+            return res_mod, body_w
 
-    # ─── Defensive fallback ───────────────────────────────────────────────
+    # Defensive fallback
     raise RuntimeError(f"Unhandled layer config type: {type(cfg).__name__}")
 
 
@@ -268,24 +225,14 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
 
 
 def build_model(*, n_inputs: int, n_outputs: int, cfg: CVNNConfig) -> nn.Module:
-    """Instantiate a CVNN matching *cfg* for arbitrary input/output widths."""
-
     torch.manual_seed(cfg.seed)
 
-    # Treat top-level list as an implicit Sequential.
-    top_seq = SequentialCfg(layers=cfg.layers)
-    body, body_w = _build_from_cfg(top_seq, n_inputs)
-
-    # Final width projection if needed.
-    if body_w != n_outputs:
-        body = _seq(body, ComplexLinear(body_w, n_outputs))
-        body_w = n_outputs
-
-    # Optional global activation.
-    if cfg.final_activation is not None:
-        body = _seq(body, _make_activation(cfg.final_activation.kind, body_w))
-
-    return body
+    initial_body, initial_w = _build_from_cfg(
+        SequentialCfg(layers=cfg.layers), n_inputs
+    )
+    projected_body, final_w = _maybe_project(initial_body, initial_w, n_outputs)
+    final_body = _maybe_activate(projected_body, cfg.final_activation, final_w)
+    return final_body
 
 
 __all__: Tuple[str, ...] = ("CVNNConfig", "build_model")
