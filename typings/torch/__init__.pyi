@@ -7,23 +7,13 @@ Strict, minimal stub for the public ``torch`` namespace as exercised by
 from __future__ import annotations
 
 import builtins as _b
-from types import ModuleType
-from typing import (
-    Iterator,
-    Sequence,
-    Tuple,
-    TypeAlias,
-    TypeVar,
-    overload,
-)
+from typing import Iterator, Sequence, Tuple, TypeAlias, TypeVar, overload
 
-import torch  # runtime import for `torch.device` / `torch.dtype`
+# real import kept only for run-time singletons
+import torch as _torch_runtime  # noqa: F401
 
-# ──────────────────────────── dtype & device ────────────────────────────
-class dtype:
-    """Opaque stand-in for run-time ``torch.dtype`` singletons."""
-
-    pass
+# ─────────────────────────── dtype & device ────────────────────────────
+class dtype: ...
 
 float32: dtype
 float64: dtype
@@ -36,43 +26,35 @@ float: dtype
 double: dtype
 long: dtype
 
-_TorchDevice: TypeAlias = "torch.device"
-_DType = dtype  # internal alias
+def get_default_dtype() -> dtype: ...
+def set_default_dtype(d: dtype) -> None: ...
 
 class device:
-    """Typed stand-in for run-time :class:`torch.device`.
+    """Stub of run-time ``torch.device`` (context-manager & comparable)."""
 
-    * Accepts **either** a string spec (``"cpu"``, ``"cuda:0"``, …),
-      another *device* instance, or ``None``.
-    * Implements the context-manager protocol so
-      ``with torch.device("cuda"): …`` type-checks.
-    """
-
-    # constructor ────────────────────────────────────────────────────────
-    def __init__(self, spec: str | "device" | None = ...) -> None: ...
-
-    # context-manager hooks ──────────────────────────────────────────────
-    def __enter__(self) -> "device": ...
+    def __init__(self, spec: str | device | None = ...) -> None: ...
+    def __enter__(self) -> device: ...
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: object | None,
     ) -> bool | None: ...
-
-    # read-only attributes ───────────────────────────────────────────────
     @property
     def type(self) -> str: ...
     @property
     def index(self) -> int | None: ...
 
-# ───────────────────────────────── Tensor ───────────────────────────────
+_TorchDevice: TypeAlias = device
+_DType = dtype  # shorthand
+
+# ───────────────────────────────── Tensor ──────────────────────────────
 _TTensor = TypeVar("_TTensor", bound="Tensor")
 
 class Tensor:
-    """Typed subset of ``torch.Tensor`` sufficient for the code-base."""
+    """Subset of ``torch.Tensor`` sufficient for this project."""
 
-    # ─── construction / autograd ────────────────────────────────────────
+    # construction / autograd ------------------------------------------------
     def __init__(
         self,
         *size: int,
@@ -84,7 +66,7 @@ class Tensor:
     grad: Tensor | None
     requires_grad: bool
 
-    # ─── shape & stats ─────────────────────────────────────────────────
+    # shape & stats ----------------------------------------------------------
     @property
     def dtype(self) -> _DType: ...
     @property
@@ -93,11 +75,7 @@ class Tensor:
     def ndim(self) -> int: ...
     def mean(self, dim: int | None = ..., **kw: object) -> Tensor: ...
     def var(
-        self,
-        dim: int | None = ...,
-        *,
-        unbiased: bool = ...,
-        **kw: object,
+        self, dim: int | None = ..., *, unbiased: bool = ..., **kw: object
     ) -> Tensor: ...
     def max(self, dim: int | None = ..., keepdim: bool = ...) -> Tensor: ...
     def sum(
@@ -113,125 +91,98 @@ class Tensor:
     @property
     def T(self) -> Tensor: ...
 
-    # ─── element-wise helpers ──────────────────────────────────────────
+    # element-wise helpers ---------------------------------------------------
     def abs(self) -> Tensor: ...
     def pow(self, exponent: _b.int | _b.float) -> Tensor: ...
     def square(self) -> Tensor: ...
     def all(self) -> Tensor: ...
 
-    # ─── arithmetic ────────────────────────────────────────────────────
+    # arithmetic -------------------------------------------------------------
     def __add__(self, other: Tensor | _b.float | _b.int) -> Tensor: ...
-
     __radd__ = __add__
-
     def __sub__(self, other: Tensor | _b.float | _b.int) -> Tensor: ...
-
     __rsub__ = __sub__
-
     def __mul__(self, other: Tensor | _b.float | _b.int) -> Tensor: ...
-
     __rmul__ = __mul__
-
     def __truediv__(self, other: Tensor | _b.float | _b.int) -> Tensor: ...
     def __rtruediv__(self, other: Tensor | _b.float | _b.int) -> Tensor: ...
     def __matmul__(self, other: Tensor) -> Tensor: ...
 
-    # ─── comparisons / masks ───────────────────────────────────────────
+    # comparisons / masks ----------------------------------------------------
     def __lt__(self, other: Tensor | _b.float | _b.int) -> Tensor: ...
     def __le__(self, other: Tensor | _b.float | _b.int) -> Tensor: ...
     def __gt__(self, other: Tensor | _b.float | _b.int) -> Tensor: ...
     def __ge__(self, other: Tensor | _b.float | _b.int) -> Tensor: ...
     def __and__(self, other: Tensor | bool) -> Tensor: ...
-
     __rand__ = __and__
 
     def __getitem__(self, item: object) -> Tensor: ...
 
-    # ─── in-place ops ──────────────────────────────────────────────────
+    # in-place ops -----------------------------------------------------------
     def mul_(self, other: Tensor | _b.float | _b.int) -> Tensor: ...
     def add_(self, other: Tensor | _b.float | _b.int) -> Tensor: ...
     def copy_(self, other: Tensor) -> Tensor: ...
     def zero_(self) -> Tensor: ...
     def fill_(self, value: _b.int | _b.float) -> Tensor: ...
 
-    # ─── misc helpers ─────────────────────────────────────────────────
+    # misc helpers -----------------------------------------------------------
     def detach(self) -> Tensor: ...
     def cpu(self) -> Tensor: ...
     def clone(self) -> Tensor: ...
     def reshape(
-        self,
-        shape: tuple[int, ...] | Sequence[int] | int,
-        *more: int,
+        self, shape: tuple[int, ...] | Sequence[int] | int, *more: int
     ) -> Tensor: ...
     def tolist(self) -> list[_b.int | _b.float]: ...
     def item(self) -> _b.int | _b.float: ...
     def __float__(self) -> _b.float: ...
 
-    # ─── extras needed by the repo ─────────────────────────────────────
+    # extra attributes -------------------------------------------------------
     @property
     def real(self) -> Tensor: ...
     @property
     def imag(self) -> Tensor: ...
     @property
-    def device(self) -> "torch.device": ...
+    def device(self) -> _TorchDevice: ...
     def to(
         self: _TTensor,
         dtype: _DType | None = ...,
-        device: (
-            "torch.device" | str | None
-        ) = ...,  # ★ fixed: use fully-qualified string
+        device: _TorchDevice | str | None = ...,
         copy: bool | None = ...,
         non_blocking: bool | None = ...,
     ) -> _TTensor: ...
     def equal(self, other: Tensor) -> bool: ...
     def __iter__(self) -> Iterator[Tensor]: ...
 
-# ───────────────────────── functional helpers ────────────────────────────
+# ────────────────────────── functional helpers ──────────────────────────
 def zeros(*size: int, dtype: _DType | None = ...) -> Tensor: ...
 def ones(
-    *size: int,
-    dtype: _DType | None = ...,
-    device: device | str | None = ...,
+    *size: int, dtype: _DType | None = ..., device: _TorchDevice | str | None = ...
 ) -> Tensor: ...
 def full(
-    size: Tuple[int, ...],
-    fill_value: _b.int | _b.float,
-    dtype: _DType | None = ...,
+    size: Tuple[int, ...], fill_value: _b.int | _b.float, dtype: _DType | None = ...
 ) -> Tensor: ...
 def full_like(
     a: Tensor,
     fill_value: _b.int | _b.float,
     *,
     dtype: _DType | None = ...,
-    device: device | str | None = ...,
+    device: _TorchDevice | str | None = ...,
 ) -> Tensor: ...
 def zeros_like(a: Tensor) -> Tensor: ...
 def matmul(a: Tensor, b: Tensor) -> Tensor: ...
 def sqrt(a: Tensor) -> Tensor: ...
 def clamp(
-    a: Tensor,
-    *,
-    min: _b.float | None = ...,
-    max: _b.float | None = ...,
+    a: Tensor, *, min: _b.float | None = ..., max: _b.float | None = ...
 ) -> Tensor: ...
 def relu(a: Tensor) -> Tensor: ...
 def stack(tensors: Sequence[Tensor], dim: int = ...) -> Tensor: ...
 def square(a: Tensor) -> Tensor: ...
 def all(a: Tensor) -> bool: ...
 def allclose(
-    a: Tensor,
-    b: Tensor,
-    *,
-    atol: _b.float = ...,
-    rtol: _b.float = ...,
+    a: Tensor, b: Tensor, *, atol: _b.float = ..., rtol: _b.float = ...
 ) -> bool: ...
 def isfinite(a: Tensor) -> Tensor: ...
-def complex(
-    real: Tensor,
-    imag: Tensor,
-    *,
-    dtype: _DType | None = ...,
-) -> Tensor: ...
+def complex(real: Tensor, imag: Tensor, *, dtype: _DType | None = ...) -> Tensor: ...
 def real(input: Tensor) -> Tensor: ...
 def imag(input: Tensor) -> Tensor: ...
 @overload
@@ -239,22 +190,18 @@ def max(input: Tensor) -> Tensor: ...
 @overload
 def max(input: Tensor, other: Tensor) -> Tensor: ...
 @overload
-def max(
-    input: Tensor,
-    dim: int,
-    keepdim: bool = ...,
-) -> Tuple[Tensor, Tensor]: ...
+def max(input: Tensor, dim: int, keepdim: bool = ...) -> Tuple[Tensor, Tensor]: ...
 
 abs = Tensor.abs
 
 def equal(a: Tensor, b: Tensor) -> bool: ...
 
-# ─── randomness -----------------------------------------------------------
+# randomness --------------------------------------------------------------
 def manual_seed(seed: int) -> None: ...
 def randn(
     *size: int,
     dtype: _DType | None = ...,
-    device: device | str | None = ...,
+    device: _TorchDevice | str | None = ...,
     requires_grad: bool = ...,
 ) -> Tensor: ...
 @overload
@@ -262,7 +209,7 @@ def tensor(
     data: _b.int | _b.float,
     *,
     dtype: _DType | None = ...,
-    device: device | str | None = ...,
+    device: _TorchDevice | str | None = ...,
     requires_grad: bool = ...,
 ) -> Tensor: ...
 @overload
@@ -270,7 +217,7 @@ def tensor(
     data: Sequence[_b.int | _b.float],
     *,
     dtype: _DType | None = ...,
-    device: device | str | None = ...,
+    device: _TorchDevice | str | None = ...,
     requires_grad: bool = ...,
 ) -> Tensor: ...
 @overload
@@ -278,11 +225,11 @@ def tensor(
     data: Sequence[Sequence[_b.int | _b.float]],
     *,
     dtype: _DType | None = ...,
-    device: device | str | None = ...,
+    device: _TorchDevice | str | None = ...,
     requires_grad: bool = ...,
 ) -> Tensor: ...
 
-# ─── autograd guard --------------------------------------------------------
+# autograd guard ----------------------------------------------------------
 class _NoGrad:
     def __enter__(self) -> None: ...
     def __exit__(
@@ -294,20 +241,10 @@ class _NoGrad:
 
 def no_grad() -> _NoGrad: ...
 
-# ─── tiny sub-modules (fft / linalg) --------------------------------------
+# tiny sub-modules --------------------------------------------------------
 class _FFTModule:
-    def fft(
-        self,
-        input: Tensor,
-        n: int | None = ...,
-        dim: int = ...,
-    ) -> Tensor: ...
-    def ifft(
-        self,
-        input: Tensor,
-        n: int | None = ...,
-        dim: int = ...,
-    ) -> Tensor: ...
+    def fft(self, input: Tensor, n: int | None = ..., dim: int = ...) -> Tensor: ...
+    def ifft(self, input: Tensor, n: int | None = ..., dim: int = ...) -> Tensor: ...
 
 fft: _FFTModule
 
@@ -316,7 +253,7 @@ class _LinalgModule:
 
 linalg: _LinalgModule
 
-# ─── re-export *stub* sub-packages so ``import torch.nn`` works -----------
+# re-export stub sub-packages so ``import torch.nn`` works ----------------
 from . import nn as nn  # noqa: F401
 from . import optim as optim  # noqa: F401
 from . import cuda as cuda  # noqa: F401
