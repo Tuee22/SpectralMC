@@ -1,6 +1,6 @@
 r"""Unit tests for ``spectralmc.cvnn``.
 
-These tests are designed to run under **pytest** *and* type‑check cleanly with
+These tests are designed to run under **pytest** *and* type-check cleanly with
 ``mypy --strict``.  The project ships bespoke Torch stubs, so no
 ``Any``, ``cast``, or ``type: ignore`` directives are necessary – and none are
 present.
@@ -25,8 +25,8 @@ from __future__ import annotations
 import math
 from typing import List
 
-import torch
 import pytest
+import torch
 from torch import Tensor, nn
 
 from spectralmc.cvnn import (
@@ -39,15 +39,13 @@ from spectralmc.cvnn import (
     ComplexResidual,
 )
 
-
 # -----------------------------------------------------------------------------
-# Global test‑wide constants
+# Global test-wide constants
 # -----------------------------------------------------------------------------
 
 DTYPE: torch.dtype = torch.float32
 ATOL: float = 1.0e-5
 RTOL: float = 1.0e-4
-
 
 # -----------------------------------------------------------------------------
 # Helper utilities
@@ -92,7 +90,7 @@ def assert_close(
 
 
 def test_complex_linear_manual() -> None:
-    """Analytical 2×2 example with non‑trivial bias."""
+    """Analytical 2×2 example with non-trivial bias."""
     layer = ComplexLinear(2, 2, bias=True)
 
     with torch.no_grad():
@@ -109,11 +107,10 @@ def test_complex_linear_manual() -> None:
 
     a = layer.real_weight
     b = layer.imag_weight
-    rb = layer.real_bias  # type: ignore[assignment]
-    ib = layer.imag_bias  # type: ignore[assignment]
-
-    exp_r = x_r @ a.T - x_i @ b.T + rb  # type: ignore[arg-type]
-    exp_i = x_r @ b.T + x_i @ a.T + ib  # type: ignore[arg-type]
+    rb = layer.real_bias
+    ib = layer.imag_bias
+    exp_r = x_r @ a.T - x_i @ b.T + rb
+    exp_i = x_r @ b.T + x_i @ a.T + ib
 
     out_r, out_i = layer(x_r, x_i)
     assert_close(out_r, exp_r)
@@ -148,7 +145,7 @@ def test_complex_linear_shapes_and_grad(bias: bool) -> None:
 
 
 def test_zrelu_masking_and_grad() -> None:
-    """zReLU passes first‑quadrant values and back‑props correct mask."""
+    """zReLU passes first-quadrant values and back-props correct mask."""
     act = zReLU()
     r_in = torch.tensor([[-1.0, 0.5, 0.2]], requires_grad=True)
     i_in = torch.tensor([[0.3, -0.2, 0.1]], requires_grad=True)
@@ -171,9 +168,9 @@ def test_zrelu_masking_and_grad() -> None:
 
 
 def test_modrelu_thresholding() -> None:
-    """Below threshold → 0; above threshold → magnitude‑scaled."""
+    """Below threshold → 0; above threshold → magnitude-scaled."""
     act = modReLU(num_features=1)
-    bias_val = -4.0  # Ensures r+b = 1 for a 3‑4‑5 triangle input.
+    bias_val = -4.0  # Ensures r+b = 1 for a 3-4-5 triangle input.
     with torch.no_grad():
         act.bias.fill_(bias_val)
 
@@ -231,7 +228,7 @@ def test_naive_bn_eval_shape() -> None:
 
 
 def test_cov_bn_whitening() -> None:
-    """Whitening yields ≈0 mean, var≈0.5, and low cross‑covariance."""
+    """Whitening yields ≈0 mean, var≈0.5, and low cross-covariance."""
     bn = CovarianceComplexBatchNorm(6)
     bn.train()
 
@@ -253,7 +250,7 @@ def test_cov_bn_whitening() -> None:
     assert_close(var_r, target_var, atol=3e-2)
     assert_close(var_i, target_var, atol=3e-2)
 
-    # Cross‑covariance should not exceed variance scale by more than tolerance.
+    # Cross-covariance should not exceed variance scale by more than tolerance.
     assert torch.all(cov_ri.abs() <= target_var + 3e-2)
 
 
@@ -277,7 +274,7 @@ def test_cov_bn_eval_shape() -> None:
 
 
 def test_complex_sequential_flow_and_grad() -> None:
-    """Data should flow through sequential stack and back‑propagate."""
+    """Data should flow through sequential stack and back-propagate."""
     seq = ComplexSequential(
         ComplexLinear(3, 3),
         zReLU(),
@@ -304,7 +301,7 @@ def test_complex_sequential_flow_and_grad() -> None:
 
 
 def test_complex_residual_identity_when_body_zero() -> None:
-    """With zeroed body the residual acts as optional post‑activation only."""
+    """With zeroed body the residual acts as optional post-activation only."""
     body = ComplexSequential(ComplexLinear(4, 4), modReLU(4))
     res = ComplexResidual(body=body, proj=None, post_act=zReLU())
 
@@ -324,7 +321,7 @@ def test_complex_residual_identity_when_body_zero() -> None:
     x_i = torch.tensor([[0.4, 0.2, -0.1, 0.0]])
     out_r, out_i = res(x_r, x_i)
 
-    # zReLU afterwards keeps only first‑quadrant entries.
+    # zReLU afterwards keeps only first-quadrant entries.
     mask = (x_r >= 0) & (x_i >= 0)
     assert_close(out_r, x_r * mask)
     assert_close(out_i, x_i * mask)
@@ -346,5 +343,7 @@ def test_complex_residual_grad_flow() -> None:
     assert torch.isfinite(x_r.grad).all() and torch.isfinite(x_i.grad).all()
 
     # Body parameters must receive gradient as well.
-    grads: List[Tensor] = [p.grad for p in res.parameters() if p.requires_grad]
-    assert any(g is not None and torch.isfinite(g).all() for g in grads)
+    grads: List[Tensor] = [
+        p.grad for p in res.parameters() if p.grad is not None and p.requires_grad
+    ]
+    assert grads and any(torch.isfinite(g).all() for g in grads)

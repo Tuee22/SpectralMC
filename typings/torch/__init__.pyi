@@ -258,3 +258,4 @@ from . import nn as nn  # noqa: F401
 from . import optim as optim  # noqa: F401
 from . import cuda as cuda  # noqa: F401
 from . import utils as utils  # re-export
+from . import random as random

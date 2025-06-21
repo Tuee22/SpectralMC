@@ -316,7 +316,7 @@ class CovarianceComplexBatchNorm(nn.Module):
 
         # Learnable affine parameters
         if affine:
-            init_val = 1.0 / math.sqrt(2.0)
+            init_val = 1.0
             self.beta_real = nn.Parameter(torch.zeros(num_features))
             self.beta_imag = nn.Parameter(torch.zeros(num_features))
             self.gamma_rr = nn.Parameter(torch.full((num_features,), init_val))
