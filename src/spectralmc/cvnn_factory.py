@@ -277,7 +277,7 @@ def build_model(
 ) -> nn.Module:
     """Materialise a CVNN described by *cfg* on the requested device and dtype."""
 
-    torch.manual_seed(int(cfg.seed))
+    torch.manual_seed(cfg.seed)
 
     def _materialise() -> nn.Module:
         body, w = _build_from_cfg(SequentialCfg(layers=cfg.layers), n_inputs)

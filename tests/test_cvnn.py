@@ -1,4 +1,5 @@
-r"""Unit tests for ``spectralmc.cvnn``.
+# src/spectralmc/test_cvnn.py
+"""Unit tests for ``spectralmc.cvnn``.
 
 These tests are designed to run under **pytest** *and* type-check cleanly with
 ``mypy --strict``.  The project ships bespoke Torch stubs, so no

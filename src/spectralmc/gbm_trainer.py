@@ -1,3 +1,4 @@
+# src/spectralmc/gbm_trainer.py
 from __future__ import annotations
 
 """
