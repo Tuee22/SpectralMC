@@ -1,22 +1,36 @@
 # src/spectralmc/gbm_trainer.py
+"""Training infrastructure for learning discounted Black‑Scholes pay‑off
+spectra with a complex‑valued neural network (CVNN).
+
+The trainer
+
+* drives Monte‑Carlo pricing of options entirely on **CUDA**,
+* performs an FFT of the simulated pay‑off distribution,
+* feeds the complex spectrum into a **PyTorch** CVNN,
+* back‑propagates mean‑squared error against the true spectrum, and
+* logs/serialises everything deterministically.
+
+Networks are supplied externally; they must merely satisfy the
+:class:`ComplexValuedModel` protocol.  A convenient way to create such a
+model is :pyfunc:`spectralmc.cvnn_factory.build_model`.
+"""
+
 from __future__ import annotations
-
-"""
-GPU trainer that learns the discrete Fourier transform (DFT) of discounted
-Black-Scholes pay-off distributions with a complex-valued neural network
-(**CVNN**) entirely on CUDA.
-
-Highlights:
-    - CUDA-only training
-    - Dedicated CUDA streams for FFT and autograd
-    - Pluggable per-step logging (e.g. TensorBoard)
-    - Deterministic snapshot/restore of state including optimizer buffers
-"""
 
 import math
 import time
 import warnings
-from typing import Callable, Dict, List, Mapping, Optional, Tuple, TypeAlias
+from typing import (
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    runtime_checkable,
+)
 
 import cupy as cp
 from cupy.cuda import Stream as CuPyStream
@@ -26,37 +40,83 @@ import torch.optim as optim
 from pydantic import BaseModel, ConfigDict
 from torch.utils.tensorboard import SummaryWriter
 
-from spectralmc.cvnn import CVNN
 from spectralmc.gbm import BlackScholes, BlackScholesConfig
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.sobol_sampler import BoundSpec, SobolSampler
 
-StepLogger: TypeAlias = Callable[["StepMetrics"], None]
+__all__: Tuple[str, ...] = (
+    "GbmTrainerConfig",
+    "StepMetrics",
+    "TensorBoardLogger",
+    "GbmTrainer",
+)
+
+
+# =============================================================================
+#  Typing helpers
+# =============================================================================
+
+
+@runtime_checkable
+class ComplexValuedModel(Protocol):
+    """Callable *complex* network: ``(real, imag) -> (real, imag)``."""
+
+    # forward pass ---------------------------------------------------------
+    def __call__(
+        self, __real: torch.Tensor, __imag: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]: ...
+
+    # subset of nn.Module API used by the trainer -------------------------
+    def parameters(self) -> Iterable[nn.Parameter]: ...
+    def named_parameters(self) -> Iterable[Tuple[str, nn.Parameter]]: ...
+    def to(self, device: torch.device, dtype: torch.dtype) -> nn.Module: ...
+    def train(self, mode: bool = True) -> None: ...
+    def eval(self) -> None: ...
+
+
+# =============================================================================
+#  Public configuration / metric dataclasses
+# =============================================================================
+
+
+StepLogger = Callable[["StepMetrics"], None]
+"""Hook executed after every optimiser step."""
 
 
 class GbmTrainerConfig(BaseModel):
+    """Frozen state for snapshot/restore of :class:`GbmTrainer`."""
+
     cfg: BlackScholesConfig
     domain_bounds: Dict[str, BoundSpec]
-    cvnn: CVNN
+    cvnn: ComplexValuedModel
     optimizer_state: Optional[AdamOptimizerState] = None
     global_step: int = 0
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
 
 class StepMetrics(BaseModel):
+    """Scalar diagnostics emitted after one optimisation step."""
+
     step: int
     batch_time: float
     loss: float
     grad_norm: float
     lr: float
     optimizer: optim.Optimizer
-    model: CVNN
+    model: ComplexValuedModel
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
+
+# =============================================================================
+#  Logging helpers
+# =============================================================================
 
 
 class TensorBoardLogger:
+    """Log :class:`StepMetrics` to TensorBoard."""
+
     def __init__(
         self,
         *,
@@ -68,7 +128,8 @@ class TensorBoardLogger:
         self._hist_every = max(1, hist_every)
         self._flush_every = max(1, flush_every)
 
-    def __call__(self, metrics: StepMetrics) -> None:
+    def __call__(self, metrics: StepMetrics) -> None:  # noqa: D401
+        """Write one step of metrics."""
         w = self._writer
         step = metrics.step
 
@@ -87,15 +148,26 @@ class TensorBoardLogger:
             w.flush()
 
     def close(self) -> None:
+        """Close the underlying writer."""
         self._writer.close()
+
+
+# =============================================================================
+#  Trainer
+# =============================================================================
 
 
 class GbmTrainer:
     """Coordinates MC pricing, FFT and CVNN optimisation."""
 
+    # ------------------------------------------------------------------ #
+    # Construction / checkpoint                                          #
+    # ------------------------------------------------------------------ #
+
     def __init__(self, cfg: GbmTrainerConfig) -> None:
+        """Instantiate from an immutable configuration."""
         self._sim_params = cfg.cfg.sim_params
-        self._cvnn = cfg.cvnn
+        self._cvnn: ComplexValuedModel = cfg.cvnn
         self._domain_bounds = cfg.domain_bounds
         self._optimizer_state = cfg.optimizer_state
         self._global_step = cfg.global_step
@@ -105,11 +177,12 @@ class GbmTrainer:
             torch.float32 if self._sim_params.dtype == "float32" else torch.float64
         )
         self._cvnn.to(self._device, self._torch_rdtype)
-        self._cp_cdtype = (
-            cp.complex64 if self._sim_params.dtype == "float32" else cp.complex128
-        )
+
         self._torch_cdtype = (
             torch.complex64 if self._sim_params.dtype == "float32" else torch.complex128
+        )
+        self._cupy_cdtype = (
+            cp.complex64 if self._sim_params.dtype == "float32" else cp.complex128
         )
 
         self._torch_stream: Optional[torch.cuda.Stream] = (
@@ -130,10 +203,15 @@ class GbmTrainer:
             seed=self._sim_params.mc_seed,
         )
 
+    # ------------------------------------------------------------------ #
+    # Public checkpoint interface                                        #
+    # ------------------------------------------------------------------ #
+
     def snapshot(self) -> GbmTrainerConfig:
-        assert (
-            self._device.type == "cuda" and self._mc_engine is not None
-        ), "Error: can only snapshot from cuda device"
+        """Return an *immutable* copy of all trainer state."""
+        if self._device.type != "cuda" or self._mc_engine is None:
+            raise RuntimeError("Snapshots can only be taken on CUDA.")
+
         return GbmTrainerConfig(
             cfg=self._mc_engine.snapshot(),
             domain_bounds=self._domain_bounds,
@@ -142,10 +220,15 @@ class GbmTrainer:
             global_step=self._global_step,
         )
 
+    # ------------------------------------------------------------------ #
+    # Internal helpers                                                   #
+    # ------------------------------------------------------------------ #
+
     def _simulate_fft(self, contract: BlackScholes.Inputs) -> cp.ndarray:
-        assert (
-            self._device.type == "cuda" and self._mc_engine is not None
-        ), "Error: can only simulate on cuda device"
+        """MC‑simulate one contract and return the mean FFT."""
+        if self._device.type != "cuda" or self._mc_engine is None:
+            raise RuntimeError("Simulation requires CUDA.")
+
         prices = self._mc_engine.price(inputs=contract).put_price
         price_mat = prices.reshape(
             self._sim_params.batches_per_mc_run, self._sim_params.network_size
@@ -159,10 +242,11 @@ class GbmTrainer:
         targets: torch.Tensor,
         optimizer: optim.Optimizer,
     ) -> Tuple[torch.Tensor, float]:
+        """One forward/backward/optimiser step."""
         pred_r, pred_i = self._cvnn(real_in, imag_in)
-        loss = nn.functional.mse_loss(pred_r, targets.real) + nn.functional.mse_loss(
-            pred_i, targets.imag
-        )
+        loss = nn.functional.mse_loss(
+            pred_r, torch.real(targets)
+        ) + nn.functional.mse_loss(pred_i, torch.imag(targets))
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
@@ -170,6 +254,10 @@ class GbmTrainer:
             torch.nn.utils.clip_grad_norm_(self._cvnn.parameters(), float("inf"))
         )
         return loss, grad_norm
+
+    # ------------------------------------------------------------------ #
+    # Public API                                                         #
+    # ------------------------------------------------------------------ #
 
     def train(
         self,
@@ -179,8 +267,9 @@ class GbmTrainer:
         learning_rate: float,
         logger: Optional[StepLogger] = None,
     ) -> None:
+        """Run *num_batches* optimisation steps."""
         if self._device.type != "cuda":
-            raise RuntimeError("Training requires a CUDA-capable GPU.")
+            raise RuntimeError("Training requires a CUDA‑capable GPU.")
 
         adam = optim.Adam(self._cvnn.parameters(), lr=learning_rate)
         if self._optimizer_state is not None:
@@ -190,16 +279,19 @@ class GbmTrainer:
 
         for _ in range(num_batches):
             tic = time.perf_counter()
-            sobol_inputs = self._sampler.sample(batch_size)
 
-            assert self._cupy_stream is not None
+            # ---------------- Monte‑Carlo & FFT (CuPy) ----------------
+            sobol_inputs = self._sampler.sample(batch_size)
+            assert self._cupy_stream is not None  # mypy
             with self._cupy_stream:
                 fft_buf = cp.asarray(
-                    [self._simulate_fft(contract) for contract in sobol_inputs]
+                    [self._simulate_fft(contract) for contract in sobol_inputs],
+                    dtype=self._cupy_cdtype,
                 )
             self._cupy_stream.synchronize()
 
-            assert self._torch_stream is not None
+            # ---------------- CVNN forward/backward (Torch) ----------
+            assert self._torch_stream is not None  # mypy
             with torch.cuda.stream(self._torch_stream):
                 targets = (
                     torch.utils.dlpack.from_dlpack(fft_buf.toDlpack())
@@ -212,6 +304,7 @@ class GbmTrainer:
                 loss, grad_norm_val = self._torch_step(real_in, imag_in, targets, adam)
             self._torch_stream.synchronize()
 
+            # ---------------- Logging --------------------------------
             batch_time = time.perf_counter() - tic
             if logger is not None:
                 logger(
@@ -225,13 +318,19 @@ class GbmTrainer:
                         model=self._cvnn,
                     )
                 )
+
             self._global_step += 1
 
         self._optimizer_state = AdamOptimizerState.from_torch(adam)
 
+    # ------------------------------------------------------------------ #
+    # Inference                                                          #
+    # ------------------------------------------------------------------ #
+
     def predict_price(
-        self, inputs: List[BlackScholes.Inputs]
+        self, inputs: Sequence[BlackScholes.Inputs]
     ) -> List[BlackScholes.HostPricingResults]:
+        """Vectorised pricing of plain‑vanilla European options."""
         if not inputs:
             return []
 
@@ -247,7 +346,7 @@ class GbmTrainer:
                 pred_r, pred_i = self._cvnn(real_in, imag_in)
             self._torch_stream.synchronize()
 
-        spectrum = torch.complex(pred_r, pred_i)
+        spectrum = torch.view_as_complex(torch.stack((pred_r, pred_i), dim=-1))
         avg_ifft = torch.fft.ifft(spectrum, dim=1).mean(dim=1)
 
         results: List[BlackScholes.HostPricingResults] = []
@@ -259,12 +358,14 @@ class GbmTrainer:
                     f"IFFT imaginary component {imag_val:.3e} exceeds tolerance.",
                     RuntimeWarning,
                 )
+
             put_price = real_val
             discount = math.exp(-contract.r * contract.T)
             forward = contract.X0 * math.exp((contract.r - contract.d) * contract.T)
             intrinsic_put = discount * max(contract.K - forward, 0.0)
             intrinsic_call = discount * max(forward - contract.K, 0.0)
             call_price = put_price + forward - contract.K * discount
+
             results.append(
                 BlackScholes.HostPricingResults(
                     put_price_intrinsic=intrinsic_put,
@@ -280,9 +381,15 @@ class GbmTrainer:
         return results
 
 
+# =============================================================================
+#  Pure helpers
+# =============================================================================
+
+
 def _split_inputs(
-    inputs: List[BlackScholes.Inputs], *, dtype: torch.dtype, device: torch.device
+    inputs: Sequence[BlackScholes.Inputs], *, dtype: torch.dtype, device: torch.device
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Convert Pydantic inputs into (real, imag) tensors."""
     fields = list(BlackScholes.Inputs.model_fields.keys())
     rows = [[float(getattr(inp, f)) for f in fields] for inp in inputs]
     real = torch.tensor(rows, dtype=dtype, device=device)

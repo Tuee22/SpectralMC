@@ -2,7 +2,7 @@
 Strict, project‑specific stub for the **top‑level** :pymod:`torch` namespace.
 
 Only the public surface exercised by SpectralMC is declared.  The stub must
-remain *type‑pure*: no ``Any``, no ``cast``, no ``type: ignore``.
+remain *type‑pure*: **no** ``Any``, **no** ``cast``, **no** ``type: ignore``.
 """
 
 from __future__ import annotations
@@ -214,6 +214,11 @@ def allclose(
 def isfinite(a: Tensor) -> Tensor: ...
 def manual_seed(seed: int) -> None: ...
 def equal(a: Tensor, b: Tensor, /) -> bool: ...
+
+# --- complex‑number helpers used in gbm_trainer ----------------------------
+def real(a: Tensor) -> Tensor: ...
+def imag(a: Tensor) -> Tensor: ...
+def view_as_complex(a: Tensor) -> Tensor: ...
 
 abs = Tensor.abs  # make ``torch.abs`` available
 

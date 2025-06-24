@@ -1,72 +1,78 @@
-from __future__ import annotations
+# tests/test_gbm_trainer.py
+"""Determinism & serialisation tests for :pymod:`spectralmc.gbm_trainer`.
 
-"""Reproducibility and serialization tests for :class:`spectralmc.gbm_trainer.GbmTrainer`.
+The suite exercises
 
-Checks
-------
-1. Deterministic model construction
-2. Lock-step training determinism
-3. Snapshot / restore determinism
-4. Snapshot without optimiser (acceptable drift)
-5. Demonstration of reduction-order instability
-6. Loss-less optimiser JSON ⇄ torch round-trip
+1. deterministic model construction;
+2. lock‑step training determinism;
+3. snapshot/restore reproducibility;
+4. restart from a snapshot *without* optimiser state;
+5. round‑trip JSON ↔ optimiser state; and
+6. an end‑to‑end smoke test for :pyfunc:`GbmTrainer.predict_price`.
 """
 
-from typing import Dict, Literal, Tuple, TypeGuard
+from __future__ import annotations
 
 import copy
 import math
+from typing import Dict, Literal, Sequence, Tuple
 
-import numpy as np
-import numpy.typing as npt
 import pytest
 import torch
 from torch import Tensor
 
-from spectralmc.cvnn import CVNN
+from spectralmc.cvnn_factory import (
+    ActivationCfg,
+    ActivationKind,
+    CVNNConfig,
+    LinearCfg,
+    build_model,
+)
 from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
-from spectralmc.gbm_trainer import GbmTrainer, GbmTrainerConfig
+from spectralmc.gbm_trainer import ComplexValuedModel, GbmTrainer, GbmTrainerConfig
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.sobol_sampler import BoundSpec
 
 # --------------------------------------------------------------------------- #
-# Configuration & simple helpers                                              #
+# Configuration                                                               #
 # --------------------------------------------------------------------------- #
 
 Precision = Literal["float32", "float64"]
 PRECISIONS: Tuple[Precision, Precision] = ("float32", "float64")
-
 LEARNING_RATE: float = 1.0e-2
 
 
-def _clone_model(model: CVNN) -> CVNN:
-    """Return a deep copy of *model* on the same device / dtype."""
-    dup = copy.deepcopy(model)
-    param = next(model.parameters())
-    return dup.to(param.device, param.dtype)
+# --------------------------------------------------------------------------- #
+# Local helpers                                                               #
+# --------------------------------------------------------------------------- #
 
 
-def _max_param_diff(a: CVNN, b: CVNN) -> float:
-    """Largest absolute element-wise difference across all parameters."""
+def _clone_model(model: ComplexValuedModel) -> ComplexValuedModel:
+    """Deep‑copy *model* onto the same device and dtype."""
+    duplicate = copy.deepcopy(model)
+    first_param = next(iter(model.parameters()))
+    duplicate.to(first_param.device, first_param.dtype)
+    return duplicate
+
+
+def _max_param_diff(a: ComplexValuedModel, b: ComplexValuedModel) -> float:
+    """Return the L∞‑norm of the parameter difference."""
     return max(
         (
-            float(torch.max(torch.abs(pa - pb)))
-            for pa, pb in zip(a.parameters(), b.parameters())
+            float(torch.abs(param_a - param_b).max().item())
+            for param_a, param_b in zip(a.parameters(), b.parameters())
         ),
         default=0.0,
     )
 
 
 def _tree_equal(x: object, y: object) -> bool:  # noqa: D401
-    """Deep equality for nested containers that may contain tensors."""
+    """Deep structural equality for (potentially nested) containers."""
     if isinstance(x, Tensor) and isinstance(y, Tensor):
         return bool(torch.equal(x, y))
 
     if isinstance(x, dict) and isinstance(y, dict):
-        return (
-            all(k in y and _tree_equal(v, y[k]) for k, v in x.items())
-            and x.keys() == y.keys()
-        )
+        return x.keys() == y.keys() and all(_tree_equal(v, y[k]) for k, v in x.items())
 
     if isinstance(x, (list, tuple)) and isinstance(y, (list, tuple)):
         return len(x) == len(y) and all(_tree_equal(a, b) for a, b in zip(x, y))
@@ -74,8 +80,25 @@ def _tree_equal(x: object, y: object) -> bool:  # noqa: D401
     return bool(x == y)
 
 
+def _make_cvnn(
+    n_inputs: int, n_outputs: int, *, seed: int, hidden: int = 32
+) -> ComplexValuedModel:
+    """Create a small CVNN via :pyfunc:`spectralmc.cvnn_factory.build_model`."""
+    cfg = CVNNConfig(
+        layers=[
+            LinearCfg(
+                width=hidden,
+                activation=ActivationCfg(kind=ActivationKind.MOD_RELU),
+            ),
+            LinearCfg(width=n_outputs),
+        ],
+        seed=seed,
+    )
+    return build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg)
+
+
 def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmTrainer:
-    """Create an instance via deterministic seeding"""
+    """Deterministically construct a :class:`GbmTrainer` instance."""
     torch.manual_seed(seed)
 
     sim = SimulationParams(
@@ -88,11 +111,13 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmTrainer:
         buffer_size=1,
         dtype=precision,
     )
+
     cfg = BlackScholesConfig(
         sim_params=sim,
         simulate_log_return=True,
         normalize_forwards=False,
     )
+
     bounds: Dict[str, BoundSpec] = {
         "X0": BoundSpec(lower=50.0, upper=150.0),
         "K": BoundSpec(lower=50.0, upper=150.0),
@@ -102,8 +127,7 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmTrainer:
         "v": BoundSpec(lower=0.1, upper=0.5),
     }
 
-    net = CVNN(6, sim.network_size, 32, 1)
-
+    net = _make_cvnn(6, sim.network_size, seed=seed)
     return GbmTrainer(GbmTrainerConfig(cfg=cfg, domain_bounds=bounds, cvnn=net))
 
 
@@ -114,24 +138,25 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmTrainer:
 
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_deterministic_construction(precision: Precision) -> None:
-    a = _make_gbm_trainer(precision, seed=42)
-    b = _make_gbm_trainer(precision, seed=42)
-    assert _max_param_diff(a._cvnn, b._cvnn) == 0.0
+    first = _make_gbm_trainer(precision, seed=42)
+    second = _make_gbm_trainer(precision, seed=42)
+    assert _max_param_diff(first._cvnn, second._cvnn) == 0.0
 
 
 # --------------------------------------------------------------------------- #
-# 2. Lock-step training determinism                                           #
+# 2. Lock‑step training determinism                                           #
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_lockstep_training(precision: Precision) -> None:
-    a = _make_gbm_trainer(precision, seed=43)
-    b = _make_gbm_trainer(precision, seed=43)
+    first = _make_gbm_trainer(precision, seed=43)
+    second = _make_gbm_trainer(precision, seed=43)
+
     for batches in (2, 3, 1):
-        a.train(num_batches=batches, batch_size=8, learning_rate=LEARNING_RATE)
-        b.train(num_batches=batches, batch_size=8, learning_rate=LEARNING_RATE)
-        assert _max_param_diff(a._cvnn, b._cvnn) == 0.0
+        first.train(num_batches=batches, batch_size=8, learning_rate=LEARNING_RATE)
+        second.train(num_batches=batches, batch_size=8, learning_rate=LEARNING_RATE)
+        assert _max_param_diff(first._cvnn, second._cvnn) == 0.0
 
 
 # --------------------------------------------------------------------------- #
@@ -141,67 +166,45 @@ def test_lockstep_training(precision: Precision) -> None:
 
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_snapshot_cycle_deterministic(precision: Precision) -> None:
-    a = _make_gbm_trainer(precision, seed=44)
-    b = _make_gbm_trainer(precision, seed=44)
-    a.train(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE)
+    original = _make_gbm_trainer(precision, seed=44)
+    clone = _make_gbm_trainer(precision, seed=44)
 
-    snap = a.snapshot()
-    snap.cvnn = _clone_model(snap.cvnn)
-    b = GbmTrainer(snap)
+    original.train(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE)
 
-    a.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
-    b.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
+    snapshot = original.snapshot()
+    snapshot = snapshot.model_copy(update={"cvnn": _clone_model(snapshot.cvnn)})
+    clone = GbmTrainer(snapshot)
 
-    assert _max_param_diff(a._cvnn, b._cvnn) == 0.0
+    original.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
+    clone.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
+
+    assert _max_param_diff(original._cvnn, clone._cvnn) == 0.0
 
 
 # --------------------------------------------------------------------------- #
-# 4. Snapshot without optimiser                                               #
+# 4. Snapshot restart *without* optimiser                                     #
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.parametrize("precision", PRECISIONS)
-def test_snapshot_restart(precision: Precision) -> None:
-    a = _make_gbm_trainer(precision, seed=45)
-    a.train(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE)
-
-    # create snapshot
-    snap = a.snapshot()
-
-    # create a copy
-    snap.cvnn = _clone_model(snap.cvnn)
-    b = GbmTrainer(snap)
-
-    a.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
-    b.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
-
-    assert _max_param_diff(a._cvnn, b._cvnn) == 0.0
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_snapshot_restart_without_optimizer(precision: Precision) -> None:
-    a = _make_gbm_trainer(precision, seed=45)
-    a.train(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE)
+    trainer = _make_gbm_trainer(precision, seed=45)
+    trainer.train(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE)
 
-    # create snapshot
-    snap = a.snapshot()
+    snap = trainer.snapshot().model_copy(update={"optimizer_state": None})
+    trainer._optimizer_state = None  # reset live instance as well
 
-    # remove both optimizer state
-    snap.optimizer_state = None
-    a._optimizer_state = None
+    snap = snap.model_copy(update={"cvnn": _clone_model(snap.cvnn)})
+    restarted = GbmTrainer(snap)
 
-    # create
-    snap.cvnn = _clone_model(snap.cvnn)
-    b = GbmTrainer(snap)
+    trainer.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
+    restarted.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
 
-    a.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
-    b.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
-
-    assert _max_param_diff(a._cvnn, b._cvnn) == 0.0
+    assert _max_param_diff(trainer._cvnn, restarted._cvnn) == 0.0
 
 
 # --------------------------------------------------------------------------- #
-# 5. Optimiser state round-trip                                               #
+# 5. Optimiser state round‑trip                                               #
 # --------------------------------------------------------------------------- #
 
 
@@ -231,23 +234,17 @@ def test_snapshot_optimizer_serialization_roundtrip(precision: Precision) -> Non
 
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_predict_price_smoke(precision: Precision) -> None:
-    """Ensure predict_price executes end-to-end without error."""
     trainer = _make_gbm_trainer(precision, seed=60)
-    # Optional: one tiny training step just to exercise the whole pipeline
     trainer.train(num_batches=1, batch_size=4, learning_rate=LEARNING_RATE)
 
-    contracts = [
+    contracts: Sequence[BlackScholes.Inputs] = [
         BlackScholes.Inputs(X0=100.0, K=100.0, T=1.0, r=0.05, d=0.02, v=0.20),
         BlackScholes.Inputs(X0=120.0, K=110.0, T=0.5, r=0.03, d=0.01, v=0.25),
     ]
 
     results = trainer.predict_price(contracts)
 
-    # Same number of outputs as inputs
     assert len(results) == len(contracts)
-
-    # All returned fields are finite numbers
     for res in results:
         for value in res.model_dump(mode="python").values():
-            assert isinstance(value, float)
-            assert math.isfinite(value)
+            assert isinstance(value, float) and math.isfinite(value)
