@@ -3,28 +3,14 @@
 cvnn_factory.py
 ===============
 
-Pure, expression‑oriented factory for building complex‑valued neural networks
-(CVNNs) from a nested :class:`CVNNConfig` description.
+Pure, expression‑oriented factory that materialises complex‑valued neural
+networks (**CVNNs**) from a declarative :class:`CVNNConfig`.
 
-Key features
-------------
-* **Global determinism** – CuBLAS workspace, CuDNN flags, and
-  :pyfunc:`torch.use_deterministic_algorithms` are set at *import time*.  All
-  downstream code (tests, training, inference) therefore inherits the same
-  reproducible kernel behaviour.
-* **Correct device & dtype placement** – parameters are *moved* to the
-  requested device / precision via :pymeth:`torch.nn.Module.to`.  This avoids
-  relying on undocumented context‑manager behaviour.
-* **Immutable topology** – the entire network is described by pure Pydantic
-  data‑classes, enabling round‑trippable serialisation and deterministic
-  re‑materialisation.
-* **Type hygiene** – the module is free of ``cast``, ``Any``, and
-  ``# type: ignore``, and it passes ``mypy --strict``.
-
-Public API
-~~~~~~~~~~
-* :class:`CVNNConfig`
-* :func:`build_model`
+* Uses :pyfunc:`torch.set_default_device` to create parameters **directly on
+  the target GPU** (zero copy) while falling back gracefully on older
+  runtimes.
+* Import‑time switches enforce full determinism (CuBLAS, CuDNN, Torch).
+* The entire module is mypy‑clean under ``--strict``.
 """
 
 from __future__ import annotations
@@ -50,13 +36,9 @@ from spectralmc.cvnn import (
 
 __all__: Tuple[str, ...] = ("CVNNConfig", "build_model")
 
-# =============================================================================
-#  Global *once‑only* reproducibility settings
-# =============================================================================
-
+# ────────────────────────── reproducibility at import ──────────────────────
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
 torch.use_deterministic_algorithms(True, warn_only=False)
-
 if hasattr(torch.backends, "cudnn"):
     torch.backends.cudnn.deterministic = True  # noqa: PGH003
     torch.backends.cudnn.benchmark = False  # noqa: PGH003
@@ -67,7 +49,7 @@ if hasattr(torch.backends, "cudnn"):
 
 
 class ActivationKind(str, Enum):
-    """Kinds of complex‑domain activation supported by this factory."""
+    """Kinds of complex‑domain activation supported by the factory."""
 
     Z_RELU = "zReLU"
     MOD_RELU = "modReLU"
@@ -84,70 +66,66 @@ class LayerKind(str, Enum):
 
 
 # =============================================================================
-#  Helper combinators (internal use only)
+#  Internal helpers
 # =============================================================================
 
 
-def _make_activation(kind: ActivationKind, width: int) -> nn.Module:  # noqa: D401
-    """Return a freshly constructed activation module for *kind*."""
+def _make_activation(kind: ActivationKind, width: int) -> nn.Module:
     return zReLU() if kind is ActivationKind.Z_RELU else modReLU(width)
 
 
-def _seq(*mods: nn.Module) -> nn.Module:  # noqa: D401
-    """Return *mods* unchanged or wrapped in :class:`ComplexSequential`."""
+def _seq(*mods: nn.Module) -> nn.Module:
     return mods[0] if len(mods) == 1 else ComplexSequential(*mods)
 
 
 def _maybe_activate(
-    module: nn.Module,
-    act: Optional["ActivationCfg"],
-    width: int,
+    module: nn.Module, act: Optional["ActivationCfg"], width: int
 ) -> nn.Module:
-    """Append an activation to *module* when *act* is provided."""
     return _seq(module, _make_activation(act.kind, width)) if act else module
 
 
-def _maybe_project(
-    module: nn.Module,
-    in_w: int,
-    out_w: int,
-) -> Tuple[nn.Module, int]:
-    """Optionally insert a projection layer so input/output widths match."""
-    if in_w == out_w:
-        return module, in_w
-    return _seq(module, ComplexLinear(in_w, out_w)), out_w
-
-
-# =============================================================================
-#  Scoped default‑dtype helper
-# =============================================================================
+def _maybe_project(module: nn.Module, in_w: int, out_w: int) -> Tuple[nn.Module, int]:
+    return (
+        (module, in_w)
+        if in_w == out_w
+        else (_seq(module, ComplexLinear(in_w, out_w)), out_w)
+    )
 
 
 @contextmanager
 def _default_dtype(dtype: torch.dtype) -> Iterator[None]:
-    """Temporarily set the global default dtype for tensor construction."""
-    previous = torch.get_default_dtype()
+    prev = torch.get_default_dtype()
     torch.set_default_dtype(dtype)
     try:
         yield
     finally:
-        torch.set_default_dtype(previous)
+        torch.set_default_dtype(prev)
+
+
+@contextmanager
+def _default_device(device: torch.device) -> Iterator[None]:
+    """Temporarily route *all* new tensors to *device* (if API available)."""
+    if hasattr(torch, "set_default_device"):
+        prev_dev = torch.tensor([], device="cpu").device  # current default
+        torch.set_default_device(str(device))
+        try:
+            yield
+        finally:
+            torch.set_default_device(str(prev_dev))
+    else:  # older PyTorch – build on CPU, move once at the end
+        yield
 
 
 # =============================================================================
-#  Pydantic configs – pure data (no behaviour)
+#  Pydantic configs – pure data
 # =============================================================================
 
 
 class ActivationCfg(BaseModel):
-    """Config for a complex activation layer."""
-
     kind: ActivationKind
 
 
 class LinearCfg(BaseModel):
-    """Config for :class:`~spectralmc.cvnn.ComplexLinear`."""
-
     kind: LayerKind = LayerKind.LINEAR
     width: Optional[int] = None
     bias: bool = True
@@ -155,8 +133,6 @@ class LinearCfg(BaseModel):
 
 
 class NaiveBNCfg(BaseModel):
-    """Config for :class:`~spectralmc.cvnn.NaiveComplexBatchNorm`."""
-
     kind: LayerKind = LayerKind.BN_NAIVE
     eps: float = 1e-5
     momentum: float = 0.1
@@ -166,8 +142,6 @@ class NaiveBNCfg(BaseModel):
 
 
 class CovBNCfg(BaseModel):
-    """Config for :class:`~spectralmc.cvnn.CovarianceComplexBatchNorm`."""
-
     kind: LayerKind = LayerKind.BN_COV
     eps: float = 1e-5
     momentum: float = 0.1
@@ -182,16 +156,12 @@ LayerCfg: TypeAlias = Union[
 
 
 class SequentialCfg(BaseModel):
-    """Config for an ordered container of *layers*."""
-
     kind: LayerKind = LayerKind.SEQ
     layers: List[LayerCfg]
     activation: Optional[ActivationCfg] = None
 
 
 class ResidualCfg(BaseModel):
-    """Config for a skip‑connection *Residual* block."""
-
     kind: LayerKind = LayerKind.RES
     body: SequentialCfg
     projection: Optional[LinearCfg] = None
@@ -199,17 +169,14 @@ class ResidualCfg(BaseModel):
 
 
 class CVNNConfig(BaseModel):
-    """Top‑level network specification consumed by :func:`build_model`."""
+    """Network topology – pure data, no behaviour."""
 
     layers: List[LayerCfg]
     seed: PositiveInt
     final_activation: Optional[ActivationCfg] = None
 
-    # ---------- value‑based equality so tests can rely on `==` ------------
     def __eq__(self, other: object) -> bool:  # noqa: D401
-        if not isinstance(other, CVNNConfig):
-            return NotImplemented
-        return self.model_dump() == other.model_dump()
+        return isinstance(other, CVNNConfig) and self.model_dump() == other.model_dump()
 
 
 # =============================================================================
@@ -218,18 +185,18 @@ class CVNNConfig(BaseModel):
 
 
 def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
-    """Recursively translate *cfg* into an :class:`torch.nn.Module`."""
+    """Recursively convert *cfg* into an :class:`nn.Module`."""
     match cfg:
-        # ── ComplexLinear ─────────────────────────────────────────────────
+        # ── ComplexLinear ────────────────────────────────────────────────
         case LinearCfg() as c:
             out_w = c.width or cur_w
-            lin = ComplexLinear(cur_w, out_w, bias=c.bias)
-            return _maybe_activate(lin, c.activation, out_w), out_w
+            layer = ComplexLinear(cur_w, out_w, bias=c.bias)
+            return _maybe_activate(layer, c.activation, out_w), out_w
 
-        # ── Naive complex BN ──────────────────────────────────────────────
+        # ── Naive BN ─────────────────────────────────────────────────────
         case NaiveBNCfg() as c:
             nbn = NaiveComplexBatchNorm(
-                num_features=cur_w,
+                cur_w,
                 eps=c.eps,
                 momentum=c.momentum,
                 affine=c.affine,
@@ -237,10 +204,10 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
             )
             return _maybe_activate(nbn, c.activation, cur_w), cur_w
 
-        # ── Covariance complex BN ─────────────────────────────────────────
+        # ── Covariance BN ───────────────────────────────────────────────
         case CovBNCfg() as c:
             cbn = CovarianceComplexBatchNorm(
-                num_features=cur_w,
+                cur_w,
                 eps=c.eps,
                 momentum=c.momentum,
                 affine=c.affine,
@@ -248,7 +215,7 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
             )
             return _maybe_activate(cbn, c.activation, cur_w), cur_w
 
-        # ── Sequential container ─────────────────────────────────────────
+        # ── Sequential container ────────────────────────────────────────
         case SequentialCfg() as c:
 
             def _fold(lst: List[LayerCfg], w_in: int) -> Tuple[List[nn.Module], int]:
@@ -263,10 +230,9 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
             seq = _seq(*mods)
             return _maybe_activate(seq, c.activation, width), width
 
-        # ── Residual block ───────────────────────────────────────────────
+        # ── Residual block ──────────────────────────────────────────────
         case ResidualCfg() as c:
             body_mod, body_w = _build_from_cfg(c.body, cur_w)
-
             proj_mod, proj_w = (
                 _build_from_cfg(c.projection, cur_w)
                 if c.projection is not None
@@ -276,9 +242,7 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
                     else (ComplexLinear(cur_w, body_w), body_w)
                 )
             )
-
             assert proj_w == body_w, "Projection width mismatch in Residual block"
-
             res = ComplexResidual(
                 body=body_mod,
                 proj=proj_mod,
@@ -290,7 +254,7 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
             )
             return res, body_w
 
-    raise RuntimeError(f"Unhandled layer config type: {type(cfg).__name__}")
+    raise RuntimeError(f"Unhandled cfg node: {type(cfg).__name__}")
 
 
 # =============================================================================
@@ -306,20 +270,20 @@ def build_model(
     device: Union[str, torch.device, None] = None,
     dtype: Optional[torch.dtype] = None,
 ) -> nn.Module:
-    """Materialise a CVNN from *cfg* on the requested device and dtype."""
+    """Materialise a CVNN described by *cfg* on the requested device / dtype."""
     torch.manual_seed(cfg.seed)
 
-    def _materialise() -> nn.Module:
+    tgt_device = torch.device(device) if device is not None else torch.device("cpu")
+    tgt_dtype = dtype or torch.get_default_dtype()
+
+    # Build under controlled default dtype & device so tensors spawn correctly.
+    with _default_dtype(tgt_dtype), _default_device(tgt_device):
         body, w = _build_from_cfg(SequentialCfg(layers=cfg.layers), n_inputs)
         body, w = _maybe_project(body, w, n_outputs)
-        return _maybe_activate(body, cfg.final_activation, w)
+        net = _maybe_activate(body, cfg.final_activation, w)
 
-    # Build first, then move *everything* atomically – this guarantees that
-    # running buffers (e.g. BN statistics) ride along with parameters.
-    with _default_dtype(dtype) if dtype is not None else nullcontext():
-        net = _materialise()
-
-    if device is not None or dtype is not None:
-        net = net.to(device=device, dtype=dtype)
+    # Fallback copy if set_default_device was unavailable.
+    if any(p.device != tgt_device for p in net.parameters()):
+        net = net.to(device=tgt_device, dtype=tgt_dtype)
 
     return net
