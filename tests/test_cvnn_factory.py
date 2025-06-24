@@ -113,10 +113,6 @@ def _single_train_step(
     dtype: torch.dtype,
 ) -> Dict[str, Tensor]:
     """Materialise → forward → backward → optimiser step → return state‐dict."""
-    # Ensure determinism from the very first kernel launch.
-    torch.use_deterministic_algorithms(True)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
     # Build model directly on CUDA with the requested precision.
     model: nn.Module = build_model(
