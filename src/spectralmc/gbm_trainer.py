@@ -1,18 +1,25 @@
 # src/spectralmc/gbm_trainer.py
-"""Training infrastructure for learning discounted Black‑Scholes pay‑off
-spectra with a complex‑valued neural network (CVNN).
+"""Training infrastructure for learning discounted Black-Scholes pay-off
+spectra with a complex-valued neural network (CVNN).
 
 The trainer
 
-* drives Monte‑Carlo pricing of options entirely on **CUDA**,
-* performs an FFT of the simulated pay‑off distribution,
+* drives Monte-Carlo pricing of options entirely on **CUDA**,
+* performs an FFT of the simulated pay-off distribution,
 * feeds the complex spectrum into a **PyTorch** CVNN,
-* back‑propagates mean‑squared error against the true spectrum, and
+* back-propagates mean-squared error against the true spectrum, and
 * logs/serialises everything deterministically.
 
 Networks are supplied externally; they must merely satisfy the
 :class:`ComplexValuedModel` protocol.  A convenient way to create such a
 model is :pyfunc:`spectralmc.cvnn_factory.build_model`.
+
+Note
+----
+Unlike the original implementation, the trainer now **asserts** that the
+supplied model is *already* on the expected ``device``/**real** ``dtype``.
+This is done via :pyfunc:`assert_param_attr`, a single-expression helper that
+passes ``mypy --strict`` while avoiding imperative statements.
 """
 
 from __future__ import annotations
@@ -29,6 +36,7 @@ from typing import (
     Protocol,
     Sequence,
     Tuple,
+    TypeVar,
     runtime_checkable,
 )
 
@@ -50,7 +58,6 @@ __all__: Tuple[str, ...] = (
     "TensorBoardLogger",
     "GbmTrainer",
 )
-
 
 # =============================================================================
 #  Typing helpers
@@ -75,9 +82,43 @@ class ComplexValuedModel(Protocol):
 
 
 # =============================================================================
-#  Public configuration / metric dataclasses
+#  Generic assertion helper (expression-only)
 # =============================================================================
 
+_T = TypeVar("_T")
+
+
+def assert_param_attr(
+    model: ComplexValuedModel,
+    *,
+    attr: str,
+    expected: _T,
+) -> None:
+    """Fail fast if **any** parameter's ``attr`` ≠ ``expected``.
+
+    Implemented without statements—only expressions—so it satisfies the
+    user's style constraint and ``mypy --strict`` type-checks.
+    """
+    (
+        lambda mismatches: mismatches
+        and (_ for _ in ()).throw(  # expression-style raise
+            RuntimeError(
+                f"Model parameters violate required {attr}:\n  "
+                + "\n  ".join(mismatches)
+            )
+        )
+    )(
+        [
+            f"{name}: {attr}={getattr(p, attr)} (expected {expected})"
+            for name, p in model.named_parameters()
+            if getattr(p, attr) != expected
+        ]
+    )
+
+
+# =============================================================================
+#  Public configuration / metric dataclasses
+# =============================================================================
 
 StepLogger = Callable[["StepMetrics"], None]
 """Hook executed after every optimiser step."""
@@ -103,7 +144,7 @@ class StepMetrics(BaseModel):
     loss: float
     grad_norm: float
     lr: float
-    optimizer: optim.Optimizer
+    optimizer: optim.Adam
     model: ComplexValuedModel
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
@@ -176,7 +217,10 @@ class GbmTrainer:
         self._torch_rdtype = (
             torch.float32 if self._sim_params.dtype == "float32" else torch.float64
         )
-        self._cvnn.to(self._device, self._torch_rdtype)
+
+        # --- assert model already configured as required ---------------
+        assert_param_attr(self._cvnn, attr="device", expected=self._device)
+        assert_param_attr(self._cvnn, attr="dtype", expected=self._torch_rdtype)
 
         self._torch_cdtype = (
             torch.complex64 if self._sim_params.dtype == "float32" else torch.complex128
@@ -225,7 +269,7 @@ class GbmTrainer:
     # ------------------------------------------------------------------ #
 
     def _simulate_fft(self, contract: BlackScholes.Inputs) -> cp.ndarray:
-        """MC‑simulate one contract and return the mean FFT."""
+        """MC-simulate one contract and return the mean FFT."""
         if self._device.type != "cuda" or self._mc_engine is None:
             raise RuntimeError("Simulation requires CUDA.")
 
@@ -269,7 +313,7 @@ class GbmTrainer:
     ) -> None:
         """Run *num_batches* optimisation steps."""
         if self._device.type != "cuda":
-            raise RuntimeError("Training requires a CUDA‑capable GPU.")
+            raise RuntimeError("Training requires a CUDA-capable GPU.")
 
         adam = optim.Adam(self._cvnn.parameters(), lr=learning_rate)
         if self._optimizer_state is not None:
@@ -280,7 +324,7 @@ class GbmTrainer:
         for _ in range(num_batches):
             tic = time.perf_counter()
 
-            # ---------------- Monte‑Carlo & FFT (CuPy) ----------------
+            # ---------------- Monte-Carlo & FFT (CuPy) ----------------
             sobol_inputs = self._sampler.sample(batch_size)
             assert self._cupy_stream is not None  # mypy
             with self._cupy_stream:
@@ -330,7 +374,7 @@ class GbmTrainer:
     def predict_price(
         self, inputs: Sequence[BlackScholes.Inputs]
     ) -> List[BlackScholes.HostPricingResults]:
-        """Vectorised pricing of plain‑vanilla European options."""
+        """Vectorised pricing of plain-vanilla European options."""
         if not inputs:
             return []
 
