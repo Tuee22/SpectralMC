@@ -16,10 +16,12 @@ model is :pyfunc:`spectralmc.cvnn_factory.build_model`.
 
 Note
 ----
-Unlike the original implementation, the trainer now **asserts** that the
-supplied model is *already* on the expected ``device``/**real** ``dtype``.
-This is done via :pyfunc:`assert_param_attr`, a single-expression helper that
-passes ``mypy --strict`` while avoiding imperative statements.
+Compared with the original implementation, the trainer now **infers**
+its execution device **from the model itself** (via the first
+parameter’s ``.device``) instead of using
+``torch.device("cuda" if torch.cuda.is_available() else "cpu")``.  As
+before, the trainer **asserts** that the supplied model is *already* on
+the expected ``device``/**real** ``dtype``; see :pyfunc:`assert_param_attr`.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from typing import (
     Callable,
     Dict,
     Iterable,
+    Iterator,
     List,
     Optional,
     Protocol,
@@ -53,10 +56,10 @@ from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.sobol_sampler import BoundSpec, SobolSampler
 
 __all__: Tuple[str, ...] = (
-    "GbmTrainerConfig",
+    "GbmCVNNPricerConfig",
     "StepMetrics",
     "TensorBoardLogger",
-    "GbmTrainer",
+    "GbmCVNNPricer",
 )
 
 # =============================================================================
@@ -94,19 +97,16 @@ def assert_param_attr(
     attr: str,
     expected: _T,
 ) -> None:
-    """Fail fast if **any** parameter's ``attr`` ≠ ``expected``.
-
-    Implemented without statements—only expressions—so it satisfies the
-    user's style constraint and ``mypy --strict`` type-checks.
-    """
+    """Fail fast if **any** parameter’s ``attr`` ≠ ``expected``."""
     (
         lambda mismatches: mismatches
-        and (_ for _ in ()).throw(  # expression-style raise
+        and (_ for _ in ()).throw(
             RuntimeError(
                 f"Model parameters violate required {attr}:\n  "
                 + "\n  ".join(mismatches)
             )
         )
+        # nb : (_ for _ in ()) just gives us an empty iterator so we can .throw() as an expression
     )(
         [
             f"{name}: {attr}={getattr(p, attr)} (expected {expected})"
@@ -124,8 +124,8 @@ StepLogger = Callable[["StepMetrics"], None]
 """Hook executed after every optimiser step."""
 
 
-class GbmTrainerConfig(BaseModel):
-    """Frozen state for snapshot/restore of :class:`GbmTrainer`."""
+class GbmCVNNPricerConfig(BaseModel):
+    """Frozen state for snapshot/restore of :class:`GbmCVNNPricer`."""
 
     cfg: BlackScholesConfig
     domain_bounds: Dict[str, BoundSpec]
@@ -170,7 +170,7 @@ class TensorBoardLogger:
         self._flush_every = max(1, flush_every)
 
     def __call__(self, metrics: StepMetrics) -> None:  # noqa: D401
-        """Write one step of metrics."""
+        """Write one step of metrics to TensorBoard."""
         w = self._writer
         step = metrics.step
 
@@ -189,7 +189,7 @@ class TensorBoardLogger:
             w.flush()
 
     def close(self) -> None:
-        """Close the underlying writer."""
+        """Close the underlying SummaryWriter."""
         self._writer.close()
 
 
@@ -198,14 +198,14 @@ class TensorBoardLogger:
 # =============================================================================
 
 
-class GbmTrainer:
+class GbmCVNNPricer:
     """Coordinates MC pricing, FFT and CVNN optimisation."""
 
     # ------------------------------------------------------------------ #
     # Construction / checkpoint                                          #
     # ------------------------------------------------------------------ #
 
-    def __init__(self, cfg: GbmTrainerConfig) -> None:
+    def __init__(self, cfg: GbmCVNNPricerConfig) -> None:
         """Instantiate from an immutable configuration."""
         self._sim_params = cfg.cfg.sim_params
         self._cvnn: ComplexValuedModel = cfg.cvnn
@@ -213,15 +213,33 @@ class GbmTrainer:
         self._optimizer_state = cfg.optimizer_state
         self._global_step = cfg.global_step
 
-        self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # -----------------------------------------------------------------
+        # Device handling
+        # -----------------------------------------------------------------
+        param_iter: Iterator[nn.Parameter] = iter(self._cvnn.parameters())
+        try:
+            first_param = next(param_iter)
+        except StopIteration as exc:  # pragma: no cover
+            raise RuntimeError("Model has no parameters; cannot infer device.") from exc
+
+        self._device = first_param.device  # torch.device
+
+        # ensure every parameter is on this device
+        assert_param_attr(self._cvnn, attr="device", expected=self._device)
+
+        # -----------------------------------------------------------------
+        # dtype handling
+        # -----------------------------------------------------------------
         self._torch_rdtype = (
             torch.float32 if self._sim_params.dtype == "float32" else torch.float64
         )
 
-        # --- assert model already configured as required ---------------
-        assert_param_attr(self._cvnn, attr="device", expected=self._device)
+        # --- assert model parameters all use this dtype -----------------
         assert_param_attr(self._cvnn, attr="dtype", expected=self._torch_rdtype)
 
+        # -----------------------------------------------------------------
+        # Complex dtypes & stream setup
+        # -----------------------------------------------------------------
         self._torch_cdtype = (
             torch.complex64 if self._sim_params.dtype == "float32" else torch.complex128
         )
@@ -251,12 +269,12 @@ class GbmTrainer:
     # Public checkpoint interface                                        #
     # ------------------------------------------------------------------ #
 
-    def snapshot(self) -> GbmTrainerConfig:
+    def snapshot(self) -> GbmCVNNPricerConfig:
         """Return an *immutable* copy of all trainer state."""
         if self._device.type != "cuda" or self._mc_engine is None:
             raise RuntimeError("Snapshots can only be taken on CUDA.")
 
-        return GbmTrainerConfig(
+        return GbmCVNNPricerConfig(
             cfg=self._mc_engine.snapshot(),
             domain_bounds=self._domain_bounds,
             cvnn=self._cvnn,
@@ -324,7 +342,7 @@ class GbmTrainer:
         for _ in range(num_batches):
             tic = time.perf_counter()
 
-            # ---------------- Monte-Carlo & FFT (CuPy) ----------------
+            # ---------------- Monte-Carlo & FFT (CuPy) -----------------
             sobol_inputs = self._sampler.sample(batch_size)
             assert self._cupy_stream is not None  # mypy
             with self._cupy_stream:
@@ -334,7 +352,7 @@ class GbmTrainer:
                 )
             self._cupy_stream.synchronize()
 
-            # ---------------- CVNN forward/backward (Torch) ----------
+            # ---------------- CVNN forward/backward (Torch) ------------
             assert self._torch_stream is not None  # mypy
             with torch.cuda.stream(self._torch_stream):
                 targets = (
@@ -348,7 +366,7 @@ class GbmTrainer:
                 loss, grad_norm_val = self._torch_step(real_in, imag_in, targets, adam)
             self._torch_stream.synchronize()
 
-            # ---------------- Logging --------------------------------
+            # ---------------- Logging ----------------------------------
             batch_time = time.perf_counter() - tic
             if logger is not None:
                 logger(

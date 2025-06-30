@@ -8,7 +8,7 @@ The suite exercises
 3. snapshot/restore reproducibility;
 4. restart from a snapshot *without* optimiser state;
 5. round‑trip JSON ↔ optimiser state; and
-6. an end‑to‑end smoke test for :pyfunc:`GbmTrainer.predict_price`.
+6. an end‑to‑end smoke test for :pyfunc:`GbmCVNNPricer.predict_price`.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from spectralmc.cvnn_factory import (
     build_model,
 )
 from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
-from spectralmc.gbm_trainer import ComplexValuedModel, GbmTrainer, GbmTrainerConfig
+from spectralmc.gbm_trainer import ComplexValuedModel, GbmCVNNPricer, GbmCVNNPricerConfig
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.sobol_sampler import BoundSpec
 
@@ -97,8 +97,8 @@ def _make_cvnn(
     return build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg)
 
 
-def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmTrainer:
-    """Deterministically construct a :class:`GbmTrainer` instance."""
+def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
+    """Deterministically construct a :class:`GbmCVNNPricer` instance."""
     torch.manual_seed(seed)
 
     sim = SimulationParams(
@@ -128,7 +128,7 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmTrainer:
     }
 
     net = _make_cvnn(6, sim.network_size, seed=seed)
-    return GbmTrainer(GbmTrainerConfig(cfg=cfg, domain_bounds=bounds, cvnn=net))
+    return GbmCVNNPricer(GbmCVNNPricerConfig(cfg=cfg, domain_bounds=bounds, cvnn=net))
 
 
 # --------------------------------------------------------------------------- #
@@ -173,7 +173,7 @@ def test_snapshot_cycle_deterministic(precision: Precision) -> None:
 
     snapshot = original.snapshot()
     snapshot = snapshot.model_copy(update={"cvnn": _clone_model(snapshot.cvnn)})
-    clone = GbmTrainer(snapshot)
+    clone = GbmCVNNPricer(snapshot)
 
     original.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
     clone.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
@@ -195,7 +195,7 @@ def test_snapshot_restart_without_optimizer(precision: Precision) -> None:
     trainer._optimizer_state = None  # reset live instance as well
 
     snap = snap.model_copy(update={"cvnn": _clone_model(snap.cvnn)})
-    restarted = GbmTrainer(snap)
+    restarted = GbmCVNNPricer(snap)
 
     trainer.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
     restarted.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
