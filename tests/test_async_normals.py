@@ -21,7 +21,7 @@ from pydantic import ValidationError
 # --------------------------------------------------------------------------- #
 
 
-@pytest.fixture(params=("something","something"), ids=("f32", "f64"))
+@pytest.fixture(params=("something", "something"), ids=("f32", "f64"))
 def dtype_str(request: pytest.FixtureRequest) -> DType:
     """Return the dtype literal currently under test."""
     # mypy sees the two explicit return literals, so no ignore/cast needed.

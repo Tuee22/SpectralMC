@@ -1,30 +1,29 @@
-# src/spectralmc/cvnn_factory.py
 """
-cvnn_factory.py
-===============
+spectralmc.cvnn_factory
+=======================
 
-Pure, expression‑oriented factory that materialises complex‑valued neural
-networks (**CVNNs**) from a declarative :class:`CVNNConfig`.
+Declarative, Pydantic‑driven factory for complex‑valued neural networks (CVNNs).
 
-* Uses :pyfunc:`torch.set_default_device` to create parameters **directly on
-  the target GPU** (zero copy) while falling back gracefully on older
-  runtimes.
-* Import‑time switches enforce full determinism (CuBLAS, CuDNN, Torch).
-* The entire module is mypy‑clean under ``--strict``.
+Core ideas
+----------
+*   **Topology is pure data** – :class:`CVNNConfig` can be JSON‑serialised.
+*   Model is *always* built on **CPU** so initialisers (e.g. Xavier) are
+    reproducible across machines and GPUs.
+*   Checkpoint helpers (`load_model`, `get_safetensors`) interact with
+    :class:`~spectralmc.models.torch.TensorState` and never allocate on GPU.
 """
 
 from __future__ import annotations
 
-import os
-from contextlib import contextmanager, nullcontext
 from enum import Enum
-from typing import Iterator, List, Optional, Tuple, TypeAlias, Union
+from typing import Dict, Iterator, List, Optional, Tuple, TypeAlias, Union
 
 import torch
 import torch.nn as nn
 from pydantic import BaseModel, PositiveInt
 
-from spectralmc.cvnn import (
+from spectralmc.models.torch import TensorState, dtype, default_dtype
+from spectralmc.cvnn import (  # low‑level building blocks
     ComplexLinear,
     ComplexResidual,
     ComplexSequential,
@@ -34,31 +33,30 @@ from spectralmc.cvnn import (
     zReLU,
 )
 
-__all__: Tuple[str, ...] = ("CVNNConfig", "build_model")
+__all__: Tuple[str, ...] = (
+    "ActivationKind",
+    "LayerKind",
+    "ActivationCfg",
+    "LinearCfg",
+    "NaiveBNCfg",
+    "CovBNCfg",
+    "SequentialCfg",
+    "ResidualCfg",
+    "CVNNConfig",
+    "build_model",
+    "load_model",
+    "get_safetensors",
+)
 
-
-# ────────────────────────── reproducibility at import ──────────────────────
-os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
-torch.use_deterministic_algorithms(True, warn_only=False)
-if hasattr(torch.backends, "cudnn"):
-    torch.backends.cudnn.deterministic = True  # noqa: PGH003
-    torch.backends.cudnn.benchmark = False  # noqa: PGH003
-
-# =============================================================================
-#  Enumerations
-# =============================================================================
+# ───────────────────────────── enumeration helpers ───────────────────────────
 
 
 class ActivationKind(str, Enum):
-    """Kinds of complex‑domain activation supported by the factory."""
-
     Z_RELU = "zReLU"
     MOD_RELU = "modReLU"
 
 
 class LayerKind(str, Enum):
-    """Primitive layer families that can appear in a :class:`LayerCfg`."""
-
     LINEAR = "ComplexLinear"
     BN_NAIVE = "NaiveComplexBatchNorm"
     BN_COV = "CovarianceComplexBatchNorm"
@@ -66,57 +64,7 @@ class LayerKind(str, Enum):
     RES = "Residual"
 
 
-# =============================================================================
-#  Internal helpers
-# =============================================================================
-
-
-def _make_activation(kind: ActivationKind, width: int) -> nn.Module:
-    return zReLU() if kind is ActivationKind.Z_RELU else modReLU(width)
-
-
-def _seq(*mods: nn.Module) -> nn.Module:
-    return mods[0] if len(mods) == 1 else ComplexSequential(*mods)
-
-
-def _maybe_activate(
-    module: nn.Module, act: Optional[ActivationCfg], width: int
-) -> nn.Module:
-    return _seq(module, _make_activation(act.kind, width)) if act else module
-
-
-def _maybe_project(module: nn.Module, in_w: int, out_w: int) -> Tuple[nn.Module, int]:
-    return (
-        (module, in_w)
-        if in_w == out_w
-        else (_seq(module, ComplexLinear(in_w, out_w)), out_w)
-    )
-
-
-@contextmanager
-def _default_dtype(dtype: dtype) -> Iterator[None]:
-    prev = torch.get_default_dtype()
-    torch.set_default_dtype(precision)
-    try:
-        yield
-    finally:
-        torch.set_default_dtype(prev)
-
-
-@contextmanager
-def _default_device(device: torch.device) -> Iterator[None]:
-    """Temporarily route *all* new tensors to *device* (if API available)."""
-    prev_dev = torch.tensor([]).device  # current default
-    torch.set_default_device(device)
-    try:
-        yield
-    finally:
-        torch.set_default_device(prev_dev)
-
-
-# =============================================================================
-#  Pydantic configs – pure data
-# =============================================================================
+# ─────────────────────────── Pydantic topology schema ────────────────────────
 
 
 class ActivationCfg(BaseModel):
@@ -149,7 +97,7 @@ class CovBNCfg(BaseModel):
 
 
 LayerCfg: TypeAlias = Union[
-    "LinearCfg", "NaiveBNCfg", "CovBNCfg", "SequentialCfg", "ResidualCfg"
+    LinearCfg, NaiveBNCfg, CovBNCfg, "SequentialCfg", "ResidualCfg"
 ]
 
 
@@ -167,9 +115,11 @@ class ResidualCfg(BaseModel):
 
 
 class CVNNConfig(BaseModel):
-    """Network topology – pure data, no behaviour."""
+    """
+    Entire network topology **plus** RNG seed & dtype – pure data, no behaviour.
+    """
 
-    dtype: torch.dtype
+    dtype: dtype  # serialisable wrapper
     layers: List[LayerCfg]
     seed: PositiveInt
     final_activation: Optional[ActivationCfg] = None
@@ -178,43 +128,62 @@ class CVNNConfig(BaseModel):
         return isinstance(other, CVNNConfig) and self.model_dump() == other.model_dump()
 
 
-# =============================================================================
-#  Recursive builder
-# =============================================================================
+# ─────────────────────────── internal helper functions ───────────────────────
+
+
+def _make_activation(kind: ActivationKind, width: int) -> nn.Module:
+    return zReLU() if kind is ActivationKind.Z_RELU else modReLU(width)
+
+
+def _seq(*mods: nn.Module) -> nn.Module:
+    return mods[0] if len(mods) == 1 else ComplexSequential(*mods)
+
+
+def _maybe_activate(
+    module: nn.Module, act: Optional[ActivationCfg], width: int
+) -> nn.Module:
+    return _seq(module, _make_activation(act.kind, width)) if act else module
+
+
+def _maybe_project(module: nn.Module, in_w: int, out_w: int) -> Tuple[nn.Module, int]:
+    return (
+        (module, in_w)
+        if in_w == out_w
+        else (_seq(module, ComplexLinear(in_w, out_w)), out_w)
+    )
+
+
+# ───────────────────────── recursive layer builder  ──────────────────────────
 
 
 def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
-    """Recursively convert *cfg* into an :class:`nn.Module`."""
     match cfg:
-        # ── ComplexLinear ────────────────────────────────────────────────
+
         case LinearCfg() as c:
             out_w = c.width or cur_w
-            layer = ComplexLinear(cur_w, out_w, bias=c.bias)
-            return _maybe_activate(layer, c.activation, out_w), out_w
+            lyr = ComplexLinear(cur_w, out_w, bias=c.bias)
+            return _maybe_activate(lyr, c.activation, out_w), out_w
 
-        # ── Naive BN ─────────────────────────────────────────────────────
         case NaiveBNCfg() as c:
-            nbn = NaiveComplexBatchNorm(
+            bn = NaiveComplexBatchNorm(
                 cur_w,
                 eps=c.eps,
                 momentum=c.momentum,
                 affine=c.affine,
                 track_running_stats=c.track_running_stats,
             )
-            return _maybe_activate(nbn, c.activation, cur_w), cur_w
+            return _maybe_activate(bn, c.activation, cur_w), cur_w
 
-        # ── Covariance BN ───────────────────────────────────────────────
         case CovBNCfg() as c:
-            cbn = CovarianceComplexBatchNorm(
+            bn = CovarianceComplexBatchNorm(
                 cur_w,
                 eps=c.eps,
                 momentum=c.momentum,
                 affine=c.affine,
                 track_running_stats=c.track_running_stats,
             )
-            return _maybe_activate(cbn, c.activation, cur_w), cur_w
+            return _maybe_activate(bn, c.activation, cur_w), cur_w
 
-        # ── Sequential container ────────────────────────────────────────
         case SequentialCfg() as c:
 
             def _fold(lst: List[LayerCfg], w_in: int) -> Tuple[List[nn.Module], int]:
@@ -229,7 +198,6 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
             seq = _seq(*mods)
             return _maybe_activate(seq, c.activation, width), width
 
-        # ── Residual block ──────────────────────────────────────────────
         case ResidualCfg() as c:
             body_mod, body_w = _build_from_cfg(c.body, cur_w)
             proj_mod, proj_w = (
@@ -256,9 +224,7 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
     raise RuntimeError(f"Unhandled cfg node: {type(cfg).__name__}")
 
 
-# =============================================================================
-#  Public factory
-# =============================================================================
+# ───────────────────────────── public factory api ────────────────────────────
 
 
 def build_model(
@@ -266,18 +232,52 @@ def build_model(
     n_inputs: int,
     n_outputs: int,
     cfg: CVNNConfig,
-    device: torch.device,
 ) -> nn.Module:
-    """Materialise a CVNN described by *cfg* on the requested device / dtype."""
+    """
+    Instantiate a CVNN **on CPU** with reproducible Xavier initialisation.
+    """
     torch.manual_seed(cfg.seed)
+    torch_dtype = cfg.dtype.to_torch()
 
-    tgt_device = torch.device(device)
-    tgt_dtype = cfg.dtype
-
-    # Build under controlled default dtype & device so tensors spawn correctly.
-    with _default_dtype(tgt_dtype), _default_device(tgt_device):
-        body, w = _build_from_cfg(SequentialCfg(layers=cfg.layers), n_inputs)
-        body, w = _maybe_project(body, w, n_outputs)
-        net = _maybe_activate(body, cfg.final_activation, w)
+    with default_dtype(torch_dtype):
+        body, width = _build_from_cfg(SequentialCfg(layers=cfg.layers), n_inputs)
+        body, width = _maybe_project(body, width, n_outputs)
+        net = _maybe_activate(body, cfg.final_activation, width)
 
     return net
+
+
+def load_model(
+    *,
+    n_inputs: int,
+    n_outputs: int,
+    cfg: CVNNConfig,
+    tensors: Dict[str, TensorState],
+) -> nn.Module:
+    """
+    Build the model on **CPU** and restore parameters/buffers from *tensors*.
+    """
+    net = build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg)
+    state_dict = {
+        k: ts.to_tensor(device=torch.device("cpu")) for k, ts in tensors.items()
+    }
+    net.load_state_dict(state_dict, assign=True)  # zero‑copy ownership
+    return net
+
+
+def get_safetensors(model: nn.Module) -> Dict[str, TensorState]:
+    """
+    Snapshot *model* into a ``name → TensorState`` dict.
+
+    Raises
+    ------
+    RuntimeError
+        If any parameter/buffer is not resident on CPU.
+    """
+    if any(p.device.type != "cpu" for p in model.parameters()):
+        raise RuntimeError("Model must reside on CPU before serialisation.")
+
+    return {
+        name: TensorState.from_tensor(tensor)
+        for name, tensor in model.state_dict().items()
+    }

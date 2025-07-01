@@ -22,7 +22,7 @@ from spectralmc.async_normals import (
 
 PosFloat = Annotated[float, Field(gt=0)]
 NonNegFloat = Annotated[float, Field(ge=0)]
-#DtypeLiteral = Literal["float32", "float64"]
+# DtypeLiteral = Literal["float32", "float64"]
 DeviceNDArray: TypeAlias = NDArray[np.generic]
 
 # --------------------------------------------------------------------------- #
