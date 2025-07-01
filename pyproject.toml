@@ -50,7 +50,7 @@ scikit-learn     = ">=1.6,<2.0"
 
 # --- PyTorch 2.7.0 compiled for CUDA 12.8 (sm_120) ------------------------- #
 torch            = { version = "2.7.0+cu128", source = "pytorch-cu128" }
-# --------------------------------------------------------------------------- #
+safetensors      = ">=0.5.3,<1.0"
 stable_baselines3 = ">=2.6,<3.0"
 cupy-cuda12x     = ">=13.4,<14.0"
 numba            = ">=0.61,<1.0"

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import copy
 import math
-from typing import Dict, Literal, Sequence, Tuple
+from typing import Dict, Literal, Sequence, Tuple, Union
 
 import pytest
 import torch
@@ -29,7 +29,11 @@ from spectralmc.cvnn_factory import (
     build_model,
 )
 from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
-from spectralmc.gbm_trainer import ComplexValuedModel, GbmCVNNPricer, GbmCVNNPricerConfig
+from spectralmc.gbm_trainer import (
+    ComplexValuedModel,
+    GbmCVNNPricer,
+    GbmCVNNPricerConfig,
+)
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.sobol_sampler import BoundSpec
 
@@ -37,7 +41,6 @@ from spectralmc.sobol_sampler import BoundSpec
 # Configuration                                                               #
 # --------------------------------------------------------------------------- #
 
-Precision = Literal["float32", "float64"]
 PRECISIONS: Tuple[Precision, Precision] = ("float32", "float64")
 LEARNING_RATE: float = 1.0e-2
 
@@ -81,10 +84,17 @@ def _tree_equal(x: object, y: object) -> bool:  # noqa: D401
 
 
 def _make_cvnn(
-    n_inputs: int, n_outputs: int, *, seed: int, hidden: int = 32
+    n_inputs: int,
+    n_outputs: int,
+    *,
+    seed: int,
+    hidden: int = 32,
+    device: Union[str, torch.device],
+    dtype: torch.dtype,
 ) -> ComplexValuedModel:
     """Create a small CVNN via :pyfunc:`spectralmc.cvnn_factory.build_model`."""
     cfg = CVNNConfig(
+        dtype=dtype,
         layers=[
             LinearCfg(
                 width=hidden,
@@ -94,10 +104,16 @@ def _make_cvnn(
         ],
         seed=seed,
     )
-    return build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg)
+    return build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg, device=device)
 
 
-def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
+def _make_gbm_trainer(
+    precision: Precision,
+    *,
+    seed: int,
+    device: Union[str, torch.device],
+    dtype: torch.dtype,
+) -> GbmCVNNPricer:
     """Deterministically construct a :class:`GbmCVNNPricer` instance."""
     torch.manual_seed(seed)
 
@@ -127,7 +143,7 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
         "v": BoundSpec(lower=0.1, upper=0.5),
     }
 
-    net = _make_cvnn(6, sim.network_size, seed=seed)
+    net = _make_cvnn(6, sim.network_size, seed=seed, device=device, dtype=dtype)
     return GbmCVNNPricer(GbmCVNNPricerConfig(cfg=cfg, domain_bounds=bounds, cvnn=net))
 
 

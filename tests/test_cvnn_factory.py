@@ -79,9 +79,10 @@ def _assert_state_dict_equal(a: Dict[str, Tensor], b: Dict[str, Tensor]) -> None
             assert torch.equal(t1, t2), f"Mismatch in {k}"
 
 
-def _example_cfg(seed: int = 314159) -> CVNNConfig:
+def _example_cfg(dtype: torch.dtype, seed: int = 314159) -> CVNNConfig:
     """A representative, yet compact, CVNN topology."""
     return CVNNConfig(
+        dtype=dtype,
         seed=seed,
         layers=[
             # Linear → modReLU
@@ -120,7 +121,6 @@ def _single_train_step(
         n_outputs=N_OUT,
         cfg=cfg,
         device=_DEVICE_CUDA,
-        dtype=dtype,
     )
     model.train()
 
@@ -156,7 +156,6 @@ def test_device_and_dtype_placement(dtype: torch.dtype) -> None:
         n_outputs=N_OUT,
         cfg=cfg,
         device=_DEVICE_CUDA,
-        dtype=dtype,
     )
 
     for p in model.parameters():
@@ -174,7 +173,6 @@ def test_forward_backward_pass(dtype: torch.dtype) -> None:
         n_outputs=N_OUT,
         cfg=cfg,
         device=_DEVICE_CUDA,
-        dtype=dtype,
     )
     model.train()
 

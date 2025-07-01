@@ -36,6 +36,7 @@ from spectralmc.cvnn import (
 
 __all__: Tuple[str, ...] = ("CVNNConfig", "build_model")
 
+
 # ────────────────────────── reproducibility at import ──────────────────────
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
 torch.use_deterministic_algorithms(True, warn_only=False)
@@ -79,7 +80,7 @@ def _seq(*mods: nn.Module) -> nn.Module:
 
 
 def _maybe_activate(
-    module: nn.Module, act: Optional["ActivationCfg"], width: int
+    module: nn.Module, act: Optional[ActivationCfg], width: int
 ) -> nn.Module:
     return _seq(module, _make_activation(act.kind, width)) if act else module
 
@@ -93,9 +94,9 @@ def _maybe_project(module: nn.Module, in_w: int, out_w: int) -> Tuple[nn.Module,
 
 
 @contextmanager
-def _default_dtype(dtype: torch.dtype) -> Iterator[None]:
+def _default_dtype(dtype: dtype) -> Iterator[None]:
     prev = torch.get_default_dtype()
-    torch.set_default_dtype(dtype)
+    torch.set_default_dtype(precision)
     try:
         yield
     finally:
@@ -105,15 +106,12 @@ def _default_dtype(dtype: torch.dtype) -> Iterator[None]:
 @contextmanager
 def _default_device(device: torch.device) -> Iterator[None]:
     """Temporarily route *all* new tensors to *device* (if API available)."""
-    if hasattr(torch, "set_default_device"):
-        prev_dev = torch.tensor([], device="cpu").device  # current default
-        torch.set_default_device(str(device))
-        try:
-            yield
-        finally:
-            torch.set_default_device(str(prev_dev))
-    else:  # older PyTorch – build on CPU, move once at the end
+    prev_dev = torch.tensor([]).device  # current default
+    torch.set_default_device(device)
+    try:
         yield
+    finally:
+        torch.set_default_device(prev_dev)
 
 
 # =============================================================================
@@ -171,6 +169,7 @@ class ResidualCfg(BaseModel):
 class CVNNConfig(BaseModel):
     """Network topology – pure data, no behaviour."""
 
+    dtype: torch.dtype
     layers: List[LayerCfg]
     seed: PositiveInt
     final_activation: Optional[ActivationCfg] = None
@@ -267,23 +266,18 @@ def build_model(
     n_inputs: int,
     n_outputs: int,
     cfg: CVNNConfig,
-    device: Union[str, torch.device, None] = None,
-    dtype: Optional[torch.dtype] = None,
+    device: torch.device,
 ) -> nn.Module:
     """Materialise a CVNN described by *cfg* on the requested device / dtype."""
     torch.manual_seed(cfg.seed)
 
-    tgt_device = torch.device(device) if device is not None else torch.device("cpu")
-    tgt_dtype = dtype or torch.get_default_dtype()
+    tgt_device = torch.device(device)
+    tgt_dtype = cfg.dtype
 
     # Build under controlled default dtype & device so tensors spawn correctly.
     with _default_dtype(tgt_dtype), _default_device(tgt_device):
         body, w = _build_from_cfg(SequentialCfg(layers=cfg.layers), n_inputs)
         body, w = _maybe_project(body, w, n_outputs)
         net = _maybe_activate(body, cfg.final_activation, w)
-
-    # Fallback copy if set_default_device was unavailable.
-    if any(p.device != tgt_device for p in net.parameters()):
-        net = net.to(device=tgt_device, dtype=tgt_dtype)
 
     return net
