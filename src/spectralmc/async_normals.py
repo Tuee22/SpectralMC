@@ -22,9 +22,9 @@ __all__ = ["ConcurrentNormGeneratorConfig", "ConcurrentNormGenerator"]
 # Type aliases                                                                #
 # --------------------------------------------------------------------------- #
 
-FloatStr = Literal["float32", "float64"]
-FloatScalar = Union[np.float32, np.float64]
-_InputDType = Union[FloatStr, FloatScalar]
+#FloatStr = Literal["float32", "float64"]
+#FloatScalar = Union[np.float32, np.float64]
+#_InputDType = Union[FloatStr, FloatScalar]
 
 # --------------------------------------------------------------------------- #
 # Constants                                                                   #

@@ -99,7 +99,7 @@ def _collect(engine: BlackScholes, inp: Inputs, n: int) -> List[HostPriceResults
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("precision", ["float64", "float32"])
+@pytest.mark.parametrize("precision", ["something", "something"])
 def test_black_scholes_mc(precision: DtypeLiteral) -> None:
     """Aggregate accuracy check against analytic Black price."""
     engine = _make_engine(precision)

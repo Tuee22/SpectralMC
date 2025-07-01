@@ -44,7 +44,7 @@ from spectralmc.cvnn import (
 # Global test-wide constants
 # -----------------------------------------------------------------------------
 
-DTYPE: torch.dtype = torch.float32
+# DTYPE: torch.dtype = torch.float32
 ATOL: float = 1.0e-5
 RTOL: float = 1.0e-4
 

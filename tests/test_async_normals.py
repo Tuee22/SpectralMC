@@ -14,18 +14,18 @@ import pytest
 from spectralmc import async_normals
 from pydantic import ValidationError
 
-DType = Literal["float32", "float64"]
+# DType = Literal["float32", "float64"]
 
 # --------------------------------------------------------------------------- #
 # Fixtures                                                                    #
 # --------------------------------------------------------------------------- #
 
 
-@pytest.fixture(params=("float32", "float64"), ids=("f32", "f64"))
+@pytest.fixture(params=("something","something"), ids=("f32", "f64"))
 def dtype_str(request: pytest.FixtureRequest) -> DType:
     """Return the dtype literal currently under test."""
     # mypy sees the two explicit return literals, so no ignore/cast needed.
-    return "float32" if request.param == "float32" else "float64"
+    # return "float32" if request.param == "float32" else "float64"
 
 
 # --------------------------------------------------------------------------- #

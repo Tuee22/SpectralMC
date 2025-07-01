@@ -38,7 +38,7 @@ from spectralmc.cvnn_factory import (
 _DEVICE_CUDA: torch.device = torch.device("cuda:0")
 assert torch.cuda.is_available(), "These tests require a CUDA‑capable device"
 
-_DTYPES: Tuple[torch.dtype, ...] = (torch.float32, torch.float64)
+# _DTYPES: Tuple[torch.dtype, ...] = (torch.float32, torch.float64)
 
 ATOL: float = 1.0e-5
 RTOL: float = 1.0e-4

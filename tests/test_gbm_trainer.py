@@ -41,7 +41,7 @@ from spectralmc.sobol_sampler import BoundSpec
 # Configuration                                                               #
 # --------------------------------------------------------------------------- #
 
-PRECISIONS: Tuple[Precision, Precision] = ("float32", "float64")
+# PRECISIONS: Tuple[Precision, Precision] = ("float32", "float64")
 LEARNING_RATE: float = 1.0e-2
 
 
