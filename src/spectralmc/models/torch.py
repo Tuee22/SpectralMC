@@ -67,7 +67,7 @@ class dtype(str, Enum):
 # ─────────────────────────── device infrastructure ───────────────────────────
 class device(str, Enum):
     cpu = "cpu"
-    cuda = "cuda"
+    cuda = "cuda:0"  # generalize later if we need more than 1 cuda device
 
     def to_torch(self) -> torch.device:
         return torch.device(self.value)
@@ -164,9 +164,9 @@ class TorchEnv(BaseModel):
     def snapshot(cls) -> TorchEnv:
         return cls(
             torch_version=torch.__version__,
-            cuda_version=torch.version.cuda,  # type: ignore[assignment]
-            cudnn_version=torch.backends.cudnn.version(),  # type: ignore[call-arg]
-            gpu_name=torch.cuda.get_device_name(0),  # type: ignore[arg-type]
+            cuda_version=torch.version.cuda,
+            cudnn_version=torch.backends.cudnn.version(),
+            gpu_name=torch.cuda.get_device_name(0),
             python_version=platform.python_version(),
         )
 
@@ -180,24 +180,29 @@ class AdamParamState(BaseModel):
     step: int
     exp_avg: TensorState
     exp_avg_sq: TensorState
-    max_exp_avg_sq: TensorState | None = None
+    max_exp_avg_sq: TensorState | None
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=False)
 
     @classmethod
     def from_torch(cls, s: Mapping[str, object]) -> AdamParamState:
-        to_tensor_state = lambda t: TensorState.from_torch(t)  # type: ignore[arg-type]
+        # Ensure all tensors live on CPU
         if any(
             isinstance(v, torch.Tensor) and v.device != device.cpu.to_torch()
             for v in s.values()
         ):
             raise RuntimeError("All Adam state tensors must reside on CPU.")
+
+        # Allow only the four known keys (max_exp_avg_sq is optional)
+        unexpected = set(s) - {"step", "exp_avg", "exp_avg_sq", "max_exp_avg_sq"}
+        assert not unexpected, f"Unexpected key(s) in Adam state: {unexpected}"
+
         return cls(
             step=int(s["step"]),
-            exp_avg=to_tensor_state(s["exp_avg"]),
-            exp_avg_sq=to_tensor_state(s["exp_avg_sq"]),
+            exp_avg=TensorState.from_torch(s["exp_avg"]),
+            exp_avg_sq=TensorState.from_torch(s["exp_avg_sq"]),
             max_exp_avg_sq=(
-                to_tensor_state(s["max_exp_avg_sq"])
+                TensorState.from_torch(s["max_exp_avg_sq"])
                 if s.get("max_exp_avg_sq") is not None
                 else None
             ),
@@ -249,6 +254,12 @@ class AdamOptimizerState(BaseModel):
             raise TypeError("Only Adam or AdamW are supported.")
 
         sd = optim.state_dict()
+
+        # ensure *exactly* the expected keys are present
+        assert set(sd) == {"state", "param_groups"}, (
+            f"optimizer.state_dict() must contain only 'state' and 'param_groups' "
+            f"keys; got {set(sd)}"
+        )
         ps = {
             pid: AdamParamState.from_torch(state) for pid, state in sd["state"].items()
         }
