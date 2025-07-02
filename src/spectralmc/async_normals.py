@@ -44,7 +44,7 @@ class ConcurrentNormGeneratorConfig(BaseModel):
     rows: int = Field(..., gt=0, description="Matrix height (>0)")
     cols: int = Field(..., gt=0, description="Matrix width (>0)")
     seed: int = Field(..., gt=0, description="Base seed for NumPy RNG (>0)")
-    dtype: FloatStr = Field(..., description="Either 'float32' or 'float64'")
+    # dtype: FloatStr = Field(..., description="Either 'float32' or 'float64'")
     skips: int = Field(0, ge=0, description="Matrices already delivered (>=0)")
 
     model_config = ConfigDict(frozen=True)
