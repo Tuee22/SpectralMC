@@ -3,22 +3,21 @@
 Asynchronous generation of GPU‑resident standard‑normal matrices
 with latency hiding and deterministic checkpointing.
 
-Key features
-------------
-* **Precision‑safe typing** – all dtype handling goes through
-  :class:`spectralmc.models.numerical.Precision`.
-* **Private CUDA streams** per worker to overlap host/device work.
-* **Deterministic snapshots** – the generator can be paused and later
-  restored (even with a different buffer size) and will continue the
-  random sequence exactly.
-* **Zero ignores** under *mypy --strict*.
+Key points
+----------
+* **Serialization = `Precision`**, internal state = *raw* ``cp.dtype``.
+  The public checkpoint model stores :class:`~spectralmc.models.numerical.Precision`;
+  once deserialized, we immediately convert to the corresponding CuPy dtype
+  and keep *only that* in memory.  Snapshots convert back via
+  :meth:`Precision.from_cupy`.
+* **Private CUDA streams** per worker so host computation can overlap
+  GPU kernels.
+* Passes **mypy --strict** without ignores or `Any`.
 
 Public API
 ----------
-* :class:`ConcurrentNormGeneratorConfig` – immutable snapshot model.
-* :class:`ConcurrentNormGenerator`   – high‑level generator pool.
-
-The companion test‑suite lives in *tests/test_async_normals.py*.
+* :class:`ConcurrentNormGeneratorConfig`
+* :class:`ConcurrentNormGenerator`
 """
 
 from __future__ import annotations
@@ -44,6 +43,31 @@ __all__: list[str] = [
 
 _SEED_LIMIT: int = 1_000_000_000  # exclusive upper bound for CuPy seeds
 
+
+# --------------------------------------------------------------------------- #
+# Helpers                                                                     #
+# --------------------------------------------------------------------------- #
+
+
+def _validate_cupy_dtype(dtype: cp.dtype) -> cp.dtype:
+    """
+    Ensure *dtype* is either ``cp.float32`` or ``cp.float64``.
+
+    Returns
+    -------
+    cp.dtype
+        The same dtype (identity) if valid.
+
+    Raises
+    ------
+    ValueError
+        If *dtype* is not one of the supported formats.
+    """
+    if dtype not in (cp.dtype(cp.float32), cp.dtype(cp.float64)):
+        raise ValueError("dtype must be cp.float32 or cp.float64")
+    return dtype
+
+
 # --------------------------------------------------------------------------- #
 # Pydantic configuration model                                                #
 # --------------------------------------------------------------------------- #
@@ -55,17 +79,15 @@ class ConcurrentNormGeneratorConfig(BaseModel):
 
     Attributes
     ----------
-    rows
-        Matrix height (> 0).
-    cols
-        Matrix width (> 0).
+    rows, cols
+        Matrix dimensions (> 0).
     seed
-        Base seed for the *global* NumPy `Generator` (> 0).
+        Base seed for the *global* NumPy RNG (> 0).
     dtype
-        Desired numeric precision (``Precision.float32`` or
-        ``Precision.float64``).
+        Precision of generated matrices (serialised as
+        :class:`~spectralmc.models.numerical.Precision`).
     skips
-        How many matrices have already been delivered (≥ 0).
+        Number of matrices already delivered (≥ 0).
     """
 
     rows: int = Field(..., gt=0)
@@ -84,22 +106,19 @@ class ConcurrentNormGeneratorConfig(BaseModel):
 
 class _NormGenerator:
     """
-    Generate a stream of standard‑normal matrices on a **private** CUDA stream.
+    Generate a stream of standard‑normal matrices on a dedicated CUDA stream.
 
-    Notes
-    -----
-    *Construction* is cheap; the expensive work happens in :meth:`enqueue`.
-    * All kernels are launched on the dedicated stream, allowing the host to
-      enqueue work for *other* streams while the GPU is busy.
-    * Synchronisation latency is tracked for diagnostics.
+    The constructor only validates parameters and allocates the stream;
+    the first random kernel is dispatched via :meth:`enqueue`.
     """
 
-    def __init__(self, rows: int, cols: int, *, precision: Precision) -> None:
+    def __init__(self, rows: int, cols: int, *, dtype: cp.dtype) -> None:
         if min(rows, cols) <= 0:
-            raise ValueError("`rows` and `cols` must both be positive.")
+            raise ValueError("`rows` and `cols` must both be positive")
         self._rows: int = rows
         self._cols: int = cols
-        self._dtype: cp.dtype = precision.to_cupy()
+        self._dtype: cp.dtype = _validate_cupy_dtype(dtype)
+
         self._stream: cp.cuda.Stream = cp.cuda.Stream()
         self._generated: Optional[cp.ndarray] = None
         self._event: Optional[cp.cuda.Event] = None
@@ -108,7 +127,7 @@ class _NormGenerator:
     # ---------------- asynchronous pipeline --------------------------- #
 
     def enqueue(self, seed: int) -> None:
-        """Launch a kernel that fills the *next* matrix (non‑blocking)."""
+        """Launch the kernel that will fill the *next* matrix (non‑blocking)."""
         if self._generated is not None:
             raise RuntimeError("previous matrix not yet consumed")
         if seed <= 0:
@@ -118,7 +137,8 @@ class _NormGenerator:
         with self._stream:
             rng = cp.random.default_rng(seed)
             self._generated = rng.standard_normal(
-                (self._rows, self._cols), dtype=self._dtype
+                (self._rows, self._cols),
+                dtype=self._dtype,
             )
             self._event.record()
 
@@ -132,7 +152,7 @@ class _NormGenerator:
             Seed for the *subsequent* matrix.
         """
         if self._generated is None:  # pragma: no cover
-            raise RuntimeError("no matrix available – call `enqueue()` first")
+            raise RuntimeError("no matrix enqueued – call `enqueue()` first")
 
         t0 = time()
         self._stream.synchronize()
@@ -145,11 +165,11 @@ class _NormGenerator:
     # ---------------- diagnostics ------------------------------------- #
 
     def get_time_spent_synchronizing(self) -> float:  # noqa: D401
-        """Total host‑side time (seconds) spent waiting on this stream."""
+        """Total host‑side synchronisation time (seconds)."""
         return self._sync_time
 
     def is_ready(self) -> bool:  # noqa: D401
-        """Whether the currently enqueued matrix has finished."""
+        """Return ``True`` iff the current matrix has finished on the GPU."""
         return (
             self._event is not None
             and int(cp.cuda.runtime.eventQuery(self._event.ptr)) == 0
@@ -171,29 +191,24 @@ class ConcurrentNormGenerator:
     Pool of :class:`_NormGenerator` objects that hides kernel latency.
 
     Matrices are fetched via :meth:`get_matrix`; the pool cycles through
-    its workers so at least one matrix is almost always *ready*.
+    its workers so that at least one matrix is *usually* ready.
     """
 
     # ------------------------------------------------------------------ #
     # Construction                                                       #
     # ------------------------------------------------------------------ #
 
-    def __init__(
-        self,
-        buffer_size: int,
-        config: ConcurrentNormGeneratorConfig,
-    ) -> None:
+    def __init__(self, buffer_size: int, config: ConcurrentNormGeneratorConfig) -> None:
         if buffer_size <= 0:
             raise ValueError("`buffer_size` must be positive")
 
         self._rows: int = config.rows
         self._cols: int = config.cols
-        self._precision: Precision = config.dtype
-        self._dtype: cp.dtype = self._precision.to_cupy()
+        self._dtype: cp.dtype = config.dtype.to_cupy()
         self._base_seed: int = config.seed
         self._served: int = config.skips
 
-        # NumPy RNG advanced to the current position
+        # Master NumPy RNG advanced to the current position
         self._np_rng = np.random.default_rng(self._base_seed)
         if self._served:
             self._np_rng.integers(0, _SEED_LIMIT, size=self._served)
@@ -201,7 +216,7 @@ class ConcurrentNormGenerator:
         # Build and prime the pool
         def _make() -> _NormGenerator:
             seed = int(self._np_rng.integers(0, _SEED_LIMIT))
-            gen = _NormGenerator(self._rows, self._cols, precision=self._precision)
+            gen = _NormGenerator(self._rows, self._cols, dtype=self._dtype)
             gen.enqueue(seed)
             return gen
 
@@ -218,9 +233,9 @@ class ConcurrentNormGenerator:
 
     def _update_idle_state(self) -> None:
         """
-        Track how long *all* workers have simultaneously been ready.
+        Track how long *all* workers have been simultaneously ready.
 
-        The accumulator only increases while the entire pool is idle.
+        The accumulator only increases while the entire pool sits idle.
         """
         all_ready = all(gen.is_ready() for gen in self._pool)
         now = time()
@@ -235,7 +250,7 @@ class ConcurrentNormGenerator:
     # ------------------------------------------------------------------ #
 
     def get_matrix(self) -> cp.ndarray:
-        """Return the next matrix, queuing another in its place."""
+        """Return the next matrix, immediately enqueuing a replacement."""
         gen = next(self._it)
         next_seed = int(self._np_rng.integers(0, _SEED_LIMIT))
         mat = gen.get_matrix(next_seed)
@@ -244,12 +259,12 @@ class ConcurrentNormGenerator:
         return mat
 
     def snapshot(self) -> ConcurrentNormGeneratorConfig:
-        """Return a *deterministic* checkpoint of the current global state."""
+        """Return a deterministic checkpoint of the current global state."""
         return ConcurrentNormGeneratorConfig(
             rows=self._rows,
             cols=self._cols,
             seed=self._base_seed,
-            dtype=self._precision,
+            dtype=Precision.from_cupy(self._dtype),
             skips=self._served,
         )
 
@@ -258,7 +273,7 @@ class ConcurrentNormGenerator:
     # ------------------------------------------------------------------ #
 
     def get_time_spent_synchronizing(self) -> float:
-        """Aggregate host‑side synchronisation time across the entire pool."""
+        """Aggregate host‑side synchronisation time across the pool."""
         return sum(gen.get_time_spent_synchronizing() for gen in self._pool)
 
     def get_idle_time(self) -> float:
