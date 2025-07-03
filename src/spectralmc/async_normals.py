@@ -1,23 +1,43 @@
 # src/spectralmc/async_normals.py
 """
-Asynchronous generation of GPU‑resident standard‑normal matrices
-with latency hiding and deterministic checkpointing.
+spectralmc.async_normals
+========================
+Latency‑hiding generation of standard‑normal matrices that live on the
+GPU, with deterministic checkpoint/restore and *zero* static‑typing
+compromises.
 
-Key points
-----------
-* **Serialization = `Precision`**, internal state = *raw* ``cp.dtype``.
-  The public checkpoint model stores :class:`~spectralmc.models.numerical.Precision`;
-  once deserialized, we immediately convert to the corresponding CuPy dtype
-  and keep *only that* in memory.  Snapshots convert back via
-  :meth:`Precision.from_cupy`.
-* **Private CUDA streams** per worker so host computation can overlap
-  GPU kernels.
-* Passes **mypy --strict** without ignores or `Any`.
+Design overview
+---------------
+1. **Snapshot fidelity** – you can pause, serialise the state, and later
+   resume (even with a different buffer size) without breaking the random
+   sequence.
+2. **Latency hiding** – a configurable pool of CUDA streams means the host
+   seldom blocks waiting for kernels to finish.
+3. **Strict typing** – the module passes `mypy --strict` without ignores,
+   casts, or Any.  Precision is serialised via
+   `spectralmc.models.numerical.Precision`; internally we only keep the
+   raw `cp.dtype`.
 
-Public API
-----------
-* :class:`ConcurrentNormGeneratorConfig`
-* :class:`ConcurrentNormGenerator`
+Typical usage
+-------------
+Example::
+
+    from spectralmc.async_normals import (
+        ConcurrentNormGenerator,
+        ConcurrentNormGeneratorConfig,
+    )
+    from spectralmc.models.numerical import Precision
+
+    cfg = ConcurrentNormGeneratorConfig(
+        rows=1024,
+        cols=512,
+        seed=123,
+        dtype=Precision.float32,
+    )
+    gen = ConcurrentNormGenerator(buffer_size=4, config=cfg)
+
+    gpu_matrix = gen.get_matrix()   # cupy.ndarray on the device
+    checkpoint = gen.snapshot()     # serialisable pydantic model
 """
 
 from __future__ import annotations
@@ -41,53 +61,43 @@ __all__: list[str] = [
 # Constants                                                                   #
 # --------------------------------------------------------------------------- #
 
-_SEED_LIMIT: int = 1_000_000_000  # exclusive upper bound for CuPy seeds
-
+_SEED_LIMIT: int = 1_000_000_000  # exclusive upper bound for CuPy RNG seeds
 
 # --------------------------------------------------------------------------- #
-# Helpers                                                                     #
+# Helper                                                                      #
 # --------------------------------------------------------------------------- #
 
 
 def _validate_cupy_dtype(dtype: cp.dtype) -> cp.dtype:
-    """
-    Ensure *dtype* is either ``cp.float32`` or ``cp.float64``.
-
-    Returns
-    -------
-    cp.dtype
-        The same dtype (identity) if valid.
-
-    Raises
-    ------
-    ValueError
-        If *dtype* is not one of the supported formats.
-    """
+    """Return *dtype* if it is float32 or float64, otherwise raise."""
     if dtype not in (cp.dtype(cp.float32), cp.dtype(cp.float64)):
         raise ValueError("dtype must be cp.float32 or cp.float64")
     return dtype
 
 
 # --------------------------------------------------------------------------- #
-# Pydantic configuration model                                                #
+# Pydantic checkpoint model                                                   #
 # --------------------------------------------------------------------------- #
 
 
 class ConcurrentNormGeneratorConfig(BaseModel):
-    """
-    Immutable checkpoint capturing the *global* RNG state.
+    """Immutable serialisable snapshot of the global RNG state.
 
     Attributes
     ----------
-    rows, cols
-        Matrix dimensions (> 0).
+    rows
+        Matrix height (> 0).
+    cols
+        Matrix width (> 0).
     seed
-        Base seed for the *global* NumPy RNG (> 0).
+        Base seed for the global NumPy RNG (> 0).  Each worker draws its own
+        CuPy seed from this generator.
     dtype
-        Precision of generated matrices (serialised as
-        :class:`~spectralmc.models.numerical.Precision`).
+        Requested numeric precision as `Precision.float32` or
+        `Precision.float64`.
     skips
-        Number of matrices already delivered (≥ 0).
+        How many matrices have already been produced (≥ 0).  Used to advance
+        the NumPy RNG when restoring from a checkpoint.
     """
 
     rows: int = Field(..., gt=0)
@@ -105,16 +115,12 @@ class ConcurrentNormGeneratorConfig(BaseModel):
 
 
 class _NormGenerator:
-    """
-    Generate a stream of standard‑normal matrices on a dedicated CUDA stream.
-
-    The constructor only validates parameters and allocates the stream;
-    the first random kernel is dispatched via :meth:`enqueue`.
-    """
+    """Generate standard‑normal matrices on a dedicated CUDA stream."""
 
     def __init__(self, rows: int, cols: int, *, dtype: cp.dtype) -> None:
+        """Validate shapes, store dtype, and allocate the CUDA stream."""
         if min(rows, cols) <= 0:
-            raise ValueError("`rows` and `cols` must both be positive")
+            raise ValueError("rows and cols must both be positive")
         self._rows: int = rows
         self._cols: int = cols
         self._dtype: cp.dtype = _validate_cupy_dtype(dtype)
@@ -127,32 +133,24 @@ class _NormGenerator:
     # ---------------- asynchronous pipeline --------------------------- #
 
     def enqueue(self, seed: int) -> None:
-        """Launch the kernel that will fill the *next* matrix (non‑blocking)."""
+        """Launch a kernel that fills the next matrix (non‑blocking)."""
         if self._generated is not None:
             raise RuntimeError("previous matrix not yet consumed")
         if seed <= 0:
-            raise ValueError("`seed` must be positive")
+            raise ValueError("seed must be positive")
 
         self._event = cp.cuda.Event(disable_timing=True)
         with self._stream:
             rng = cp.random.default_rng(seed)
             self._generated = rng.standard_normal(
-                (self._rows, self._cols),
-                dtype=self._dtype,
+                (self._rows, self._cols), dtype=self._dtype
             )
             self._event.record()
 
     def get_matrix(self, next_seed: int) -> cp.ndarray:
-        """
-        Synchronise, return the ready matrix, then queue the next one.
-
-        Parameters
-        ----------
-        next_seed
-            Seed for the *subsequent* matrix.
-        """
+        """Synchronise, return the ready matrix, then queue another."""
         if self._generated is None:  # pragma: no cover
-            raise RuntimeError("no matrix enqueued – call `enqueue()` first")
+            raise RuntimeError("no matrix enqueued – call enqueue() first")
 
         t0 = time()
         self._stream.synchronize()
@@ -164,20 +162,22 @@ class _NormGenerator:
 
     # ---------------- diagnostics ------------------------------------- #
 
-    def get_time_spent_synchronizing(self) -> float:  # noqa: D401
-        """Total host‑side synchronisation time (seconds)."""
+    def get_time_spent_synchronizing(self) -> float:
+        """Total host‑side synchronisation latency (seconds)."""
         return self._sync_time
 
-    def is_ready(self) -> bool:  # noqa: D401
-        """Return ``True`` iff the current matrix has finished on the GPU."""
+    def is_ready(self) -> bool:
+        """True iff the current matrix has finished on the GPU."""
         return (
             self._event is not None
             and int(cp.cuda.runtime.eventQuery(self._event.ptr)) == 0
         )
 
+    # ---------------- read‑only props --------------------------------- #
+
     @property
-    def dtype(self) -> cp.dtype:  # noqa: D401
-        """CuPy dtype of generated matrices."""
+    def dtype(self) -> cp.dtype:
+        """CuPy dtype produced by this worker."""
         return self._dtype
 
 
@@ -187,12 +187,7 @@ class _NormGenerator:
 
 
 class ConcurrentNormGenerator:
-    """
-    Pool of :class:`_NormGenerator` objects that hides kernel latency.
-
-    Matrices are fetched via :meth:`get_matrix`; the pool cycles through
-    its workers so that at least one matrix is *usually* ready.
-    """
+    """Latency‑hiding pool of `_NormGenerator` workers."""
 
     # ------------------------------------------------------------------ #
     # Construction                                                       #
@@ -200,20 +195,21 @@ class ConcurrentNormGenerator:
 
     def __init__(self, buffer_size: int, config: ConcurrentNormGeneratorConfig) -> None:
         if buffer_size <= 0:
-            raise ValueError("`buffer_size` must be positive")
+            raise ValueError("buffer_size must be positive")
 
+        # Static parameters
         self._rows: int = config.rows
         self._cols: int = config.cols
         self._dtype: cp.dtype = config.dtype.to_cupy()
+
+        # RNG state
         self._base_seed: int = config.seed
         self._served: int = config.skips
-
-        # Master NumPy RNG advanced to the current position
         self._np_rng = np.random.default_rng(self._base_seed)
         if self._served:
-            self._np_rng.integers(0, _SEED_LIMIT, size=self._served)
+            self._np_rng.integers(0, _SEED_LIMIT, size=self._served)  # fast‑forward
 
-        # Build and prime the pool
+        # Build worker pool
         def _make() -> _NormGenerator:
             seed = int(self._np_rng.integers(0, _SEED_LIMIT))
             gen = _NormGenerator(self._rows, self._cols, dtype=self._dtype)
@@ -223,6 +219,7 @@ class ConcurrentNormGenerator:
         self._pool: List[_NormGenerator] = [_make() for _ in range(buffer_size)]
         self._it = cycle(self._pool)
 
+        # Idle‑time diagnostics
         self._idle_accum: float = 0.0
         self._idle_start: Optional[float] = None
         self._update_idle_state()
@@ -232,11 +229,7 @@ class ConcurrentNormGenerator:
     # ------------------------------------------------------------------ #
 
     def _update_idle_state(self) -> None:
-        """
-        Track how long *all* workers have been simultaneously ready.
-
-        The accumulator only increases while the entire pool sits idle.
-        """
+        """Accumulate time spent with *all* workers simultaneously ready."""
         all_ready = all(gen.is_ready() for gen in self._pool)
         now = time()
         if all_ready and self._idle_start is None:
@@ -250,7 +243,7 @@ class ConcurrentNormGenerator:
     # ------------------------------------------------------------------ #
 
     def get_matrix(self) -> cp.ndarray:
-        """Return the next matrix, immediately enqueuing a replacement."""
+        """Return the next matrix; enqueue another in its place."""
         gen = next(self._it)
         next_seed = int(self._np_rng.integers(0, _SEED_LIMIT))
         mat = gen.get_matrix(next_seed)
@@ -259,7 +252,7 @@ class ConcurrentNormGenerator:
         return mat
 
     def snapshot(self) -> ConcurrentNormGeneratorConfig:
-        """Return a deterministic checkpoint of the current global state."""
+        """Produce a deterministic checkpoint of the current state."""
         return ConcurrentNormGeneratorConfig(
             rows=self._rows,
             cols=self._cols,
@@ -273,7 +266,7 @@ class ConcurrentNormGenerator:
     # ------------------------------------------------------------------ #
 
     def get_time_spent_synchronizing(self) -> float:
-        """Aggregate host‑side synchronisation time across the pool."""
+        """Aggregate host‑side synchronisation latency (seconds)."""
         return sum(gen.get_time_spent_synchronizing() for gen in self._pool)
 
     def get_idle_time(self) -> float:
@@ -285,7 +278,9 @@ class ConcurrentNormGenerator:
             else self._idle_accum
         )
 
+    # ---------------- read‑only props --------------------------------- #
+
     @property
-    def dtype(self) -> cp.dtype:  # noqa: D401
+    def dtype(self) -> cp.dtype:
         """CuPy dtype produced by the generator."""
         return self._dtype
