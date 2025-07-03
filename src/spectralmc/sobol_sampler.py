@@ -1,6 +1,32 @@
+# src/spectralmc/sobol_sampler.py
 """
-Sobol-based quasi-random sampling with automatic Pydantic validation.
-Clean under ``mypy --strict`` without any ignores or casts.
+sobol_sampler.py
+================
+Quasi‑random sampling based on the Sobol low‑discrepancy sequence, with
+automatic Pydantic validation and **strict static typing**.
+
+Why this module is *float64‑only*
+---------------------------------
+* **SciPy’s implementation** of Sobol (`scipy.stats.qmc.Sobol`) always
+  produces `numpy.float64` values.
+* **Python’s default floating‑point type** is already a C `double`
+  (`float64`), so no conversion is needed when passing values to user
+  code.
+* **Pydantic models accept Python floats** as‑is and do their own
+  validation; they do not benefit from a separate “precision” knob.
+
+Adding a precision flag would therefore provide no additional
+functionality while complicating both the public surface and the test
+suite.  Every numerical array in the implementation is explicitly typed
+as `np.float64` to make this design decision obvious.
+
+Public API
+----------
+* :class:`BoundSpec` – inclusive lower/upper bound pair for one axis.
+* :class:`SobolSampler` – generic sampler parameterised by a Pydantic
+  model.
+
+Both classes pass **``mypy --strict``** without ignores, casts, or Any.
 """
 
 from __future__ import annotations
@@ -12,6 +38,8 @@ from numpy.typing import NDArray
 from pydantic import BaseModel, model_validator
 from scipy.stats.qmc import Sobol
 
+__all__: list[str] = ["BoundSpec", "SobolSampler"]
+
 # --------------------------------------------------------------------------- #
 # Type helpers                                                                #
 # --------------------------------------------------------------------------- #
@@ -20,20 +48,64 @@ PointT = TypeVar("PointT", bound=BaseModel)
 
 
 class BoundSpec(BaseModel):
-    """Simple lower/upper bound pair defining one dimension."""
+    """Inclusive numeric bounds for a single coordinate axis.
+
+    Attributes
+    ----------
+    lower
+        Inclusive lower bound.
+    upper
+        Inclusive upper bound.
+
+    Raises
+    ------
+    ValueError
+        If ``lower`` ≥ ``upper`` after validation.
+    """
 
     lower: float
     upper: float
 
+    # ------------------------------------------------------------------ #
+    # Validators                                                         #
+    # ------------------------------------------------------------------ #
+
     @model_validator(mode="after")
-    def _check_bounds(self) -> "BoundSpec":
+    def _validate(self) -> "BoundSpec":  # noqa: D401
+        """Ensure the lower bound is strictly less than the upper bound."""
         if self.lower >= self.upper:
             raise ValueError("`lower` must be strictly less than `upper`.")
         return self
 
 
 class SobolSampler(Generic[PointT]):
-    """Draw Sobol points and validate them via a Pydantic model ``PointT``."""
+    """Generate Sobol points and validate them via a Pydantic model.
+
+    Parameters
+    ----------
+    pydantic_class
+        The Pydantic model that defines the *schema* of each sample.
+    dimensions
+        Mapping ``field_name → BoundSpec``.  The keys **must** match the
+        field names in ``pydantic_class``; order is irrelevant.
+    seed
+        Non‑negative seed forwarded to :class:`scipy.stats.qmc.Sobol` for
+        deterministic reproducibility.
+    skip
+        The Sobol engine index to start from (i.e. discard the first
+        ``skip`` points).  Must be non‑negative.  Default is ``0``.
+
+    Notes
+    -----
+    * All internal computations are in **float64** – the native precision
+      of both SciPy’s Sobol engine and Python floats.
+    * The class holds no mutable state aside from the SciPy engine; if you
+      need checkpoints, serialise ``skip`` and reconstruct later.
+    """
+
+    # ------------------------------------------------------------------ #
+    # Construction                                                       #
+    # ------------------------------------------------------------------ #
 
     def __init__(
         self,
@@ -43,49 +115,63 @@ class SobolSampler(Generic[PointT]):
         seed: int,
         skip: int = 0,
     ) -> None:
-        self._dimension_names = list(pydantic_class.model_fields)
-
-        if set(self._dimension_names) != set(dimensions.keys()):
-            raise ValueError(
-                "Dimension keys do not match model fields.\n"
-                f" → model fields   : {self._dimension_names}\n"
-                f" → dimension keys : {dimensions.keys()}"
-            )
-        if skip < 0:
-            raise ValueError("`skip` must be a non-negative integer")
         if seed < 0:
-            raise ValueError("`seed` must be a non-negative integer or None")
+            raise ValueError("`seed` must be non‑negative")
+        if skip < 0:
+            raise ValueError("`skip` must be non‑negative")
 
-        self._pydantic_class: Type[PointT] = pydantic_class
+        # Field names in deterministic order
+        self._fields: List[str] = list(pydantic_class.model_fields)
+        if set(self._fields) != set(dimensions.keys()):
+            raise ValueError("dimension keys do not match model fields")
 
-        self._lower_bounds = np.array(
-            [dimensions[d].lower for d in self._dimension_names]
+        # Vectorised bounds
+        self._lower: NDArray[np.float64] = np.array(
+            [dimensions[f].lower for f in self._fields], dtype=np.float64
         )
-        self._upper_bounds = np.array(
-            [dimensions[d].upper for d in self._dimension_names]
+        self._upper: NDArray[np.float64] = np.array(
+            [dimensions[f].upper for f in self._fields], dtype=np.float64
         )
 
-        self._d = len(self._dimension_names)
-        self._sampler: Sobol = Sobol(d=self._d, scramble=True, seed=seed)
+        self._model: Type[PointT] = pydantic_class
+        self._sampler: Sobol = Sobol(d=len(self._fields), scramble=True, seed=seed)
         if skip:
             self._sampler.fast_forward(skip)
 
     # ------------------------------------------------------------------ #
-    # Helpers                                                             #
+    # Private helpers                                                    #
     # ------------------------------------------------------------------ #
 
-    def _create_instance(self, row: NDArray[np.float64]) -> PointT:
-        data = {name: float(row[i]) for i, name in enumerate(self._dimension_names)}
-        return self._pydantic_class(**data)
+    def _construct(self, row: NDArray[np.float64]) -> PointT:
+        """Create a validated model instance from one coordinate row."""
+        data = {name: float(row[i]) for i, name in enumerate(self._fields)}
+        return self._model(**data)
 
     # ------------------------------------------------------------------ #
-    # Public API                                                          #
+    # Public API                                                         #
     # ------------------------------------------------------------------ #
 
     def sample(self, n_samples: int) -> List[PointT]:
-        """Return ``n_samples`` validated Sobol points."""
-        samples: NDArray[np.float64] = self._sampler.random(n_samples)
-        scaled = (
-            self._lower_bounds + (self._upper_bounds - self._lower_bounds) * samples
-        )
-        return [self._create_instance(row) for row in scaled]
+        """Return a list of Sobol points.
+
+        Args:
+            n_samples: Non‑negative number of points.  ``0`` returns ``[]``.
+
+        Returns
+        -------
+        list[PointT]
+            Instances of ``pydantic_class`` in generation order.
+
+        Raises
+        ------
+        ValueError
+            If ``n_samples`` is negative.
+        """
+        if n_samples < 0:
+            raise ValueError("`n_samples` must be non‑negative")
+        if n_samples == 0:
+            return []
+
+        raw: NDArray[np.float64] = self._sampler.random(n_samples)
+        scaled: NDArray[np.float64] = self._lower + (self._upper - self._lower) * raw
+        return [self._construct(row) for row in scaled]
