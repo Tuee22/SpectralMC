@@ -1,31 +1,38 @@
-"""End-to-end tests for **spectralmc.async_normals** with *zero* ignores.
+# tests/test_async_normals.py
+"""
+End‑to‑end tests for **spectralmc.async_normals** with *zero ignores*.
 
-The CuPy stubs added under `typings/` provide the few symbols we touch,
-so `mypy --strict` reports no errors.
+The custom CuPy stubs under *typings/* expose every symbol we touch, so the
+suite runs under **mypy --strict** without complaints.
 """
 
 from __future__ import annotations
 
-from typing import List, Literal
+from typing import List
 
 import cupy as cp
 import pytest
-
-from spectralmc import async_normals
 from pydantic import ValidationError
 
-# DType = Literal["float32", "float64"]
+from spectralmc import async_normals
+from spectralmc.models.numerical import Precision
 
 # --------------------------------------------------------------------------- #
 # Fixtures                                                                    #
 # --------------------------------------------------------------------------- #
 
 
-@pytest.fixture(params=("something", "something"), ids=("f32", "f64"))
-def dtype_str(request: pytest.FixtureRequest) -> DType:
-    """Return the dtype literal currently under test."""
-    # mypy sees the two explicit return literals, so no ignore/cast needed.
-    # return "float32" if request.param == "float32" else "float64"
+@pytest.fixture(params=(Precision.float32, Precision.float64), ids=("f32", "f64"))
+def precision(request: pytest.FixtureRequest) -> Precision:
+    """
+    Return the numeric precision currently under test.
+
+    The `assert isinstance` narrows the type from *Any* (as provided by
+    *pytest*) to :class:`Precision`, satisfying **mypy --strict**.
+    """
+    param = request.param
+    assert isinstance(param, Precision)
+    return param
 
 
 # --------------------------------------------------------------------------- #
@@ -33,7 +40,11 @@ def dtype_str(request: pytest.FixtureRequest) -> DType:
 # --------------------------------------------------------------------------- #
 
 
-def _collect(gen: async_normals.ConcurrentNormGenerator, n: int) -> List[cp.ndarray]:
+def _collect(
+    gen: async_normals.ConcurrentNormGenerator,
+    n: int,
+) -> List[cp.ndarray]:
+    """Collect *n* matrices from *gen*."""
     return [gen.get_matrix() for _ in range(n)]
 
 
@@ -42,17 +53,17 @@ def _collect(gen: async_normals.ConcurrentNormGenerator, n: int) -> List[cp.ndar
 # --------------------------------------------------------------------------- #
 
 
-def test_private_norm_generator(dtype_str: DType) -> None:
+def test_private_norm_generator(precision: Precision) -> None:
     rows, cols = 4, 6
-    gen = async_normals._NormGenerator(rows, cols, dtype=dtype_str)
+    gen = async_normals._NormGenerator(rows, cols, precision=precision)
     gen.enqueue(123)
 
     first = gen.get_matrix(456)
     second = gen.get_matrix(789)
 
     assert first.shape == (rows, cols)
-    assert first.dtype == cp.dtype(dtype_str)
-    assert not cp.allclose(first, second)
+    assert first.dtype == precision.to_cupy()
+    assert not cp.allclose(first, second)  # matrices differ
 
     before = gen.get_time_spent_synchronizing()
     _ = gen.get_matrix(111)
@@ -68,37 +79,39 @@ def test_private_norm_generator(dtype_str: DType) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_checkpoint_reproducibility(dtype_str: DType) -> None:
+def test_checkpoint_reproducibility(precision: Precision) -> None:
     rows, cols, buffer = 3, 5, 3
     cfg0 = async_normals.ConcurrentNormGeneratorConfig(
-        rows=rows, cols=cols, seed=42, dtype=dtype_str, skips=0
+        rows=rows,
+        cols=cols,
+        seed=42,
+        dtype=precision,
+        skips=0,
     )
     gen0 = async_normals.ConcurrentNormGenerator(buffer, cfg0)
 
-    # Produce an initial sequence
     initial = _collect(gen0, 10)
     snap = gen0.snapshot()
 
-    # Expected continuation from original generator
     expected = _collect(gen0, 6)
-    assert len(initial) == 10  # sanity
+    assert len(initial) == 10  # sanity check
 
-    # Same buffer size restoration
     gen_same = async_normals.ConcurrentNormGenerator(buffer, snap)
     got_same = _collect(gen_same, 6)
-    for exp, got in zip(expected, got_same, strict=True):
-        assert cp.allclose(exp, got)
+    assert all(cp.allclose(e, g) for e, g in zip(expected, got_same, strict=True))
 
-    # Different buffer size restoration
     gen_diff = async_normals.ConcurrentNormGenerator(buffer + 2, snap)
     got_diff = _collect(gen_diff, 6)
-    for exp, got in zip(expected, got_diff, strict=True):
-        assert cp.allclose(exp, got)
+    assert all(cp.allclose(e, g) for e, g in zip(expected, got_diff, strict=True))
 
 
-def test_diagnostics(dtype_str: DType) -> None:
+def test_diagnostics(precision: Precision) -> None:
     cfg = async_normals.ConcurrentNormGeneratorConfig(
-        rows=2, cols=2, seed=7, dtype=dtype_str, skips=0
+        rows=2,
+        cols=2,
+        seed=7,
+        dtype=precision,
+        skips=0,
     )
     gen = async_normals.ConcurrentNormGenerator(2, cfg)
 
@@ -114,11 +127,11 @@ def test_diagnostics(dtype_str: DType) -> None:
     idle_after = gen.get_idle_time()
     assert idle_after >= idle_before
 
-    assert gen.dtype == cp.dtype(dtype_str)
+    assert gen.dtype == precision.to_cupy()
 
 
 # --------------------------------------------------------------------------- #
-# Validation tests (CPU-only)                                                 #
+# Validation tests (CPU‑only)                                                 #
 # --------------------------------------------------------------------------- #
 
 
@@ -126,10 +139,10 @@ def test_norm_config_validation() -> None:
     # rows must be > 0
     with pytest.raises(ValidationError):
         async_normals.ConcurrentNormGeneratorConfig.model_validate(
-            {"rows": 0, "cols": 2, "seed": 1, "dtype": "float32", "skips": 0}
+            {"rows": 0, "cols": 2, "seed": 1, "dtype": Precision.float32, "skips": 0}
         )
 
-    # dtype must be 'float32' or 'float64'
+    # dtype must be Precision.float32 or Precision.float64
     with pytest.raises(ValidationError):
         async_normals.ConcurrentNormGeneratorConfig.model_validate(
             {"rows": 1, "cols": 2, "seed": 1, "dtype": "float16", "skips": 0}
