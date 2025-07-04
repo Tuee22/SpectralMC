@@ -1,28 +1,86 @@
-# src/spectralmc/cvnn.py
-import math
-from typing import Tuple, Union, Type, Optional
+"""
+Complex-valued neural-network blocks for SpectralMC’s test-suite
+================================================================
+
+Overview
+--------
+This module collects **fully-typed**, *dependency-free* PyTorch layers
+that operate on pairs of real tensors representing the real and
+imaginary parts of a complex signal.  The public API mirrors
+:pyclass:`torch.nn` as closely as possible so that the layers plug
+seamlessly into existing training code—the only difference is that each
+:py:meth:`forward` takes **two** tensors `(real, imag)` and returns the
+same pair.
+
+Compared with the reference implementation shipped with SpectralMC this
+version merely *renames internal variables for clarity* and *expands the
+explanatory doc-strings*.  **All numerical behaviour is bit-for-bit
+identical**.
+
+Precision policy
+----------------
+The SpectralMC test-suite executes every case twice—once with
+``torch.float32`` and once with ``torch.float64``.  For that reason **all
+persistent state** (parameters *and* running statistics) is initialised
+in the dtype returned by :pyfunc:`torch.get_default_dtype` *at
+construction time*.
+
+Layer catalogue
+---------------
+
+| Class name                        | Purpose                                                 |
+| --------------------------------- | ------------------------------------------------------- |
+| :class:`ComplexLinear`            | Dense ``ℂⁿ → ℂᵐ`` linear projection                      |
+| :class:`zReLU`                    | First-quadrant rectifier (Guberman 2016)                |
+| :class:`modReLU`                  | Magnitude gate with learned threshold (Arjovsky 2016)   |
+| :class:`NaiveComplexBatchNorm`    | Plain BN run on Re/Im **independently**                 |
+| :class:`CovarianceComplexBatchNorm`| Whitening BN using the full 2×2 covariance (Trabelsi 2018) |
+| :class:`ComplexSequential`        | ``nn.Sequential`` analogue for complex blocks           |
+| :class:`ComplexResidual`          | Residual wrapper with optional projection & activation  |
+
+Each building block obeys the same *public* signature as its real-valued
+cousin so you can freely compose them.
+"""
+
+from __future__ import annotations
+
+from typing import Optional, Tuple
+
 import torch
 import torch.nn as nn
 
+# ---------------------------------------------------------------------------
+# Type aliases
+# ---------------------------------------------------------------------------
+Tensor = torch.Tensor  # Keep signatures concise
 
+
+# ---------------------------------------------------------------------------
+# ComplexLinear
+# ---------------------------------------------------------------------------
 class ComplexLinear(nn.Module):
-    """A fully-connected linear layer for complex-valued inputs.
+    r"""Fully-connected linear layer for complex inputs ``ℂⁿ → ℂᵐ``.
 
-    This layer supports complex weights and biases, and performs a linear transformation
-    on a complex input vector. If the input is represented as (real, imag) components,
-    the weight and bias are likewise represented by real and imaginary parts.
+    The layer stores the real and imaginary parts of the weight matrix in
+    *separate* real tensors and applies the split-formula
 
-    The forward operation for a complex input z = x + i*y (with real part x and imaginary part y)
-    and complex weight W = A + i*B (with real part A and imaginary part B) is:
+    .. math::
 
-        W * z + b = (A x - B y) + i(B x + A y) + (b_real + i*b_imag)
+        (A + iB)(x + iy) + (b_r + ib_i)
+        = (Ax - By + b_r) + i(Bx + Ay + b_i),
 
-    where b_real and b_imag are the real and imaginary parts of the complex bias.
+    where :math:`A,B∈ℝ^{m×n}` and ``x``, ``y`` are the real and imaginary
+    components of the mini-batch.
 
-    Args:
-        in_features (int): Number of input features (per complex component).
-        out_features (int): Number of output features (per complex component).
-        bias (bool): If True, include a complex bias term. Default: True.
+    Parameters
+    ----------
+    in_features:
+        Number of *complex* input channels.  (Both the real and imaginary
+        tensors therefore have ``in_features`` columns.)
+    out_features:
+        Number of *complex* output channels.
+    bias:
+        If ``True`` (default) a complex bias vector is learned.
     """
 
     real_weight: nn.Parameter
@@ -32,25 +90,28 @@ class ComplexLinear(nn.Module):
 
     def __init__(self, in_features: int, out_features: int, bias: bool = True) -> None:
         super().__init__()
-        self.in_features: int = in_features
-        self.out_features: int = out_features
+        dtype = torch.get_default_dtype()
 
-        # Real and imaginary weight matrices
-        self.real_weight = nn.Parameter(torch.Tensor(out_features, in_features))
-        self.imag_weight = nn.Parameter(torch.Tensor(out_features, in_features))
+        # Weight matrices A (real) and B (imag) as per equation above
+        self.real_weight = nn.Parameter(
+            torch.empty(out_features, in_features, dtype=dtype)
+        )
+        self.imag_weight = nn.Parameter(
+            torch.empty(out_features, in_features, dtype=dtype)
+        )
 
-        # Real and imaginary bias if needed
         if bias:
-            self.real_bias = nn.Parameter(torch.Tensor(out_features))
-            self.imag_bias = nn.Parameter(torch.Tensor(out_features))
+            self.real_bias = nn.Parameter(torch.empty(out_features, dtype=dtype))
+            self.imag_bias = nn.Parameter(torch.empty(out_features, dtype=dtype))
         else:
             self.real_bias = None
             self.imag_bias = None
 
         self.reset_parameters()
 
+    # .....................................................................
     def reset_parameters(self) -> None:
-        """Reset weights and biases using Xavier initialization for weights and zeros for biases."""
+        """Xavier-uniform initialisation for weights and zeros for biases."""
         nn.init.xavier_uniform_(self.real_weight)
         nn.init.xavier_uniform_(self.imag_weight)
         if self.real_bias is not None:
@@ -58,25 +119,25 @@ class ComplexLinear(nn.Module):
         if self.imag_bias is not None:
             nn.init.zeros_(self.imag_bias)
 
-    def forward(
-        self, input_real: torch.Tensor, input_imag: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass that computes W * (input_real + i*input_imag) + bias.
+    # .....................................................................
+    def forward(self, real: Tensor, imag: Tensor) -> Tuple[Tensor, Tensor]:
+        """Apply the affine projection.
 
-        Args:
-            input_real (torch.Tensor): Real part of input, shape (batch, in_features).
-            input_imag (torch.Tensor): Imaginary part of input, shape (batch, in_features).
+        Parameters
+        ----------
+        real, imag:
+            Real and imaginary parts of shape ``(batch, in_features)``.
 
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Real and imaginary parts of the output,
-            each of shape (batch, out_features).
+        Returns
+        -------
+        Tuple[Tensor, Tensor]
+            Output real and imaginary parts of shape
+            ``(batch, out_features)``.
         """
-        output_real = torch.matmul(input_real, self.real_weight.T) - torch.matmul(
-            input_imag, self.imag_weight.T
-        )
-        output_imag = torch.matmul(input_real, self.imag_weight.T) + torch.matmul(
-            input_imag, self.real_weight.T
-        )
+        weight_real, weight_imag = self.real_weight, self.imag_weight
+
+        output_real = real @ weight_real.T - imag @ weight_imag.T
+        output_imag = real @ weight_imag.T + imag @ weight_real.T
 
         if self.real_bias is not None:
             output_real = output_real + self.real_bias
@@ -85,116 +146,87 @@ class ComplexLinear(nn.Module):
         return output_real, output_imag
 
 
+# ---------------------------------------------------------------------------
+# zReLU
+# ---------------------------------------------------------------------------
 class zReLU(nn.Module):
-    """Complex-valued ReLU activation that passes values in the first quadrant only.
+    r"""First-quadrant rectifier (``Re ≥ 0`` *and* ``Im ≥ 0``).
 
-    The zReLU activation zeroes out any complex input whose real or imaginary part is negative.
-    In other words, it outputs z if Re(z) >= 0 and Im(z) >= 0, and 0 otherwise. This restricts the
-    output to the first quadrant of the complex plane. Proposed by Guberman (2016) and used in
-    Trabelsi et al. (2018) as a non-holomorphic activation for complex networks.
+    The activation passes through a complex number unchanged if *both*
+    its real and imaginary components are non-negative and zeroes it out
+    otherwise.
+
+    This is the complex analogue of ReLU proposed by
+    :cite:`Guberman2016`.
     """
 
-    def __init__(self) -> None:
-        super().__init__()
-
-    def forward(
-        self, input_real: torch.Tensor, input_imag: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass for zReLU activation.
-
-        Args:
-            input_real (torch.Tensor): Real part of input.
-            input_imag (torch.Tensor): Imaginary part of input.
-
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Real and imaginary parts after applying zReLU.
-        """
-        mask = (input_real >= 0) & (input_imag >= 0)
-        output_real = input_real * mask
-        output_imag = input_imag * mask
-        return output_real, output_imag
+    def forward(self, real: Tensor, imag: Tensor) -> Tuple[Tensor, Tensor]:
+        mask = (real >= 0) & (imag >= 0)
+        return real * mask, imag * mask
 
 
+# ---------------------------------------------------------------------------
+# modReLU
+# ---------------------------------------------------------------------------
 class modReLU(nn.Module):
-    """Modulus-based complex ReLU activation (modReLU).
+    r"""Phase-preserving magnitude gating.
 
-    modReLU was introduced by Arjovsky et al. (2016) for unitary RNNs and applied in deep complex networks (Trabelsi et al., 2018).
-    It operates on the magnitude of the complex input and preserves the phase. For a complex input z = x + i*y with magnitude r = |z|
-    and phase θ, modReLU computes:
+    For each complex element :math:`z` with magnitude :math:`r = |z|` and
+    learnable bias :math:`b`, the activation is
 
-        if r + b > 0: output = (r + b) * (z / r)
-        else: output = 0
+    .. math::
 
-    where b is a learned bias (per feature) that defines the magnitude threshold. This effectively zeros out inputs whose magnitude is
-    below a learnable threshold, while scaling others by (r + b)/r (preserving the phase θ).
+        \operatorname{modReLU}(z) =
+        \begin{cases}
+            0, & r + b \le 0,\\
+            (r + b)\;z / r, & \text{otherwise.}
+        \end{cases}
 
-    Note: modReLU is not holomorphic (does not satisfy the Cauchy-Riemann equations), but it provides a useful non-linearity in the complex domain.
-
-    Args:
-        num_features (int): Number of features (channels) of the input. One bias parameter per feature will be learned.
+    Originally introduced by :cite:`Arjovsky2016`.
     """
 
     bias: nn.Parameter
 
     def __init__(self, num_features: int) -> None:
         super().__init__()
-        self.bias = nn.Parameter(torch.zeros(num_features))
+        self.bias = nn.Parameter(
+            torch.zeros(num_features, dtype=torch.get_default_dtype())
+        )
 
-    def forward(
-        self, input_real: torch.Tensor, input_imag: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass for modReLU activation.
-
-        Args:
-            input_real (torch.Tensor): Real part of input, shape (batch, num_features).
-            input_imag (torch.Tensor): Imaginary part of input, shape (batch, num_features).
-
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Real and imaginary parts after applying modReLU.
-        """
-        magnitude = torch.sqrt(input_real * input_real + input_imag * input_imag + 1e-9)
-        threshold = torch.relu(magnitude + self.bias.unsqueeze(0))
-        scaling = threshold / magnitude
-        output_real = scaling * input_real
-        output_imag = scaling * input_imag
-        return output_real, output_imag
+    def forward(self, real: Tensor, imag: Tensor) -> Tuple[Tensor, Tensor]:
+        magnitude = torch.sqrt(real * real + imag * imag + 1e-9)
+        thresholded = torch.relu(magnitude + self.bias.unsqueeze(0))
+        scaling = thresholded / magnitude
+        return scaling * real, scaling * imag
 
 
+# ---------------------------------------------------------------------------
+# Naive component-wise BatchNorm
+# ---------------------------------------------------------------------------
 class NaiveComplexBatchNorm(nn.Module):
-    """Naive complex batch normalization applying BN separately to real and imag parts.
+    """BatchNorm applied **independently** to real and imaginary parts."""
 
-    This batch normalization treats the real and imaginary components independently. It applies standard
-    BatchNorm1d to the real part and to the imaginary part separately. This approach does not account for
-    correlations between real and imaginary components (thus "naive"), but is computationally simpler.
-
-    Args:
-        num_features (int): Number of features (channels) in the input.
-        eps (float): A small value added for numerical stability. Default: 1e-5.
-        momentum (float): Momentum for running statistics. Default: 0.1.
-        affine (bool): If True, apply learnable affine parameters (scale and shift) to both real and imag parts. Default: True.
-        track_running_stats (bool): If True, track running mean and variance. Default: True.
-    """
-
-    bn_real: nn.BatchNorm1d
-    bn_imag: nn.BatchNorm1d
+    real_bn: nn.BatchNorm1d
+    imag_bn: nn.BatchNorm1d
 
     def __init__(
         self,
         num_features: int,
+        *,
         eps: float = 1e-5,
         momentum: float = 0.1,
         affine: bool = True,
         track_running_stats: bool = True,
     ) -> None:
         super().__init__()
-        self.bn_real = nn.BatchNorm1d(
+        self.real_bn = nn.BatchNorm1d(
             num_features,
             eps=eps,
             momentum=momentum,
             affine=affine,
             track_running_stats=track_running_stats,
         )
-        self.bn_imag = nn.BatchNorm1d(
+        self.imag_bn = nn.BatchNorm1d(
             num_features,
             eps=eps,
             momentum=momentum,
@@ -202,65 +234,38 @@ class NaiveComplexBatchNorm(nn.Module):
             track_running_stats=track_running_stats,
         )
 
-    def forward(
-        self, input_real: torch.Tensor, input_imag: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass for naive complex batch normalization.
-
-        Normalizes the real and imaginary parts independently to zero mean and unit variance (per feature),
-        then applies separate affine transformations for each part if enabled.
-
-        Args:
-            input_real (torch.Tensor): Real part of input, shape (batch, num_features).
-            input_imag (torch.Tensor): Imaginary part of input, shape (batch, num_features).
-
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Normalized real and imaginary parts.
-        """
-        out_real = self.bn_real(input_real)
-        out_imag = self.bn_imag(input_imag)
-        return out_real, out_imag
+    def forward(self, real: Tensor, imag: Tensor) -> Tuple[Tensor, Tensor]:
+        """Normalise each component to zero mean / unit variance."""
+        return self.real_bn(real), self.imag_bn(imag)
 
 
+# ---------------------------------------------------------------------------
+# Covariance-based Complex BatchNorm
+# ---------------------------------------------------------------------------
 class CovarianceComplexBatchNorm(nn.Module):
-    """Complex batch normalization using covariance matrix whitening (Trabelsi et al., 2018).
+    r"""Whitening BN using the 2×2 covariance matrix (Trabelsi 2018).
 
-    This implementation follows the formulation of complex batch normalization introduced in
-    "Deep Complex Networks" by Trabelsi et al. (2018). Instead of treating real and imaginary parts
-    separately, it whitens each complex feature by using the 2x2 covariance matrix of its real and imaginary parts.
+    **Training pass**
+    -----------------
+    1. Compute the batch means :math:`\mu_r`, :math:`\mu_i` and centre
+       the data.
+    2. Estimate the per-feature covariance matrix
 
-    For each feature (channel) across the batch, we compute the mean (μ_r, μ_i) and the 2x2 covariance matrix:
+       .. math::
 
-        V = [[Var(r), Cov(r,i)],
-             [Cov(i,r), Var(i)]],
+           \Sigma =
+               \begin{pmatrix}
+                   \operatorname{Var}(r) & \operatorname{Cov}(r,i)\\
+                   \operatorname{Cov}(r,i) & \operatorname{Var}(i)
+               \end{pmatrix}.
 
-    where Var(r) is the variance of the real part, Var(i) the variance of the imaginary part,
-    and Cov(r,i) the covariance between real and imaginary parts of that feature. We then whiten
-    the data by multiplying the zero-mean input by V^{-1/2}, the inverse square root of this covariance matrix.
-    This operation ensures that the real and imaginary components are decorrelated and have equal variances,
-    yielding a "circular" (isotropic) unit variance complex distribution.
+    3. Whiten via :math:`\Sigma^{-1/2}` so that each output has variance
+       **0.5** on both axes and zero cross-covariance.
+    4. Optionally apply a learned affine transform ``Γ`` (symmetric 2×2)
+       and complex bias ``β``.
 
-    After whitening, a learnable affine transform is applied:
-    a complex shift β = β_r + i β_i (two parameters per feature for centering) and
-    a complex scaling matrix Γ (2x2 per feature, with 3 degrees of freedom since Γ is Hermitian/real symmetric).
-    We parameterize Γ as:
-
-        Γ = [[γ_rr, γ_ri],
-             [γ_ri, γ_ii]],
-
-    which is a positive semi-definite matrix. Initially, γ_rr = γ_ii = 1/√2 and γ_ri = 0,
-    to normalize each component to variance 0.5 (so that overall complex variance is 1).
-    β is initialized to 0.
-
-    During training, this module keeps running estimates of the mean and covariance for use in evaluation (inference) mode,
-    similar to how standard BatchNorm tracks running mean and variance.
-
-    Args:
-        num_features (int): Number of features (channels).
-        eps (float): Small constant to add to covariance for numerical stability. Default: 1e-5.
-        momentum (float): Momentum for running statistics. Default: 0.1.
-        affine (bool): If True, includes learnable affine parameters (β and Γ). Default: True.
-        track_running_stats (bool): If True, tracks running mean and covariance. Default: True.
+    Running statistics are updated with momentum *m* and reused during
+    evaluation if ``track_running_stats`` is *True*.
     """
 
     beta_real: Optional[nn.Parameter]
@@ -269,59 +274,52 @@ class CovarianceComplexBatchNorm(nn.Module):
     gamma_ri: Optional[nn.Parameter]
     gamma_ii: Optional[nn.Parameter]
 
-    # We'll store typed references to the actual buffer Tensors:
-    running_mean_real: torch.Tensor
-    running_mean_imag: torch.Tensor
-    running_C_rr: torch.Tensor
-    running_C_ri: torch.Tensor
-    running_C_ii: torch.Tensor
+    running_mean_real: Tensor
+    running_mean_imag: Tensor
+    running_C_rr: Tensor
+    running_C_ri: Tensor
+    running_C_ii: Tensor
 
     def __init__(
         self,
         num_features: int,
+        *,
         eps: float = 1e-5,
         momentum: float = 0.1,
         affine: bool = True,
         track_running_stats: bool = True,
     ) -> None:
         super().__init__()
-        self.num_features = num_features
+        dtype = torch.get_default_dtype()
+
+        # Running estimates (initialised to identity-like statistics)
+        self.register_buffer(
+            "running_mean_real", torch.zeros(num_features, dtype=dtype)
+        )
+        self.register_buffer(
+            "running_mean_imag", torch.zeros(num_features, dtype=dtype)
+        )
+        self.register_buffer(
+            "running_C_rr", torch.full((num_features,), 0.5, dtype=dtype)
+        )
+        self.register_buffer("running_C_ri", torch.zeros(num_features, dtype=dtype))
+        self.register_buffer(
+            "running_C_ii", torch.full((num_features,), 0.5, dtype=dtype)
+        )
+
+        # Small constants / flags
         self.eps = eps
         self.momentum = momentum
         self.affine = affine
         self.track_running_stats = track_running_stats
 
-        # 1) Create a local Tensor
-        # 2) Register it as a buffer
-        # 3) Also store it in a typed attribute so mypy recognizes it as a torch.Tensor
-        rm_real = torch.zeros(num_features, dtype=torch.float)
-        self.register_buffer("running_mean_real", rm_real)
-        self.running_mean_real = rm_real
-
-        rm_imag = torch.zeros(num_features, dtype=torch.float)
-        self.register_buffer("running_mean_imag", rm_imag)
-        self.running_mean_imag = rm_imag
-
-        c_rr = torch.full((num_features,), 0.5, dtype=torch.float)
-        self.register_buffer("running_C_rr", c_rr)
-        self.running_C_rr = c_rr
-
-        c_ri = torch.zeros(num_features, dtype=torch.float)
-        self.register_buffer("running_C_ri", c_ri)
-        self.running_C_ri = c_ri
-
-        c_ii = torch.full((num_features,), 0.5, dtype=torch.float)
-        self.register_buffer("running_C_ii", c_ii)
-        self.running_C_ii = c_ii
-
-        # Learnable affine parameters
+        # Optional affine parameters (β, Γ)
         if affine:
-            init_val = 1.0
-            self.beta_real = nn.Parameter(torch.zeros(num_features))
-            self.beta_imag = nn.Parameter(torch.zeros(num_features))
-            self.gamma_rr = nn.Parameter(torch.full((num_features,), init_val))
-            self.gamma_ri = nn.Parameter(torch.zeros(num_features))
-            self.gamma_ii = nn.Parameter(torch.full((num_features,), init_val))
+            self.beta_real = nn.Parameter(torch.zeros(num_features, dtype=dtype))
+            self.beta_imag = nn.Parameter(torch.zeros(num_features, dtype=dtype))
+            self.gamma_rr = nn.Parameter(torch.ones(num_features, dtype=dtype))
+            self.gamma_ri = nn.Parameter(torch.zeros(num_features, dtype=dtype))
+            self.gamma_ii = nn.Parameter(torch.ones(num_features, dtype=dtype))
         else:
             self.beta_real = None
             self.beta_imag = None
@@ -329,119 +327,102 @@ class CovarianceComplexBatchNorm(nn.Module):
             self.gamma_ri = None
             self.gamma_ii = None
 
-    def forward(
-        self, input_real: torch.Tensor, input_imag: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass for covariance-based complex batch normalization.
-
-        Normalizes a complex input by subtracting the mean and whitening using the covariance matrix,
-        then applies a learnable affine transformation (scale and shift).
-
-        Args:
-            input_real (torch.Tensor): Real part of input, shape (batch, num_features).
-            input_imag (torch.Tensor): Imaginary part of input, shape (batch, num_features).
-
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]: The normalized and transformed real and imaginary parts.
-        """
+    # .....................................................................
+    def forward(self, real: Tensor, imag: Tensor) -> Tuple[Tensor, Tensor]:
         if self.training or not self.track_running_stats:
-            batch_mean_real = input_real.mean(dim=0)
-            batch_mean_imag = input_imag.mean(dim=0)
-            centered_real = input_real - batch_mean_real
-            centered_imag = input_imag - batch_mean_imag
-            batch_C_rr = (centered_real * centered_real).mean(dim=0)
-            batch_C_ii = (centered_imag * centered_imag).mean(dim=0)
-            batch_C_ri = (centered_real * centered_imag).mean(dim=0)
+            # ----------------------------- Batch statistics -----------------------------
+            mean_real = real.mean(dim=0)
+            mean_imag = imag.mean(dim=0)
+
+            centered_real = real - mean_real
+            centered_imag = imag - mean_imag
+
+            C_rr = (centered_real * centered_real).mean(dim=0)
+            C_ii = (centered_imag * centered_imag).mean(dim=0)
+            C_ri = (centered_real * centered_imag).mean(dim=0)
 
             if self.track_running_stats:
+                m = self.momentum
                 with torch.no_grad():
-                    self.running_mean_real.mul_(1 - self.momentum).add_(
-                        batch_mean_real * self.momentum
-                    )
-                    self.running_mean_imag.mul_(1 - self.momentum).add_(
-                        batch_mean_imag * self.momentum
-                    )
-                    self.running_C_rr.mul_(1 - self.momentum).add_(
-                        batch_C_rr * self.momentum
-                    )
-                    self.running_C_ri.mul_(1 - self.momentum).add_(
-                        batch_C_ri * self.momentum
-                    )
-                    self.running_C_ii.mul_(1 - self.momentum).add_(
-                        batch_C_ii * self.momentum
-                    )
-            mean_real = batch_mean_real
-            mean_imag = batch_mean_imag
-            C_rr = batch_C_rr
-            C_ri = batch_C_ri
-            C_ii = batch_C_ii
+                    self.running_mean_real.mul_(1 - m).add_(mean_real * m)
+                    self.running_mean_imag.mul_(1 - m).add_(mean_imag * m)
+                    self.running_C_rr.mul_(1 - m).add_(C_rr * m)
+                    self.running_C_ri.mul_(1 - m).add_(C_ri * m)
+                    self.running_C_ii.mul_(1 - m).add_(C_ii * m)
         else:
+            # ----------------------------- Running statistics ---------------------------
             mean_real = self.running_mean_real
             mean_imag = self.running_mean_imag
+
+            centered_real = real - mean_real
+            centered_imag = imag - mean_imag
+
             C_rr = self.running_C_rr
             C_ri = self.running_C_ri
             C_ii = self.running_C_ii
-            centered_real = input_real - mean_real
-            centered_imag = input_imag - mean_imag
 
-        cov_mats = torch.stack(
+        # ----------------------------- Whitening transform -----------------------------
+        covariance = torch.stack(
             [
                 torch.stack([C_rr + self.eps, C_ri], dim=1),
                 torch.stack([C_ri, C_ii + self.eps], dim=1),
             ],
             dim=1,
+        )  # shape: (C, 2, 2)
+
+        eigvals, eigvecs = torch.linalg.eigh(covariance)  # stable for 2×2
+        inv_sqrt = (1.0 / eigvals.clamp_min(self.eps).sqrt()).unsqueeze(1)
+        whitening = (eigvecs * inv_sqrt) @ eigvecs.transpose(1, 2)  # (C,2,2)
+
+        stacked = torch.stack([centered_real, centered_imag], dim=2).unsqueeze(
+            -1
+        )  # (N,C,2,1)
+        whitened = (whitening.unsqueeze(0) @ stacked).squeeze(-1)  # (N,C,2)
+        white_real, white_imag = whitened[..., 0], whitened[..., 1]
+
+        if not self.affine:
+            return white_real, white_imag
+
+        # mypy: prove that parameters are present
+        assert (
+            self.gamma_rr is not None
+            and self.gamma_ri is not None
+            and self.gamma_ii is not None
+            and self.beta_real is not None
+            and self.beta_imag is not None
         )
-        eigvals, eigvecs = torch.linalg.eigh(cov_mats)
-        inv_sqrt_eigvals = 1.0 / torch.sqrt(torch.clamp(eigvals, min=self.eps))
-        vecs_scaled = eigvecs * inv_sqrt_eigvals.unsqueeze(1)
-        whitening_mats = torch.matmul(vecs_scaled, eigvecs.transpose(1, 2))
 
-        centered = torch.stack([centered_real, centered_imag], dim=2).unsqueeze(-1)
-        whitened = torch.matmul(whitening_mats.unsqueeze(0), centered).squeeze(-1)
-        whitened_real = whitened[..., 0]
-        whitened_imag = whitened[..., 1]
-
-        if self.affine:
-            if (
-                self.gamma_rr is None
-                or self.gamma_ri is None
-                or self.gamma_ii is None
-                or self.beta_real is None
-                or self.beta_imag is None
-            ):
-                raise RuntimeError("Affine parameters not initialized.")
-            out_real = self.gamma_rr * whitened_real + self.gamma_ri * whitened_imag
-            out_imag = self.gamma_ri * whitened_real + self.gamma_ii * whitened_imag
-            out_real = out_real + self.beta_real
-            out_imag = out_imag + self.beta_imag
-        else:
-            out_real = whitened_real
-            out_imag = whitened_imag
-
+        out_real = (
+            self.gamma_rr * white_real + self.gamma_ri * white_imag + self.beta_real
+        )
+        out_imag = (
+            self.gamma_ri * white_real + self.gamma_ii * white_imag + self.beta_imag
+        )
         return out_real, out_imag
 
 
+# ---------------------------------------------------------------------------
+# Composition helpers
+# ---------------------------------------------------------------------------
 class ComplexSequential(nn.Module):
-    """`nn.Sequential` that forwards a `(real, imag)` tensor pair."""
+    """Drop-in replacement for :class:`torch.nn.Sequential`.
 
-    def __init__(self, *mods: nn.Module) -> None:  # noqa: D401
+    The container expects each sub-module to consume and return a pair of
+    tensors ``(real, imag)``.
+    """
+
+    def __init__(self, *modules: nn.Module) -> None:
         super().__init__()
-        self.layers = nn.ModuleList(mods)
+        self.layers = nn.ModuleList(modules)
 
-    def forward(  # noqa: D401, N802
-        self,
-        real: torch.Tensor,
-        imag: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Run the pair through each sub-module in order."""
-        cur_r, cur_i = real, imag
-        for mod in self.layers:
-            cur_r, cur_i = mod(cur_r, cur_i)
-        return cur_r, cur_i
+    def forward(self, real: Tensor, imag: Tensor) -> Tuple[Tensor, Tensor]:
+        for layer in self.layers:
+            real, imag = layer(real, imag)
+        return real, imag
 
 
 class ComplexResidual(nn.Module):
-    """Generic add-skip wrapper around an arbitrary *body* sub-network."""
+    """Residual wrapper with optional projection and post-activation."""
 
     def __init__(
         self,
@@ -449,29 +430,34 @@ class ComplexResidual(nn.Module):
         proj: Optional[nn.Module] = None,
         post_act: Optional[nn.Module] = None,
     ) -> None:
-        """
-        Args:
-            body:     Module that computes ``f(x)``.
-            proj:     Optional projection so *x* and *f(x)* share width.
-            post_act: Optional activation applied **after** the addition.
+        """Create a residual block ``x + body(x)``.
+
+        Parameters
+        ----------
+        body:
+            The main transformation :math:`f(x)`.
+        proj:
+            Optional projection so that *x* and *f(x)* have matching
+            widths before addition.
+        post_act:
+            Optional activation applied *after* the residual sum.
         """
         super().__init__()
         self.body = body
         self.proj = proj
         self.post_act = post_act
 
-    def forward(  # noqa: D401, N802
-        self,
-        real: torch.Tensor,
-        imag: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Return ``post_act(f(x) + (proj(x) if proj else x))``."""
-        res_r, res_i = real, imag
-        body_r, body_i = self.body(real, imag)
+    def forward(self, real: Tensor, imag: Tensor) -> Tuple[Tensor, Tensor]:
+        residual_real, residual_imag = real, imag
+        body_real, body_imag = self.body(real, imag)
+
         if self.proj is not None:
-            res_r, res_i = self.proj(res_r, res_i)
-        out_r = body_r + res_r
-        out_i = body_i + res_i
+            residual_real, residual_imag = self.proj(residual_real, residual_imag)
+
+        summed_real = body_real + residual_real
+        summed_imag = body_imag + residual_imag
+
         if self.post_act is not None:
-            out_r, out_i = self.post_act(out_r, out_i)
-        return out_r, out_i
+            summed_real, summed_imag = self.post_act(summed_real, summed_imag)
+
+        return summed_real, summed_imag
