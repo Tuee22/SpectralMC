@@ -1,3 +1,4 @@
+# src/spectralmc/models/numerical.py
 from __future__ import annotations
 
 """
