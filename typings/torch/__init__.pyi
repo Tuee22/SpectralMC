@@ -247,3 +247,12 @@ from . import random as random  # noqa: F401
 def use_deterministic_algorithms(
     mode: bool, *, warn_only: bool | None = ...
 ) -> None: ...
+
+# --------------------------------------------------------------------------- #
+#  SpectralMC extras – added automatically by update_typing.sh
+# --------------------------------------------------------------------------- #
+__version__: str
+from types import ModuleType as _ModuleType  # noqa: E402
+import importlib as _spectralmc_il  # noqa: E402
+
+version: _ModuleType = _spectralmc_il.import_module("torch.version")
