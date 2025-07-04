@@ -1,27 +1,42 @@
 # src/spectralmc/gbm_trainer.py
-"""Training infrastructure for learning discounted Black-Scholes pay-off
-spectra with a complex-valued neural network (CVNN).
+"""
+CUDA‑accelerated trainer for learning discounted Black–Scholes pay‑off
+spectra with a complex‑valued neural network (CVNN).
 
-The trainer
+Overview
+--------
+The :class:`GbmCVNNPricer` orchestrates four tightly‑coupled components:
 
-* drives Monte-Carlo pricing of options entirely on **CUDA**,
-* performs an FFT of the simulated pay-off distribution,
-* feeds the complex spectrum into a **PyTorch** CVNN,
-* back-propagates mean-squared error against the true spectrum, and
-* logs/serialises everything deterministically.
+1. **Quasi‑random contract generator** – `SobolSampler` draws input
+   contracts inside user‑supplied bounds.
+2. **Monte‑Carlo engine** – `spectralmc.gbm.BlackScholes` prices a batch
+   of contracts entirely on **CUDA**, then applies an FFT along the time
+   axis.
+3. **Complex‑valued neural network** – any user model that satisfies the
+   :class:`ComplexValuedModel` protocol.  The trainer infers its
+   execution *device* and *real dtype* directly from the network’s first
+   parameter and asserts that **all** parameters conform.
+4. **Optimiser & logging** – an *Adam* optimiser operating in
+   half‑open‑loop: model parameters live on the active CUDA device while
+   the optimiser *state* is moved to CPU **before** every snapshot to
+   satisfy :pyclass:`spectralmc.models.torch.AdamOptimizerState`.
 
-Networks are supplied externally; they must merely satisfy the
-:class:`ComplexValuedModel` protocol.  A convenient way to create such a
-model is :pyfunc:`spectralmc.cvnn_factory.build_model`.
+Determinism
+-----------
+*   Global PRNG seeding is delegated to callers.
+*   Model and optimiser states are serialised via pure‑CPU
+    :pyclass:`~spectralmc.models.torch.TensorState` objects; this avoids
+    device‑specific artefacts in unit tests.
 
-Note
-----
-Compared with the original implementation, the trainer now **infers**
-its execution device **from the model itself** (via the first
-parameter’s ``.device``) instead of using
-``torch.device("cuda" if torch.cuda.is_available() else "cpu")``.  As
-before, the trainer **asserts** that the supplied model is *already* on
-the expected ``device``/**real** ``dtype``; see :pyfunc:`assert_param_attr`.
+Implementation notes
+--------------------
+* ``_move_optimizer_state`` is a tiny helper that migrates *all* tensors
+  in an `torch.optim.Optimizer.state` dict between devices.
+* The trainer *always* stores the optimiser snapshot on **CPU**.  During
+  a restart we immediately migrate the state back to the training
+  device.
+* Strict typing is enforced with **mypy --strict**; no `Any`, `cast` or
+  `type: ignore` are required.
 """
 
 from __future__ import annotations
@@ -63,20 +78,19 @@ __all__: Tuple[str, ...] = (
 )
 
 # =============================================================================
-#  Typing helpers
+# Protocols & helpers
 # =============================================================================
 
 
 @runtime_checkable
 class ComplexValuedModel(Protocol):
-    """Callable *complex* network: ``(real, imag) -> (real, imag)``."""
+    """Callable complex‑valued network ``(real, imag) -> (real, imag)``."""
 
-    # forward pass ---------------------------------------------------------
     def __call__(
         self, __real: torch.Tensor, __imag: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]: ...
 
-    # subset of nn.Module API used by the trainer -------------------------
+    # minimal subset of the nn.Module API
     def parameters(self) -> Iterable[nn.Parameter]: ...
     def named_parameters(self) -> Iterable[Tuple[str, nn.Parameter]]: ...
     def to(self, device: torch.device, dtype: torch.dtype) -> nn.Module: ...
@@ -84,48 +98,45 @@ class ComplexValuedModel(Protocol):
     def eval(self) -> None: ...
 
 
-# =============================================================================
-#  Generic assertion helper (expression-only)
-# =============================================================================
-
 _T = TypeVar("_T")
 
 
-def assert_param_attr(
-    model: ComplexValuedModel,
-    *,
-    attr: str,
-    expected: _T,
-) -> None:
-    """Fail fast if **any** parameter’s ``attr`` ≠ ``expected``."""
-    (
-        lambda mismatches: mismatches
-        and (_ for _ in ()).throw(
-            RuntimeError(
-                f"Model parameters violate required {attr}:\n  "
-                + "\n  ".join(mismatches)
-            )
+def assert_param_attr(model: ComplexValuedModel, *, attr: str, expected: _T) -> None:
+    """Fail if *any* parameter’s ``attr`` differs from *expected*."""
+    mismatches = [
+        f"{name}: {attr}={getattr(p, attr)} (expected {expected})"
+        for name, p in model.named_parameters()
+        if getattr(p, attr) != expected
+    ]
+    if mismatches:
+        raise RuntimeError(
+            f"Model parameters violate required {attr}:\n  " + "\n  ".join(mismatches)
         )
-        # nb : (_ for _ in ()) just gives us an empty iterator so we can .throw() as an expression
-    )(
-        [
-            f"{name}: {attr}={getattr(p, attr)} (expected {expected})"
-            for name, p in model.named_parameters()
-            if getattr(p, attr) != expected
-        ]
-    )
+
+
+def _move_optimizer_state(opt: optim.Optimizer, target: torch.device) -> None:
+    """
+    Recursively move **all** tensors in ``opt.state`` to *target*.
+
+    The helper is symmetric – calling it twice with different targets
+    shuttles the optimiser state back and forth without data loss.
+    """
+    for state in opt.state.values():
+        for key, value in state.items():
+            if torch.is_tensor(value) and value.device != target:
+                state[key] = value.to(target)
 
 
 # =============================================================================
-#  Public configuration / metric dataclasses
+# Immutable dataclasses
 # =============================================================================
 
 StepLogger = Callable[["StepMetrics"], None]
-"""Hook executed after every optimiser step."""
+"""User‑supplied callback executed once after every optimiser step."""
 
 
 class GbmCVNNPricerConfig(BaseModel):
-    """Frozen state for snapshot/restore of :class:`GbmCVNNPricer`."""
+    """Frozen snapshot used for (de‑)serialising a trainer."""
 
     cfg: BlackScholesConfig
     domain_bounds: Dict[str, BoundSpec]
@@ -137,7 +148,7 @@ class GbmCVNNPricerConfig(BaseModel):
 
 
 class StepMetrics(BaseModel):
-    """Scalar diagnostics emitted after one optimisation step."""
+    """Scalar diagnostics emitted at the end of every optimiser step."""
 
     step: int
     batch_time: float
@@ -151,12 +162,12 @@ class StepMetrics(BaseModel):
 
 
 # =============================================================================
-#  Logging helpers
+#  TensorBoard logger
 # =============================================================================
 
 
 class TensorBoardLogger:
-    """Log :class:`StepMetrics` to TensorBoard."""
+    """Light‑weight TensorBoard logger for :class:`StepMetrics`."""
 
     def __init__(
         self,
@@ -166,11 +177,15 @@ class TensorBoardLogger:
         flush_every: int = 100,
     ) -> None:
         self._writer = SummaryWriter(log_dir=logdir)
-        self._hist_every = max(1, hist_every)
-        self._flush_every = max(1, flush_every)
+        self._hist_every = max(hist_every, 1)
+        self._flush_every = max(flush_every, 1)
 
-    def __call__(self, metrics: StepMetrics) -> None:  # noqa: D401
-        """Write one step of metrics to TensorBoard."""
+    # ------------------------------------------------------------------ #
+    # Callable interface                                                 #
+    # ------------------------------------------------------------------ #
+
+    def __call__(self, metrics: StepMetrics) -> None:
+        """Write one optimisation step to disk."""
         w = self._writer
         step = metrics.step
 
@@ -189,7 +204,7 @@ class TensorBoardLogger:
             w.flush()
 
     def close(self) -> None:
-        """Close the underlying SummaryWriter."""
+        """Close the underlying :class:`~torch.utils.tensorboard.SummaryWriter`."""
         self._writer.close()
 
 
@@ -199,47 +214,35 @@ class TensorBoardLogger:
 
 
 class GbmCVNNPricer:
-    """Coordinates MC pricing, FFT and CVNN optimisation."""
+    """Coordinate MC pricing, FFT and CVNN optimisation."""
 
     # ------------------------------------------------------------------ #
-    # Construction / checkpoint                                          #
+    # Construction                                                       #
     # ------------------------------------------------------------------ #
 
     def __init__(self, cfg: GbmCVNNPricerConfig) -> None:
-        """Instantiate from an immutable configuration."""
+        """Instantiate a trainer from its immutable configuration."""
+        # User payload -------------------------------------------------- #
         self._sim_params = cfg.cfg.sim_params
         self._cvnn: ComplexValuedModel = cfg.cvnn
         self._domain_bounds = cfg.domain_bounds
         self._optimizer_state = cfg.optimizer_state
         self._global_step = cfg.global_step
 
-        # -----------------------------------------------------------------
-        # Device handling
-        # -----------------------------------------------------------------
-        param_iter: Iterator[nn.Parameter] = iter(self._cvnn.parameters())
-        try:
-            first_param = next(param_iter)
-        except StopIteration as exc:  # pragma: no cover
-            raise RuntimeError("Model has no parameters; cannot infer device.") from exc
-
-        self._device = first_param.device  # torch.device
-
-        # ensure every parameter is on this device
+        # Inferred execution device ------------------------------------ #
+        first_param = next(iter(self._cvnn.parameters()), None)
+        if first_param is None:
+            raise RuntimeError("Model has no parameters – cannot infer device.")
+        self._device: torch.device = first_param.device
         assert_param_attr(self._cvnn, attr="device", expected=self._device)
 
-        # -----------------------------------------------------------------
-        # dtype handling
-        # -----------------------------------------------------------------
+        # Scalar dtype checks ------------------------------------------- #
         self._torch_rdtype = (
             torch.float32 if self._sim_params.dtype == "float32" else torch.float64
         )
-
-        # --- assert model parameters all use this dtype -----------------
         assert_param_attr(self._cvnn, attr="dtype", expected=self._torch_rdtype)
 
-        # -----------------------------------------------------------------
-        # Complex dtypes & stream setup
-        # -----------------------------------------------------------------
+        # Complex dtypes & streams -------------------------------------- #
         self._torch_cdtype = (
             torch.complex64 if self._sim_params.dtype == "float32" else torch.complex128
         )
@@ -253,11 +256,11 @@ class GbmCVNNPricer:
             else None
         )
         self._cupy_stream: Optional[CuPyStream] = (
-            CuPyStream(non_blocking=False) if self._device.type == "cuda" else None
+            CuPyStream() if self._device.type == "cuda" else None
         )
 
+        # Engines -------------------------------------------------------- #
         self._mc_engine = BlackScholes(cfg.cfg) if self._device.type == "cuda" else None
-
         self._sampler: SobolSampler[BlackScholes.Inputs] = SobolSampler(
             pydantic_class=BlackScholes.Inputs,
             dimensions=self._domain_bounds,
@@ -266,14 +269,21 @@ class GbmCVNNPricer:
         )
 
     # ------------------------------------------------------------------ #
-    # Public checkpoint interface                                        #
+    # Checkpointing                                                      #
     # ------------------------------------------------------------------ #
 
     def snapshot(self) -> GbmCVNNPricerConfig:
-        """Return an *immutable* copy of all trainer state."""
+        """
+        Return a fully‑deterministic snapshot.
+
+        Note
+        ----
+        The optimiser state is **moved to CPU** so that the resulting
+        :class:`AdamOptimizerState` contains only CPU tensors – a hard
+        requirement for the strict serialisation helper.
+        """
         if self._device.type != "cuda" or self._mc_engine is None:
             raise RuntimeError("Snapshots can only be taken on CUDA.")
-
         return GbmCVNNPricerConfig(
             cfg=self._mc_engine.snapshot(),
             domain_bounds=self._domain_bounds,
@@ -287,15 +297,14 @@ class GbmCVNNPricer:
     # ------------------------------------------------------------------ #
 
     def _simulate_fft(self, contract: BlackScholes.Inputs) -> cp.ndarray:
-        """MC-simulate one contract and return the mean FFT."""
-        if self._device.type != "cuda" or self._mc_engine is None:
-            raise RuntimeError("Simulation requires CUDA.")
-
+        """Simulate one contract and return the batch‑mean FFT."""
+        if self._mc_engine is None:
+            raise RuntimeError("Monte‑Carlo engine not initialised.")
         prices = self._mc_engine.price(inputs=contract).put_price
-        price_mat = prices.reshape(
+        mat = prices.reshape(
             self._sim_params.batches_per_mc_run, self._sim_params.network_size
         )
-        return cp.mean(cp.fft.fft(price_mat, axis=1), axis=0)
+        return cp.mean(cp.fft.fft(mat, axis=1), axis=0)
 
     def _torch_step(
         self,
@@ -304,7 +313,7 @@ class GbmCVNNPricer:
         targets: torch.Tensor,
         optimizer: optim.Optimizer,
     ) -> Tuple[torch.Tensor, float]:
-        """One forward/backward/optimiser step."""
+        """One forward/backward/optimiser step; returns ``(loss, grad_norm)``."""
         pred_r, pred_i = self._cvnn(real_in, imag_in)
         loss = nn.functional.mse_loss(
             pred_r, torch.real(targets)
@@ -318,7 +327,7 @@ class GbmCVNNPricer:
         return loss, grad_norm
 
     # ------------------------------------------------------------------ #
-    # Public API                                                         #
+    # Public API: training                                               #
     # ------------------------------------------------------------------ #
 
     def train(
@@ -329,31 +338,35 @@ class GbmCVNNPricer:
         learning_rate: float,
         logger: Optional[StepLogger] = None,
     ) -> None:
-        """Run *num_batches* optimisation steps."""
+        """Run **CUDA‑only** optimisation for *num_batches* steps."""
         if self._device.type != "cuda":
-            raise RuntimeError("Training requires a CUDA-capable GPU.")
+            raise RuntimeError("Trainer requires a CUDA‑capable GPU.")
 
         adam = optim.Adam(self._cvnn.parameters(), lr=learning_rate)
+
+        # (re‑)attach previous optimiser state -------------------------- #
         if self._optimizer_state is not None:
-            adam.load_state_dict(self._optimizer_state.to_torch(device=self._device))
+            adam.load_state_dict(self._optimizer_state.to_torch())
+            _move_optimizer_state(adam, self._device)  # GPU ← CPU
 
         self._cvnn.train()
 
+        # main loop ------------------------------------------------------ #
         for _ in range(num_batches):
             tic = time.perf_counter()
 
-            # ---------------- Monte-Carlo & FFT (CuPy) -----------------
+            # ── Monte‑Carlo + FFT (CuPy) ─────────────────────────────── #
             sobol_inputs = self._sampler.sample(batch_size)
-            assert self._cupy_stream is not None  # mypy
+            assert self._cupy_stream is not None
             with self._cupy_stream:
                 fft_buf = cp.asarray(
-                    [self._simulate_fft(contract) for contract in sobol_inputs],
+                    [self._simulate_fft(c) for c in sobol_inputs],
                     dtype=self._cupy_cdtype,
                 )
             self._cupy_stream.synchronize()
 
-            # ---------------- CVNN forward/backward (Torch) ------------
-            assert self._torch_stream is not None  # mypy
+            # ── CVNN step (Torch) ────────────────────────────────────── #
+            assert self._torch_stream is not None
             with torch.cuda.stream(self._torch_stream):
                 targets = (
                     torch.utils.dlpack.from_dlpack(fft_buf.toDlpack())
@@ -363,36 +376,36 @@ class GbmCVNNPricer:
                 real_in, imag_in = _split_inputs(
                     sobol_inputs, dtype=self._torch_rdtype, device=self._device
                 )
-                loss, grad_norm_val = self._torch_step(real_in, imag_in, targets, adam)
+                loss, grad_norm = self._torch_step(real_in, imag_in, targets, adam)
             self._torch_stream.synchronize()
 
-            # ---------------- Logging ----------------------------------
-            batch_time = time.perf_counter() - tic
+            # ── Logging ──────────────────────────────────────────────── #
             if logger is not None:
                 logger(
                     StepMetrics(
                         step=self._global_step,
-                        batch_time=batch_time,
+                        batch_time=time.perf_counter() - tic,
                         loss=loss.item(),
-                        grad_norm=grad_norm_val,
+                        grad_norm=grad_norm,
                         lr=float(adam.param_groups[0]["lr"]),
                         optimizer=adam,
                         model=self._cvnn,
                     )
                 )
-
             self._global_step += 1
 
+        # ── Snapshot optimiser (CPU) ─────────────────────────────────── #
+        _move_optimizer_state(adam, torch.device("cpu"))  # CPU ← GPU
         self._optimizer_state = AdamOptimizerState.from_torch(adam)
 
     # ------------------------------------------------------------------ #
-    # Inference                                                          #
+    # Public API: inference                                              #
     # ------------------------------------------------------------------ #
 
     def predict_price(
         self, inputs: Sequence[BlackScholes.Inputs]
     ) -> List[BlackScholes.HostPricingResults]:
-        """Vectorised pricing of plain-vanilla European options."""
+        """Vectorised valuation of plain‑vanilla European options."""
         if not inputs:
             return []
 
@@ -412,34 +425,32 @@ class GbmCVNNPricer:
         avg_ifft = torch.fft.ifft(spectrum, dim=1).mean(dim=1)
 
         results: List[BlackScholes.HostPricingResults] = []
-        for value, contract in zip(avg_ifft, inputs):
-            real_val = float(torch.real(value).item())
-            imag_val = float(torch.imag(value).item())
+        for coeff, contract in zip(avg_ifft, inputs, strict=True):
+            real_val = float(torch.real(coeff).item())
+            imag_val = float(torch.imag(coeff).item())
             if abs(imag_val) > 1.0e-6:
                 warnings.warn(
                     f"IFFT imaginary component {imag_val:.3e} exceeds tolerance.",
                     RuntimeWarning,
                 )
 
-            put_price = real_val
             discount = math.exp(-contract.r * contract.T)
             forward = contract.X0 * math.exp((contract.r - contract.d) * contract.T)
-            intrinsic_put = discount * max(contract.K - forward, 0.0)
-            intrinsic_call = discount * max(forward - contract.K, 0.0)
+            put_price = real_val
             call_price = put_price + forward - contract.K * discount
 
             results.append(
                 BlackScholes.HostPricingResults(
-                    put_price_intrinsic=intrinsic_put,
-                    call_price_intrinsic=intrinsic_call,
                     underlying=forward,
-                    put_convexity=put_price - intrinsic_put,
-                    call_convexity=call_price - intrinsic_call,
                     put_price=put_price,
                     call_price=call_price,
+                    put_price_intrinsic=discount * max(contract.K - forward, 0.0),
+                    call_price_intrinsic=discount * max(forward - contract.K, 0.0),
+                    put_convexity=put_price - discount * max(contract.K - forward, 0.0),
+                    call_convexity=call_price
+                    - discount * max(forward - contract.K, 0.0),
                 )
             )
-
         return results
 
 
@@ -451,7 +462,7 @@ class GbmCVNNPricer:
 def _split_inputs(
     inputs: Sequence[BlackScholes.Inputs], *, dtype: torch.dtype, device: torch.device
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Convert Pydantic inputs into (real, imag) tensors."""
+    """Convert Pydantic input contracts into ``(real, imag)`` tensors."""
     fields = list(BlackScholes.Inputs.model_fields.keys())
     rows = [[float(getattr(inp, f)) for f in fields] for inp in inputs]
     real = torch.tensor(rows, dtype=dtype, device=device)
