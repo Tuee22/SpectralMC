@@ -144,14 +144,14 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
             return _maybe_activate(naive_bn, c.activation, cur_w), cur_w
 
         case CovBNCfg() as c:
-            cplx_bn = CovarianceComplexBatchNorm(
+            cov_bn = CovarianceComplexBatchNorm(
                 cur_w,
                 eps=c.eps,
                 momentum=c.momentum,
                 affine=c.affine,
                 track_running_stats=c.track_running_stats,
             )
-            return _maybe_activate(cplx_bn, c.activation, cur_w), cur_w
+            return _maybe_activate(cov_bn, c.activation, cur_w), cur_w
 
         case SequentialCfg() as c:
 
