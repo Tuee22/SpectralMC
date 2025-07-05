@@ -1,3 +1,4 @@
+# typings/torch/nn/utils/__init__.pyi
 """
 Stub for ``torch.nn.utils`` exposing only clip_grad_norm_.
 """

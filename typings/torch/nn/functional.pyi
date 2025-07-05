@@ -1,3 +1,4 @@
+# torch/nn/functional.py
 """
 Tiny stub for ``torch.nn.functional`` (only mse_loss).
 """

@@ -134,24 +134,24 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
             return _maybe_activate(lyr, c.activation, out_w), out_w
 
         case NaiveBNCfg() as c:
-            bn = NaiveComplexBatchNorm(
+            naive_bn = NaiveComplexBatchNorm(
                 cur_w,
                 eps=c.eps,
                 momentum=c.momentum,
                 affine=c.affine,
                 track_running_stats=c.track_running_stats,
             )
-            return _maybe_activate(bn, c.activation, cur_w), cur_w
+            return _maybe_activate(naive_bn, c.activation, cur_w), cur_w
 
         case CovBNCfg() as c:
-            bn = CovarianceComplexBatchNorm(
+            cplx_bn = CovarianceComplexBatchNorm(
                 cur_w,
                 eps=c.eps,
                 momentum=c.momentum,
                 affine=c.affine,
                 track_running_stats=c.track_running_stats,
             )
-            return _maybe_activate(bn, c.activation, cur_w), cur_w
+            return _maybe_activate(cplx_bn, c.activation, cur_w), cur_w
 
         case SequentialCfg() as c:
 
@@ -195,11 +195,22 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
 
 # ───────────────────────────── public API ───────────────────────────────────
 def build_model(*, n_inputs: int, n_outputs: int, cfg: CVNNConfig) -> nn.Module:
-    torch.manual_seed(cfg.seed)
+    """Build a CVNN model without mutating global RNG state.
+
+    The RNG state (CPU + all CUDA devices) is snapshotted on entry and
+    restored automatically on exit, so calls outside this function see the
+    same random stream they had before.
+    """
+
     cpu_dev = device.cpu.to_torch()
     torch_dtype = cfg.dtype.to_torch()
 
-    with default_device(cpu_dev), default_dtype(torch_dtype):
+    # Snapshot RNG state and safely reseed just for this scope.
+    # The leftmost context manager (`fork_rng`) enters first, so the manual
+    # seed call that follows is completely isolated from the caller.
+    with torch.random.fork_rng(), default_device(cpu_dev), default_dtype(torch_dtype):
+        torch.manual_seed(cfg.seed)  # deterministic but local to this block
+
         body, width = _build_from_cfg(SequentialCfg(layers=cfg.layers), n_inputs)
         body, width = _maybe_project(body, width, n_outputs)
         net = _maybe_activate(body, cfg.final_activation, width)
