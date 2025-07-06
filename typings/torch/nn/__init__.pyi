@@ -1,20 +1,25 @@
 # typings/torch/nn/__init__.pyi
 """
-Strict stub for ``torch.nn`` (only what the repo uses).
+Strict stub for ``torch.nn`` exposing only the symbols SpectralMC touches.
+
+* Fully typed (no ``Any``).
+* Compatible with ``mypy --strict``.
 """
 
 from __future__ import annotations
 from typing import Iterator, Sequence, Tuple, TypeVar, overload
+
 import torch
 
 TMod = TypeVar("TMod", bound="Module")
 
+# ───────────────────────────────── Module ────────────────────────────────────
 class Module:
     training: bool
 
     def __init__(self, *a: object, **kw: object) -> None: ...
 
-    # ─────────────── forward shortcuts (same as before) ───────────────
+    # ──────────── forward shortcuts (overloads kept minimal) ────────────
     @overload
     def __call__(
         self, x: torch.Tensor, y: torch.Tensor
@@ -22,7 +27,7 @@ class Module:
     @overload
     def __call__(self, x: torch.Tensor) -> torch.Tensor: ...
 
-    # ─────────────── state helpers ───────────────
+    # ─────────────────────── state helpers ─────────────────────────────
     def state_dict(self) -> dict[str, torch.Tensor]: ...
     def load_state_dict(
         self: TMod,
@@ -34,12 +39,12 @@ class Module:
     def register_buffer(self, name: str, tensor: torch.Tensor) -> None: ...
     def parameters(self) -> Iterator["Parameter"]: ...
 
-    # ─────────────── mode & traversal ───────────────
+    # ──────────────────── mode & traversal helpers ─────────────────────
     def train(self, mode: bool = ...) -> None: ...
     def eval(self) -> None: ...
     def modules(self) -> Iterator["Module"]: ...
 
-    # ─────────────── device / dtype moves ───────────────
+    # ───────────────────── device / dtype moves ────────────────────────
     def to(
         self: TMod,
         device: torch.device | str | None = ...,
@@ -49,16 +54,23 @@ class Module:
         self, prefix: str = ..., recurse: bool = ...
     ) -> Iterator[Tuple[str, "Parameter"]]: ...
 
-# ───────────────────────────────── Parameter ─────────────────────────────────
+# ─────────────────────────────── Parameter ──────────────────────────────────
 class Parameter(torch.Tensor):
     def __init__(
         self, data: torch.Tensor | None = ..., requires_grad: bool = ...
     ) -> None: ...
-    def copy_(self, other: torch.Tensor) -> "Parameter": ...
+
+    # Must match Tensor.copy_ exactly except for the narrowed return type
+    def copy_(
+        self,
+        other: torch.Tensor,
+        *,
+        non_blocking: bool | None = ...,
+    ) -> "Parameter": ...
     def zero_(self) -> "Parameter": ...
     def fill_(self, value: int | float) -> "Parameter": ...
 
-# ─────────────────────────── concrete layers used in repo ───────────────────
+# ───────────────────── concrete layers used in the project ──────────────────
 class BatchNorm1d(Module):
     def __init__(
         self,
@@ -81,6 +93,6 @@ class _InitModule(Module):
 
 init: _InitModule
 
-# ─────────────────────────── sub-packages the project imports ───────────────
+# ─────────────────────────── sub‑packages re‑exported ───────────────────────
 from . import functional as functional  # noqa: F401
 from . import utils as utils  # noqa: F401
