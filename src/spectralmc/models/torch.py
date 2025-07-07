@@ -24,7 +24,6 @@ This module is meant to be imported **before any third‑party code touches
 `torch`**, guaranteeing that every subsequent tensor operation in the
 interpreter inherits the deterministic configuration.
 """
-
 from __future__ import annotations
 
 ###############################################################################
@@ -199,7 +198,7 @@ def default_device(dev: torch.device) -> Iterator[None]:
 # SafeTensor serialisation ----------------------------------------------------
 ###############################################################################
 from pydantic import BaseModel, ConfigDict  # noqa: E402
-from safetensors import safe_open  # noqa: E402
+from safetensors import safe_open          # noqa: E402
 from safetensors.torch import save as _sf_save  # noqa: E402
 
 
