@@ -1,11 +1,12 @@
 # typings/torch/backends/cudnn.pyi
 """
-Tiny stub for :pymod:`torch.backends.cudnn`.
-
-Only the attributes used by SpectralMC are declared.
+Strict stub for :pymod:`torch.backends.cudnn` (SpectralMC subset).
 """
+
+from __future__ import annotations
 
 def version() -> int | None: ...
 
 deterministic: bool
 benchmark: bool
+allow_tf32: bool  # ← added: matches real PyTorch API

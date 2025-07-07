@@ -28,9 +28,8 @@ interpreter inherits the deterministic configuration.
 from __future__ import annotations
 
 ###############################################################################
-# Reproducibility toggles (MUST precede the first `import torch`)  ────────────
+# Reproducibility toggles (MUST precede the first ``import torch``) -----------
 ###############################################################################
-
 import os
 import platform
 import threading
@@ -39,23 +38,20 @@ from enum import Enum
 from io import BytesIO
 from typing import Dict, Iterable, Iterator, List, Mapping, Protocol, Tuple
 
-# ---------------------------------------------------------------------------
 # CuBLAS workspace size must be fixed *before* CUDA libraries are loaded.
-# ---------------------------------------------------------------------------
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
 
-# -- Import torch only after the env‑var is set --------------------------------
+# Import torch **after** the env‑var is set
 import torch  # noqa: E402
 
 ###############################################################################
 # Sanity checks – abort early if the runtime is not capable of deterministic
 # CUDA execution (SpectralMC is GPU‑only by definition).
 ###############################################################################
-
 if not torch.cuda.is_available():
     raise RuntimeError(
         "SpectralMC requires a CUDA‑enabled build of PyTorch, "
-        "but `torch.cuda.is_available()` returned False.  "
+        "but torch.cuda.is_available() returned False.  "
         "Install the correct wheel or set CUDA_VISIBLE_DEVICES."
     )
 
@@ -66,9 +62,8 @@ if not hasattr(torch.backends, "cudnn") or torch.backends.cudnn.version() is Non
     )
 
 ###############################################################################
-# Determinism knobs – no compromises (speed vs. reproducibility).  ────────────
+# Determinism knobs – no compromises (speed vs. reproducibility). -------------
 ###############################################################################
-
 torch.use_deterministic_algorithms(True, warn_only=False)
 
 # cuDNN flags
@@ -79,9 +74,8 @@ torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 
 ###############################################################################
-# Strongly‑typed helpers  ─────────────────────────────────────────────────────
+# Strongly‑typed helpers ------------------------------------------------------
 ###############################################################################
-
 _DTYPE_STR_TO_TORCH: Dict[str, torch.dtype] = {
     "float16": torch.float16,
     "float32": torch.float32,
@@ -107,12 +101,12 @@ class DType(str, Enum):
 
     # ------------------------------------------------------------------ #
     def to_torch(self) -> torch.dtype:
-        """Return the matching `torch.dtype` singleton."""
+        """Return the matching ``torch.dtype`` singleton."""
         return _DTYPE_STR_TO_TORCH[self.value]
 
     @classmethod
     def from_torch(cls, dt: torch.dtype) -> "DType":
-        """Convert a `torch.dtype` back to :class:`DType`."""
+        """Convert a ``torch.dtype`` back to :class:`DType`."""
         try:
             return cls(_TORCH_DTYPE_TO_STR[dt])
         except KeyError as exc:  # pragma: no cover
@@ -127,17 +121,17 @@ class Device(str, Enum):
 
     # ------------------------------------------------------------------ #
     def to_torch(self) -> torch.device:
-        """Return the equivalent `torch.device`."""
+        """Return the equivalent ``torch.device``."""
         return torch.device(self.value)
 
     @classmethod
     def from_torch(cls, dev: torch.device) -> "Device":
         """
-        Convert a `torch.device` back to :class:`Device`.
+        Convert a ``torch.device`` back to :class:`Device`.
 
-        Only `cpu` and `cuda:0` are allowed.  Using any other CUDA index would
-        void reproducibility guarantees because memory allocations are no longer
-        deterministic across topology / peer‑to‑peer paths.
+        Only ``cpu`` and ``cuda:0`` are allowed.  Using any other CUDA index
+        would void reproducibility guarantees because memory allocations are no
+        longer deterministic across topology / peer‑to‑peer paths.
         """
         if dev.type == "cpu":
             return cls.cpu
@@ -147,7 +141,7 @@ class Device(str, Enum):
 
 
 ###############################################################################
-# Thread‑safe context‑managers  ───────────────────────────────────────────────
+# Thread‑safe context‑managers ------------------------------------------------
 ###############################################################################
 _dtype_lock = threading.RLock()
 _device_lock = threading.RLock()
@@ -202,9 +196,8 @@ def default_device(dev: torch.device) -> Iterator[None]:
 
 
 ###############################################################################
-# SafeTensor serialisation  ───────────────────────────────────────────────────
+# SafeTensor serialisation ----------------------------------------------------
 ###############################################################################
-
 from pydantic import BaseModel, ConfigDict  # noqa: E402
 from safetensors import safe_open  # noqa: E402
 from safetensors.torch import save as _sf_save  # noqa: E402
@@ -213,7 +206,7 @@ from safetensors.torch import save as _sf_save  # noqa: E402
 class TensorState(BaseModel):
     """
     A CPU‑only SafeTensor snapshot that travels as raw bytes yet remembers
-    `shape` and `dtype` for integrity checks on deserialisation.
+    shape and dtype for integrity checks on deserialisation.
     """
 
     data: bytes
@@ -261,17 +254,15 @@ class TensorState(BaseModel):
 
 
 ###############################################################################
-# Runtime fingerprint  ────────────────────────────────────────────────────────
+# Runtime fingerprint ---------------------------------------------------------
 ###############################################################################
-
-
 class TorchEnv(BaseModel):
     """
     Structured snapshot of the active PyTorch / CUDA environment.
 
-    The capture **fails** (instead of silently degrading) whenever CUDA or
-    cuDNN information is missing, aligning with SpectralMC's reproducibility
-    policy that mandates GPU execution.
+    The capture **fails** whenever CUDA or cuDNN information is missing,
+    aligning with SpectralMC's reproducibility policy that mandates GPU
+    execution.
     """
 
     torch_version: str
@@ -296,12 +287,10 @@ class TorchEnv(BaseModel):
 
 
 ###############################################################################
-# Adam optimiser helpers  ─────────────────────────────────────────────────────
+# Adam optimiser helpers ------------------------------------------------------
 ###############################################################################
-
-
 class _HasStateDict(Protocol):
-    """Any optimiser exposing exactly `state_dict()`."""
+    """Any optimiser exposing exactly ``state_dict()``."""
 
     def state_dict(self) -> Mapping[str, object]: ...
 
@@ -319,7 +308,7 @@ class AdamParamState(BaseModel):
     # ------------------------------------------------------------------ #
     @classmethod
     def from_torch(cls, s: Mapping[str, object]) -> "AdamParamState":
-        """Convert PyTorch's raw state‑mapping to a typed snapshot."""
+        """Validate a raw PyTorch param‑state mapping and convert it."""
         allowed = {"step", "exp_avg", "exp_avg_sq", "max_exp_avg_sq"}
         unexpected = set(s) - allowed
         if unexpected:  # pragma: no cover
@@ -332,8 +321,13 @@ class AdamParamState(BaseModel):
                 raise RuntimeError("All Adam state tensors must reside on CPU.")
             return obj
 
+        # ----- strict type‑check for 'step' (fixes mypy overload error) -----
+        step_raw = s["step"]
+        if not isinstance(step_raw, int):
+            raise TypeError("Adam 'step' must be int.")
+
         return cls(
-            step=int(s["step"]),
+            step=step_raw,
             exp_avg=TensorState.from_torch(_req_tensor(s["exp_avg"], "exp_avg")),
             exp_avg_sq=TensorState.from_torch(
                 _req_tensor(s["exp_avg_sq"], "exp_avg_sq")
@@ -371,7 +365,6 @@ class AdamParamGroup(BaseModel):
     amsgrad: bool = False
     maximize: bool = False
 
-    # Unknown keys are forbidden – catches typos early.
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=False)
 
     @classmethod
@@ -388,7 +381,7 @@ class AdamOptimizerState(BaseModel):
     """
     Fully‑typed, serialisable capture of an Adam / AdamW optimiser.
 
-    Shape matches `torch.optim.Adam.state_dict()` exactly, but every nested
+    Shape matches ``torch.optim.Adam.state_dict()`` exactly, but every nested
     node is type‑checked and safe to (de)serialise with JSON / msg‑pack.
     """
 
@@ -434,7 +427,7 @@ class AdamOptimizerState(BaseModel):
 
 
 ###############################################################################
-# Public re‑exports – the only names that should leak out of this module.
+# Public re‑exports – the only names that should leak out of this module ------
 ###############################################################################
 __all__: Tuple[str, ...] = (
     "DType",
