@@ -26,7 +26,7 @@ from spectralmc.cvnn import (
     ComplexSequential,
     ComplexResidual,
 )
-from spectralmc.models.torch import dtype as _dt, device as _dev, default_dtype
+from spectralmc.models.torch import DType as _dt, Device as _dev, default_dtype
 
 # ─────────────────────────── global constants ────────────────────────────
 CPU_DEV: torch.device = _dev.cpu.to_torch()
