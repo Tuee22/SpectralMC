@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import threading
-from typing import List, Tuple
+from typing import List, Tuple, Mapping
 
 import pytest
 import torch
@@ -130,6 +130,8 @@ def test_adam_optimizer_state_roundtrip() -> None:
     # Internal buffers identical
     sd_old, sd_new = opt.state_dict(), new_opt.state_dict()
     assert sd_old.keys() == sd_new.keys()
+    assert isinstance(sd_old["state"], Mapping)
+    assert isinstance(sd_new["state"], Mapping)
     assert sd_old["state"].keys() == sd_new["state"].keys()
 
 

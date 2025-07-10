@@ -31,7 +31,6 @@ from __future__ import annotations
 ###############################################################################
 import os
 import platform
-import threading
 from contextlib import contextmanager
 from enum import Enum
 from io import BytesIO
@@ -129,33 +128,25 @@ class Device(str, Enum):
         raise ValueError("SpectralMC supports only CPU and the first CUDA device.")
 
 
-###############################################################################
-# Thread‑safe context‑managers ------------------------------------------------
-###############################################################################
-_dtype_lock = threading.RLock()
-_device_lock = threading.RLock()
-
 
 @contextmanager
 def default_dtype(dt: torch.dtype) -> Iterator[None]:
-    with _dtype_lock:
-        prev = torch.get_default_dtype()
-        torch.set_default_dtype(dt)
-        try:
-            yield
-        finally:
-            torch.set_default_dtype(prev)
+    prev = torch.get_default_dtype()
+    torch.set_default_dtype(dt)
+    try:
+        yield
+    finally:
+        torch.set_default_dtype(prev)
 
 
 @contextmanager
 def default_device(dev: torch.device) -> Iterator[None]:
-    with _device_lock:
-        prev = torch.tensor([]).device
-        torch.set_default_device(dev)
-        try:
-            yield
-        finally:
-            torch.set_default_device(prev)
+    prev = torch.tensor([]).device
+    torch.set_default_device(dev)
+    try:
+        yield
+    finally:
+        torch.set_default_device(prev)
 
 
 ###############################################################################
