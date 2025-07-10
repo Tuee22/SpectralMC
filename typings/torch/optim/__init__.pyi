@@ -10,7 +10,7 @@ Key points
 """
 from __future__ import annotations
 
-from typing import Iterable, Protocol, TypedDict
+from typing import Iterable, Mapping, Protocol, TypedDict
 
 import torch
 
@@ -40,8 +40,8 @@ class Optimizer:
 
     def zero_grad(self, *, set_to_none: bool | None = ...) -> None: ...
     def step(self) -> None: ...
-    def load_state_dict(self, state: _OptimizerStateDict) -> None: ...
-    def state_dict(self) -> _OptimizerStateDict: ...
+    def load_state_dict(self, state: Mapping[str, object]) -> None: ...
+    def state_dict(self) -> Mapping[str, object]: ...
 
 # -------------------------------------------------------------------- #
 #  Concrete optimiser classes used in SpectralMC

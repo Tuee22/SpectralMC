@@ -1,3 +1,4 @@
+# typings/torch/__init__.pyi
 """
 Strict, project‑specific stub for the **top‑level** :pymod:`torch` namespace.
 
@@ -8,7 +9,7 @@ remain *type‑pure*: **no** ``Any``, **no** ``cast``, **no** ``type: ignore``.
 from __future__ import annotations
 
 import builtins as _b
-from typing import Iterator, Sequence, Tuple, TypeAlias, TypeVar, overload
+from typing import Iterator, Mapping, Sequence, Tuple, TypeAlias, TypeVar, overload
 
 # ─────────────────────────── dtype & device singletons ────────────────────
 class dtype: ...
@@ -20,7 +21,7 @@ bfloat16: dtype
 complex64: dtype
 complex128: dtype
 int64: dtype
-float: dtype  # aliases exposed by PyTorch
+float: dtype  # legacy aliases
 double: dtype
 long: dtype
 
@@ -29,9 +30,16 @@ def set_default_dtype(d: dtype) -> None: ...
 def set_default_device(d: str | "device") -> None: ...
 
 class device:
-    """Tiny façade of :class:`torch.device` (still a context‑manager)."""
+    """
+    Minimal façade of :class:`torch.device`.  Two‑argument construction
+    (``torch.device("cuda", 0)``) is required by the unit‑tests.
+    """
 
-    def __init__(self, spec: str | "device" | None = ...) -> None: ...
+    def __init__(
+        self,
+        spec_or_type: str | "device" | None = ...,
+        index: int | None = ...,
+    ) -> None: ...
     def __enter__(self) -> "device": ...
     def __exit__(
         self,
@@ -93,10 +101,14 @@ class Tensor:
         unbiased: bool = ...,
         **kw: object,
     ) -> "Tensor": ...
-    def pow(self, exponent: _b.int | _b.float) -> "Tensor": ...
+    def pow(self, exponent: _b.int | _b.float | "Tensor") -> "Tensor": ...
     def square(self) -> "Tensor": ...
     def abs(self) -> "Tensor": ...
     def all(self) -> "Tensor": ...
+
+    # Vectorised ** operator
+    def __pow__(self, exponent: _b.int | _b.float | "Tensor") -> "Tensor": ...
+    def __rpow__(self, exponent: _b.int | _b.float | "Tensor") -> "Tensor": ...
 
     # Reductions / transforms ------------------------------------------------
     def max(self, dim: int | None = ..., keepdim: bool = ...) -> "Tensor": ...
@@ -143,6 +155,7 @@ class Tensor:
     def __and__(self, other: "Tensor | bool") -> "Tensor": ...
     __rand__ = __and__
 
+    # Slicing / indexing
     def __getitem__(self, idx: object) -> "Tensor": ...
 
     # Utilities --------------------------------------------------------------
@@ -167,6 +180,9 @@ class Tensor:
     def __iter__(self) -> Iterator["Tensor"]: ...
 
 # ───────────────────────── functional helpers (top level) ──────────────────
+#  Re‑export the Generator so user code can do torch.Generator().
+from .random import Generator as Generator  # noqa: E402
+
 def is_floating_point(t: Tensor, /) -> bool: ...
 def empty(
     *size: int,
@@ -197,6 +213,17 @@ def randn(
     dtype: _DType | None = ...,
     device: _TorchDevice | str | None = ...,
     requires_grad: bool = ...,
+    generator: "Generator | None" = ...,
+) -> Tensor: ...
+def arange(
+    start: _b.int | _b.float,
+    end: _b.int | _b.float | None = ...,
+    step: _b.int | _b.float = ...,
+    *,
+    dtype: _DType | None = ...,
+    device: _TorchDevice | str | None = ...,
+    requires_grad: bool = ...,
+    generator: "Generator | None" = ...,
 ) -> Tensor: ...
 def tensor(
     data: object,
@@ -215,13 +242,13 @@ def stack(tensors: Sequence[Tensor], dim: int = ...) -> Tensor: ...
 def square(a: Tensor) -> Tensor: ...
 def all(a: Tensor) -> bool: ...
 def allclose(
-    a: Tensor, b: Tensor, *, atol: _b.float = ..., rtol: _b.float = ...
+    a: Tensor, b: Tensor, atol: _b.float = ..., rtol: _b.float = ...
 ) -> bool: ...
 def isfinite(a: Tensor) -> Tensor: ...
 def manual_seed(seed: int) -> None: ...
 def equal(a: Tensor, b: Tensor, /) -> bool: ...
 
-# --- complex‑number helpers used in repo -----------------------------------
+# complex‑number helpers
 def real(a: Tensor) -> Tensor: ...
 def imag(a: Tensor) -> Tensor: ...
 def view_as_complex(a: Tensor) -> Tensor: ...
@@ -241,7 +268,7 @@ class _NoGrad:
 def no_grad() -> _NoGrad: ...
 
 # ─────────────────────────── sub‑package re‑exports ───────────────────────
-from . import nn as nn  # noqa: F401 – uses Parameter below
+from . import nn as nn  # noqa: F401 – used at runtime
 from . import optim as optim  # noqa: F401
 from . import cuda as cuda  # noqa: F401
 from . import utils as utils  # noqa: F401
@@ -254,9 +281,7 @@ def use_deterministic_algorithms(
     mode: bool, *, warn_only: bool | None = ...
 ) -> None: ...
 
-# --------------------------------------------------------------------------- #
-#  SpectralMC extras
-# --------------------------------------------------------------------------- #
+# ───────────────────────────── version info ───────────────────────────────
 __version__: str
 from types import ModuleType as _ModuleType  # noqa: E402
 import importlib as _il  # noqa: E402
