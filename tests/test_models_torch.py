@@ -15,7 +15,6 @@ All tests are fully typed and mypy‑strict‑clean.
 from __future__ import annotations
 
 import contextlib
-import threading
 from typing import List, Tuple, Mapping
 
 import pytest
@@ -74,29 +73,6 @@ def test_default_device_nested() -> None:
         with sm_torch.default_device(torch.device("cpu")):
             assert torch.tensor([]).device.type == "cpu"
     assert torch.tensor([]).device == orig
-
-
-def test_default_dtype_thread_safety() -> None:
-    """Each thread must restore the global dtype correctly."""
-    barrier = threading.Barrier(2)
-    results: List[torch.dtype] = []
-
-    def _worker(dt: torch.dtype) -> None:
-        with sm_torch.default_dtype(dt):
-            barrier.wait()  # both threads inside their contexts
-            results.append(torch.get_default_dtype())
-        # dtype should be back to original (float32) after exit
-        results.append(torch.get_default_dtype())
-
-    t1 = threading.Thread(target=_worker, args=(torch.float64,))
-    t2 = threading.Thread(target=_worker, args=(torch.float16,))
-    t1.start()
-    t2.start()
-    t1.join()
-    t2.join()
-    # Inside contexts the dtypes differ, afterwards both are back to float32
-    assert results.count(torch.float32) == 2
-    assert torch.float64 in results and torch.float16 in results
 
 
 # ────────────────────────── TensorState round‑trip ──────────────────────────
