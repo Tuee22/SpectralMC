@@ -74,7 +74,7 @@ class DType(str, Enum):
         return _DTYPE_STR_TO_TORCH[self.value]
 
     @classmethod
-    def from_torch(cls, dt: torch.dtype) -> "DType":
+    def from_torch(cls, dt: torch.dtype) -> DType:
         if dt not in _TORCH_DTYPE_TO_STR:
             raise ValueError(f"Unsupported torch.dtype {dt!r}")
         return cls(_TORCH_DTYPE_TO_STR[dt])
@@ -90,7 +90,7 @@ class Device(str, Enum):
         return torch.device(self.value)
 
     @classmethod
-    def from_torch(cls, dev: torch.device) -> "Device":
+    def from_torch(cls, dev: torch.device) -> Device:
         if dev.type == "cpu":
             return cls.cpu
         if dev.type == "cuda" and dev.index in {None, 0}:
@@ -122,7 +122,7 @@ def default_device(dev: torch.device) -> Iterator[None]:
 
 
 # --------------------------------------------------------------------------- #
-#  SafeTensor serialisation helpers                                           #
+#  SafeTensor serialization helpers                                           #
 # --------------------------------------------------------------------------- #
 from pydantic import BaseModel, ConfigDict  # noqa: E402
 from safetensors.torch import load as _sf_load, save as _sf_save  # noqa: E402
@@ -139,7 +139,7 @@ class TensorState(BaseModel):
 
     # ------------------------------------------------------------------ #
     @staticmethod
-    def from_torch(t: torch.Tensor) -> "TensorState":
+    def from_torch(t: torch.Tensor) -> TensorState:
         if t.device != Device.cpu.to_torch():
             raise RuntimeError("Tensor must reside on CPU to enter TensorState.")
         blob: bytes = _sf_save({"tensor": t})
@@ -148,25 +148,26 @@ class TensorState(BaseModel):
         )
 
     def to_torch(self) -> torch.Tensor:
-        tensor_dict: dict[str, torch.Tensor] = _sf_load(
-            self.data, device=Device.cpu.value
-        )
+        # Load safetensor bytes (always loads to CPU in safetensors >=0.5.3)
+        tensor_dict: Dict[str, torch.Tensor] = _sf_load(self.data)
         tensor = tensor_dict["tensor"]
+        assert tensor.device == Device.cpu.to_torch(), "Error: tensor not on cpu"
         if (
             tuple(tensor.shape) != self.shape
             or DType.from_torch(tensor.dtype) != self.dtype
         ):
-            raise RuntimeError("Tensor metadata mismatch on deserialisation.")
+            raise RuntimeError("Tensor metadata mismatch on deserialization.")
         return tensor
 
     @staticmethod
-    def from_bytes(raw: bytes) -> "TensorState":
-        tensor_dict: dict[str, torch.Tensor] = _sf_load(raw, device=Device.cpu.value)
-        if set(tensor_dict) != {"tensor"}:
+    def from_bytes(raw: bytes) -> TensorState:
+        tensor_dict: Dict[str, torch.Tensor] = _sf_load(raw)
+        if set(tensor_dict.keys()) != {"tensor"}:
             raise ValueError(
                 "SafeTensor must contain exactly one entry named 'tensor'."
             )
         t = tensor_dict["tensor"]
+        assert t.device == Device.cpu.to_torch(), "Error: tensor not on cpu"
         return TensorState(
             data=raw, shape=tuple(t.shape), dtype=DType.from_torch(t.dtype)
         )
@@ -185,7 +186,7 @@ class TorchEnv(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=False)
 
     @classmethod
-    def snapshot(cls) -> "TorchEnv":
+    def snapshot(cls) -> TorchEnv:
         if _HAS_CUDA:
             cuda_ver = torch.version.cuda or "<unknown>"
             cudnn_ver = torch.backends.cudnn.version() or -1
@@ -204,7 +205,7 @@ class TorchEnv(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-#  Adam optimiser helpers                                                     #
+#  Adam optimizer helpers                                                     #
 # --------------------------------------------------------------------------- #
 class _HasStateDict(Protocol):
     def state_dict(self) -> Mapping[str, object]: ...
@@ -220,7 +221,7 @@ class AdamParamState(BaseModel):
 
     # ------------------------------------------------------------------ #
     @classmethod
-    def from_torch(cls, s: Mapping[str, object]) -> "AdamParamState":
+    def from_torch(cls, s: Mapping[str, object]) -> AdamParamState:
         allowed = {"step", "exp_avg", "exp_avg_sq", "max_exp_avg_sq"}
         extra = set(s) - allowed
         if extra:
@@ -233,7 +234,7 @@ class AdamParamState(BaseModel):
                 raise RuntimeError("Adam state tensors must live on CPU.")
             return obj
 
-        # Accept Python int or 0‑D CPU tensor
+        # Accept Python int or 0‑D CPU tensor for step
         step_raw = s["step"]
         if isinstance(step_raw, torch.Tensor):
             if step_raw.ndim != 0 or step_raw.device != Device.cpu.to_torch():
@@ -278,14 +279,21 @@ class AdamParamGroup(BaseModel):
     weight_decay: float
     amsgrad: bool = False
     maximize: bool = False
+    foreach: bool | None = None
+    capturable: bool = False
+    differentiable: bool = False
+    fused: bool | None = None
+    decoupled_weight_decay: bool = False
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=False)
 
     @classmethod
-    def from_torch(cls, g: Mapping[str, object]) -> "AdamParamGroup":
+    def from_torch(cls, g: Mapping[str, object]) -> AdamParamGroup:
+        # Pydantic will validate and populate all known fields (extra fields forbidden)
         return cls.model_validate(g)
 
     def to_torch(self) -> Dict[str, object]:
+        # Convert the Pydantic model to a Python dict for state_dict
         return self.model_dump(mode="python")
 
 
@@ -297,13 +305,15 @@ class AdamOptimizerState(BaseModel):
 
     # ------------------------------------------------------------------ #
     @classmethod
-    def from_torch(cls, optim: _HasStateDict) -> "AdamOptimizerState":
+    def from_torch(cls, optim: _HasStateDict) -> AdamOptimizerState:
         if optim.__class__.__name__ not in {"Adam", "AdamW"}:
             raise TypeError("Only torch.optim.Adam or AdamW are supported.")
 
         sd = optim.state_dict()
-        if set(sd) != {"state", "param_groups"}:
-            raise RuntimeError("state_dict() must contain exactly state & param_groups")
+        if set(sd.keys()) != {"state", "param_groups"}:
+            raise RuntimeError(
+                "state_dict() must contain exactly 'state' and 'param_groups'."
+            )
 
         state_raw, groups_raw = sd["state"], sd["param_groups"]
         if not isinstance(state_raw, Mapping):
