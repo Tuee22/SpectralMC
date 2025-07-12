@@ -15,7 +15,7 @@ or :data:`device.cuda` without allocating on the source GPU.
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
-from spectralmc.models.torch import device
+from spectralmc.models.torch import Device
 
 __all__ = ["Scalar", "TensorTree", "move_tensor_tree"]
 

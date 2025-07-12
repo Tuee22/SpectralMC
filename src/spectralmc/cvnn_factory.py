@@ -10,8 +10,8 @@ from pydantic import BaseModel, PositiveInt
 
 from spectralmc.models.torch import (
     TensorState,
-    dtype,
-    device,
+    DType,
+    Device,
     default_dtype,
     default_device,
 )
@@ -98,7 +98,7 @@ class ResidualCfg(BaseModel):
 
 
 class CVNNConfig(BaseModel):
-    dtype: dtype
+    dtype: DType
     layers: List[LayerCfg]
     seed: PositiveInt
     final_activation: Optional[ActivationCfg] = None
@@ -202,7 +202,7 @@ def build_model(*, n_inputs: int, n_outputs: int, cfg: CVNNConfig) -> nn.Module:
     same random stream they had before.
     """
 
-    cpu_dev = device.cpu.to_torch()
+    cpu_dev = Device.cpu.to_torch()
     torch_dtype = cfg.dtype.to_torch()
 
     # Snapshot RNG state and safely reseed just for this scope.
