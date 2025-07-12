@@ -1,3 +1,4 @@
+# src/spectralmc/models/cpu_transfer.py
 from __future__ import annotations
 
 """
@@ -12,10 +13,9 @@ or :data:`device.cuda` without allocating on the source GPU.
 * Passes ``mypy --strict``.
 """
 
-from typing import Dict, List, Optional, Tuple, Union
-
-import torch
 from spectralmc.models.torch import Device
+from typing import Dict, List, Optional, Tuple, Union
+import torch
 
 __all__ = ["Scalar", "TensorTree", "move_tensor_tree"]
 
@@ -117,7 +117,7 @@ def _move(
 def move_tensor_tree(
     tree: TensorTree,
     *,
-    dest: device,
+    dest: Device,
     pin_memory: bool = True,
 ) -> TensorTree:
     """
