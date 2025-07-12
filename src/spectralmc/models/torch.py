@@ -161,7 +161,9 @@ class TensorState(BaseModel):
     def from_bytes(raw: bytes) -> "TensorState":
         tensor_dict: dict[str, torch.Tensor] = _sf_load(raw, device=Device.cpu.value)
         if set(tensor_dict) != {"tensor"}:
-            raise ValueError("SafeTensor must contain exactly one entry named 'tensor'.")
+            raise ValueError(
+                "SafeTensor must contain exactly one entry named 'tensor'."
+            )
         t = tensor_dict["tensor"]
         return TensorState(
             data=raw, shape=tuple(t.shape), dtype=DType.from_torch(t.dtype)
