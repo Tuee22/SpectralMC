@@ -8,9 +8,9 @@ SpectralMC while enforcing reproducible execution.
 
 from __future__ import annotations
 
-###############################################################################
-# Early environment fixes -----------------------------------------------------
-###############################################################################
+# --------------------------------------------------------------------------- #
+#  Early environment fixes                                                    #
+# --------------------------------------------------------------------------- #
 import os
 import platform
 from contextlib import contextmanager
@@ -22,9 +22,9 @@ os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
 
 import torch  # noqa: E402
 
-###############################################################################
-# Determinism knobs -----------------------------------------------------------
-###############################################################################
+# --------------------------------------------------------------------------- #
+#  Determinism knobs                                                          #
+# --------------------------------------------------------------------------- #
 torch.use_deterministic_algorithms(True, warn_only=False)
 _HAS_CUDA = torch.cuda.is_available()
 
@@ -32,21 +32,21 @@ if _HAS_CUDA:
     if torch.backends.cudnn.version() is None:
         raise RuntimeError(
             "SpectralMC requires cuDNN for deterministic GPU execution, "
-            "but it is missing from the current runtime."
+            "but it is missing from the current runtime.",
         )
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.allow_tf32 = False
     torch.backends.cuda.matmul.allow_tf32 = False
 else:
-    # Even on pure‑CPU builds make sure these flags exist and are disabled
+    # Even on CPU‑only builds make sure these flags exist and are disabled
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.allow_tf32 = False
 
-###############################################################################
-# Strongly typed helpers ------------------------------------------------------
-###############################################################################
+# --------------------------------------------------------------------------- #
+#  Strongly‑typed helpers                                                     #
+# --------------------------------------------------------------------------- #
 _DTYPE_STR_TO_TORCH: Dict[str, torch.dtype] = {
     "float16": torch.float16,
     "float32": torch.float32,
@@ -70,6 +70,7 @@ class DType(str, Enum):
 
     # --- conversion helpers -------------------------------------------------
     def to_torch(self) -> torch.dtype:  # noqa: D401
+        """Return the corresponding ``torch.dtype``."""
         return _DTYPE_STR_TO_TORCH[self.value]
 
     @classmethod
@@ -85,6 +86,7 @@ class Device(str, Enum):
 
     # --- conversion helpers -------------------------------------------------
     def to_torch(self) -> torch.device:  # noqa: D401
+        """Return the corresponding ``torch.device``."""
         return torch.device(self.value)
 
     @classmethod
@@ -96,9 +98,9 @@ class Device(str, Enum):
         raise ValueError("Only CPU and the first CUDA card are supported.")
 
 
-###############################################################################
-# Lightweight global context managers ----------------------------------------
-###############################################################################
+# --------------------------------------------------------------------------- #
+#  Lightweight global context managers                                        #
+# --------------------------------------------------------------------------- #
 @contextmanager
 def default_dtype(dt: torch.dtype) -> Iterator[None]:
     previous = torch.get_default_dtype()
@@ -119,9 +121,9 @@ def default_device(dev: torch.device) -> Iterator[None]:
         torch.set_default_device(previous)
 
 
-###############################################################################
-# SafeTensor serialisation helpers -------------------------------------------
-###############################################################################
+# --------------------------------------------------------------------------- #
+#  SafeTensor serialisation helpers                                           #
+# --------------------------------------------------------------------------- #
 from pydantic import BaseModel, ConfigDict  # noqa: E402
 from safetensors.torch import load as _sf_load, save as _sf_save  # noqa: E402
 
@@ -170,9 +172,9 @@ class TensorState(BaseModel):
         )
 
 
-###############################################################################
-# Environment fingerprint -----------------------------------------------------
-###############################################################################
+# --------------------------------------------------------------------------- #
+#  Environment fingerprint                                                    #
+# --------------------------------------------------------------------------- #
 class TorchEnv(BaseModel):
     torch_version: str
     cuda_version: str
@@ -201,9 +203,9 @@ class TorchEnv(BaseModel):
         )
 
 
-###############################################################################
-# Adam optimiser helpers ------------------------------------------------------
-###############################################################################
+# --------------------------------------------------------------------------- #
+#  Adam optimiser helpers                                                     #
+# --------------------------------------------------------------------------- #
 class _HasStateDict(Protocol):
     def state_dict(self) -> Mapping[str, object]: ...
 
@@ -323,9 +325,9 @@ class AdamOptimizerState(BaseModel):
         }
 
 
-###############################################################################
-# Public re‑exports -----------------------------------------------------------
-###############################################################################
+# --------------------------------------------------------------------------- #
+#  Public API                                                                 #
+# --------------------------------------------------------------------------- #
 __all__: Tuple[str, ...] = (
     "DType",
     "Device",
