@@ -9,7 +9,16 @@ remain *type‑pure*: **no** ``Any``, **no** ``cast``, **no** ``type: ignore``.
 from __future__ import annotations
 
 import builtins as _b
-from typing import Iterator, Mapping, Sequence, Tuple, TypeAlias, TypeVar, overload, Protocol
+from typing import (
+    Iterator,
+    Mapping,
+    Sequence,
+    Tuple,
+    TypeAlias,
+    TypeVar,
+    overload,
+    Protocol,
+)
 
 # ─────────────────────────── dtype & device singletons ────────────────────
 class dtype: ...
@@ -188,7 +197,6 @@ class Tensor:
     # Storage & memory helpers (added for tests) --------------------------
     def untyped_storage(self) -> _UntypedStorage: ...
     def is_pinned(self) -> bool: ...
-
 
 # ───────────────────────── functional helpers (top level) ──────────────────
 #  Re‑export the Generator so user code can do torch.Generator().

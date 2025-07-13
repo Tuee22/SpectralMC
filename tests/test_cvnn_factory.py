@@ -1,13 +1,9 @@
-# src/spectralmc/test_cvnn_factory.py
-"""Unit tests for ``spectralmc.cvnn_factory``.
+# tests/test_cvnn_factory.py
+"""
+Unit tests for ``spectralmc.cvnn_factory``.
 
-All tests run under **pytest** *and* type‑check cleanly with
-
-    mypy --strict src/spectralmc
-
-They assume that a CUDA device is present – absence of a GPU is considered
-a **hard failure** because ``cvnn_factory.build_model`` is documented to
-deploy to GPU in production.
+They require a CUDA device – the absence of one is considered a hard failure
+because production models are expected to run on the GPU.
 """
 
 from __future__ import annotations
@@ -31,6 +27,7 @@ from spectralmc.cvnn_factory import (
     SequentialCfg,
     build_model,
 )
+from spectralmc.models.torch import DType  # ← project’s strongly‑typed dtype enum
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants shared across tests
@@ -38,7 +35,7 @@ from spectralmc.cvnn_factory import (
 _DEVICE_CUDA: torch.device = torch.device("cuda:0")
 assert torch.cuda.is_available(), "These tests require a CUDA‑capable device"
 
-# _DTYPES: Tuple[torch.dtype, ...] = (torch.float32, torch.float64)
+_DTYPES: Tuple[DType, ...] = (DType.float32, DType.float64)
 
 ATOL: float = 1.0e-5
 RTOL: float = 1.0e-4
@@ -79,7 +76,7 @@ def _assert_state_dict_equal(a: Dict[str, Tensor], b: Dict[str, Tensor]) -> None
             assert torch.equal(t1, t2), f"Mismatch in {k}"
 
 
-def _example_cfg(dtype: torch.dtype, seed: int = 314159) -> CVNNConfig:
+def _example_cfg(dtype: DType = DType.float32, seed: int = 314159) -> CVNNConfig:
     """A representative, yet compact, CVNN topology."""
     return CVNNConfig(
         dtype=dtype,
@@ -111,24 +108,34 @@ def _example_cfg(dtype: torch.dtype, seed: int = 314159) -> CVNNConfig:
 
 def _single_train_step(
     cfg: CVNNConfig,
-    dtype: torch.dtype,
+    dtype: DType,
 ) -> Dict[str, Tensor]:
     """Materialise → forward → backward → optimiser step → return state‐dict."""
-
-    # Build model directly on CUDA with the requested precision.
     model: nn.Module = build_model(
         n_inputs=N_IN,
         n_outputs=N_OUT,
         cfg=cfg,
-        device=_DEVICE_CUDA,
-    )
+    ).to(_DEVICE_CUDA)
+
     model.train()
 
     # Simple optimiser – stateless (no parameter momentum) for easier equality.
     opt = torch.optim.SGD(model.parameters(), lr=OPT_LR)
 
-    x_r = _rand(BATCH, N_IN, dtype=dtype, device=_DEVICE_CUDA, requires_grad=True)
-    x_i = _rand(BATCH, N_IN, dtype=dtype, device=_DEVICE_CUDA, requires_grad=True)
+    x_r = _rand(
+        BATCH,
+        N_IN,
+        dtype=dtype.to_torch(),
+        device=_DEVICE_CUDA,
+        requires_grad=True,
+    )
+    x_i = _rand(
+        BATCH,
+        N_IN,
+        dtype=dtype.to_torch(),
+        device=_DEVICE_CUDA,
+        requires_grad=True,
+    )
 
     y_r: Tensor
     y_i: Tensor
@@ -138,7 +145,7 @@ def _single_train_step(
     loss.backward()
     opt.step()
 
-    # We detach all tensors so that the returned structure contains plain *values*.
+    # Detach & move to CPU so equality checks ignore device placement.
     return {k: v.detach().cpu() for k, v in model.state_dict().items()}
 
 
@@ -148,41 +155,51 @@ def _single_train_step(
 
 
 @pytest.mark.parametrize("dtype", _DTYPES)
-def test_device_and_dtype_placement(dtype: torch.dtype) -> None:
+def test_device_and_dtype_placement(dtype: DType) -> None:
     """Every parameter must respect the requested CUDA device and dtype."""
-    cfg = _example_cfg()
+    cfg = _example_cfg(dtype)
     model = build_model(
         n_inputs=N_IN,
         n_outputs=N_OUT,
         cfg=cfg,
-        device=_DEVICE_CUDA,
-    )
+    ).to(_DEVICE_CUDA)
 
     for p in model.parameters():
         assert p.is_cuda, "Parameter not on CUDA device"
-        assert p.dtype is dtype, "Parameter dtype mismatch"
+        assert p.dtype is dtype.to_torch(), "Parameter dtype mismatch"
 
 
 @pytest.mark.parametrize("dtype", _DTYPES)
-def test_forward_backward_pass(dtype: torch.dtype) -> None:
+def test_forward_backward_pass(dtype: DType) -> None:
     """A complete forward + backward pass should yield finite gradients."""
-    cfg = _example_cfg()
+    cfg = _example_cfg(dtype)
 
     model = build_model(
         n_inputs=N_IN,
         n_outputs=N_OUT,
         cfg=cfg,
-        device=_DEVICE_CUDA,
-    )
+    ).to(_DEVICE_CUDA)
     model.train()
 
-    x_r = _rand(BATCH, N_IN, dtype=dtype, device=_DEVICE_CUDA, requires_grad=True)
-    x_i = _rand(BATCH, N_IN, dtype=dtype, device=_DEVICE_CUDA, requires_grad=True)
+    x_r = _rand(
+        BATCH,
+        N_IN,
+        dtype=dtype.to_torch(),
+        device=_DEVICE_CUDA,
+        requires_grad=True,
+    )
+    x_i = _rand(
+        BATCH,
+        N_IN,
+        dtype=dtype.to_torch(),
+        device=_DEVICE_CUDA,
+        requires_grad=True,
+    )
 
     y_r, y_i = model(x_r, x_i)
     assert y_r.shape == (BATCH, N_OUT) and y_i.shape == (BATCH, N_OUT)
 
-    loss = (y_r.square().mean() + y_i.square().mean()).to(dtype)
+    loss = (y_r.square().mean() + y_i.square().mean()).to(dtype.to_torch())
     loss.backward()
 
     grads: List[Tensor] = [p.grad for p in model.parameters() if p.grad is not None]
@@ -191,9 +208,9 @@ def test_forward_backward_pass(dtype: torch.dtype) -> None:
 
 
 @pytest.mark.parametrize("dtype", _DTYPES)
-def test_full_reproducibility(dtype: torch.dtype) -> None:
+def test_full_reproducibility(dtype: DType) -> None:
     """Two *independent* training runs from the same config must be identical."""
-    cfg = _example_cfg()
+    cfg = _example_cfg(dtype)
 
     state_run_1 = _single_train_step(cfg, dtype)
     state_run_2 = _single_train_step(cfg, dtype)
@@ -203,15 +220,17 @@ def test_full_reproducibility(dtype: torch.dtype) -> None:
 
 def test_config_json_roundtrip() -> None:
     """Serialising and deserialising a config via JSON must be loss‑less."""
-    cfg = _example_cfg(seed=271828)
+    cfg = _example_cfg(dtype=DType.float64, seed=271828)
     json_str = cfg.model_dump_json()
     cfg_round = CVNNConfig.model_validate_json(json_str)
-    # Pydantic guarantees equality semantics
-    assert cfg == cfg_round
+
+    # Round‑trip must preserve field values exactly
+    assert cfg.model_dump(mode="json") == cfg_round.model_dump(mode="json")
 
     # Sanity – JSON must be valid and contain the top‑level 'layers' key.
     parsed = json.loads(json_str)
     assert "layers" in parsed and parsed["seed"] == 271828
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -22,6 +22,7 @@ from spectralmc.models.cpu_transfer import TensorTree as _TensorTree  # noqa: E4
 # Minimal stub for `spectralmc.models.torch.Device`                           #
 ###############################################################################
 
+
 class DummyDevice:
     """Test‑only replacement implementing just `.to_torch()`."""
 
