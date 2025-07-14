@@ -1,23 +1,60 @@
-# src/spectralmc/models/cpu_transfer.py
+# src/spectralmc/models/torch.py
 """
 spectralmc.models.torch
 =======================
 
-A minimal, fully‑typed façade exposing just enough of PyTorch for
-SpectralMC while enforcing reproducible execution.
+A minimal, fully‑typed façade exposing just enough of PyTorch for SpectralMC
+while enforcing reproducible execution.
+
+Thread‑safety contract
+----------------------
+* This module **must be imported from the main thread _before_ any other
+  threads are spawned**; otherwise it raises ``ImportError``.
+* The context managers ``default_dtype`` and ``default_device`` **may only be
+  entered from the main thread**; attempting to use them from a worker thread
+  raises ``RuntimeError``.
+* To override the import‑time thread guard (at your own risk) set the
+  environment variable::
+
+      SPECTRALMC_ALLOW_THREADS=1
 """
 
 from __future__ import annotations
 
 # --------------------------------------------------------------------------- #
-#  Early environment fixes                                                    #
+#  Early import‑time guards                                                   #
 # --------------------------------------------------------------------------- #
 import os
 import platform
+import sys
+import threading
 from contextlib import contextmanager
 from enum import Enum
 from typing import Dict, Iterable, Iterator, List, Mapping, Protocol, Tuple
 
+# --- prevent pre‑emptive torch import -------------------------------------- #
+if "torch" in sys.modules:
+    raise ImportError(
+        "PyTorch was imported before the SpectralMC torch façade. "
+        "Import 'spectralmc.models.torch' **first** so it can set "
+        "deterministic flags."
+    )
+
+# --- thread‑safety: import must occur before worker threads ---------------- #
+_ALLOW_THREADS: bool = os.getenv("SPECTRALMC_ALLOW_THREADS", "0") == "1"
+if not _ALLOW_THREADS and threading.active_count() > 1:
+    raise ImportError(
+        "SpectralMC façade imported after additional threads were created. "
+        "Its global dtype/device helpers are not thread‑safe. "
+        "Import this module in the *main thread* before spawning workers, "
+        "or set SPECTRALMC_ALLOW_THREADS=1 to bypass this check."
+    )
+
+_MAIN_THREAD_ID: int = threading.get_ident()
+
+# --------------------------------------------------------------------------- #
+#  Early environment fixes                                                    #
+# --------------------------------------------------------------------------- #
 # Ensure deterministic cuBLAS kernels (ignored if CUDA is absent)
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
 
@@ -27,7 +64,7 @@ import torch  # noqa: E402
 #  Determinism knobs                                                          #
 # --------------------------------------------------------------------------- #
 torch.use_deterministic_algorithms(True, warn_only=False)
-_HAS_CUDA = torch.cuda.is_available()
+_HAS_CUDA: bool = torch.cuda.is_available()
 
 if _HAS_CUDA:
     if torch.backends.cudnn.version() is None:
@@ -44,6 +81,18 @@ else:
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.allow_tf32 = False
+
+
+# --------------------------------------------------------------------------- #
+#  Helper: assert main thread                                                 #
+# --------------------------------------------------------------------------- #
+def _assert_main_thread(ctx_name: str) -> None:
+    """Raise if called from any thread other than the importing main thread."""
+    if threading.get_ident() != _MAIN_THREAD_ID:
+        raise RuntimeError(
+            f"{ctx_name} is not thread‑safe; call it only " "from the main thread."
+        )
+
 
 # --------------------------------------------------------------------------- #
 #  Strongly‑typed helpers                                                     #
@@ -75,7 +124,7 @@ class DType(str, Enum):
         return _DTYPE_STR_TO_TORCH[self.value]
 
     @classmethod
-    def from_torch(cls, dt: torch.dtype) -> DType:
+    def from_torch(cls, dt: torch.dtype) -> "DType":
         if dt not in _TORCH_DTYPE_TO_STR:
             raise ValueError(f"Unsupported torch.dtype {dt!r}")
         return cls(_TORCH_DTYPE_TO_STR[dt])
@@ -91,7 +140,7 @@ class Device(str, Enum):
         return torch.device(self.value)
 
     @classmethod
-    def from_torch(cls, dev: torch.device) -> Device:
+    def from_torch(cls, dev: torch.device) -> "Device":
         if dev.type == "cpu":
             return cls.cpu
         if dev.type == "cuda" and dev.index in {None, 0}:
@@ -100,25 +149,40 @@ class Device(str, Enum):
 
 
 # --------------------------------------------------------------------------- #
-#  Lightweight global context managers                                        #
+#  Lightweight global context managers (main‑thread only)                     #
 # --------------------------------------------------------------------------- #
 @contextmanager
 def default_dtype(dt: torch.dtype) -> Iterator[None]:
+    """Temporarily sets the global default dtype (main thread only)."""
+    _assert_main_thread("default_dtype")
+    _tid = threading.get_ident()
     previous = torch.get_default_dtype()
     torch.set_default_dtype(dt)
     try:
         yield
     finally:
+        if threading.get_ident() != _tid:  # sanity: same thread exits
+            raise RuntimeError(
+                "default_dtype context exited in a different " "thread than it entered."
+            )
         torch.set_default_dtype(previous)
 
 
 @contextmanager
 def default_device(dev: torch.device) -> Iterator[None]:
+    """Temporarily sets the global default device (main thread only)."""
+    _assert_main_thread("default_device")
+    _tid = threading.get_ident()
     previous = torch.tensor([]).device
     torch.set_default_device(dev)
     try:
         yield
     finally:
+        if threading.get_ident() != _tid:
+            raise RuntimeError(
+                "default_device context exited in a different "
+                "thread than it entered."
+            )
         torch.set_default_device(previous)
 
 
@@ -140,7 +204,7 @@ class TensorState(BaseModel):
 
     # ------------------------------------------------------------------ #
     @staticmethod
-    def from_torch(t: torch.Tensor) -> TensorState:
+    def from_torch(t: torch.Tensor) -> "TensorState":
         if t.device != Device.cpu.to_torch():
             raise RuntimeError("Tensor must reside on CPU to enter TensorState.")
         blob: bytes = _sf_save({"tensor": t})
@@ -161,7 +225,7 @@ class TensorState(BaseModel):
         return tensor
 
     @staticmethod
-    def from_bytes(raw: bytes) -> TensorState:
+    def from_bytes(raw: bytes) -> "TensorState":
         tensor_dict: Dict[str, torch.Tensor] = _sf_load(raw)
         if set(tensor_dict.keys()) != {"tensor"}:
             raise ValueError(
@@ -187,7 +251,7 @@ class TorchEnv(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=False)
 
     @classmethod
-    def snapshot(cls) -> TorchEnv:
+    def snapshot(cls) -> "TorchEnv":
         if _HAS_CUDA:
             cuda_ver = torch.version.cuda or "<unknown>"
             cudnn_ver = torch.backends.cudnn.version() or -1
@@ -222,7 +286,7 @@ class AdamParamState(BaseModel):
 
     # ------------------------------------------------------------------ #
     @classmethod
-    def from_torch(cls, s: Mapping[str, object]) -> AdamParamState:
+    def from_torch(cls, s: Mapping[str, object]) -> "AdamParamState":
         allowed = {"step", "exp_avg", "exp_avg_sq", "max_exp_avg_sq"}
         extra = set(s) - allowed
         if extra:
@@ -289,7 +353,7 @@ class AdamParamGroup(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=False)
 
     @classmethod
-    def from_torch(cls, g: Mapping[str, object]) -> AdamParamGroup:
+    def from_torch(cls, g: Mapping[str, object]) -> "AdamParamGroup":
         # Pydantic will validate and populate all known fields (extra fields forbidden)
         return cls.model_validate(g)
 
@@ -306,7 +370,7 @@ class AdamOptimizerState(BaseModel):
 
     # ------------------------------------------------------------------ #
     @classmethod
-    def from_torch(cls, optim: _HasStateDict) -> AdamOptimizerState:
+    def from_torch(cls, optim: _HasStateDict) -> "AdamOptimizerState":
         if optim.__class__.__name__ not in {"Adam", "AdamW"}:
             raise TypeError("Only torch.optim.Adam or AdamW are supported.")
 

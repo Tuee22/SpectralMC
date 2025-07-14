@@ -7,6 +7,8 @@ will fail immediately, making the missing dependency obvious.
 
 from __future__ import annotations
 
+import spectralmc.models.torch
+
 import gc
 import warnings
 from typing import Generator

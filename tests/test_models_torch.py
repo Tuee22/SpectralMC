@@ -17,10 +17,10 @@ from __future__ import annotations
 import contextlib
 from typing import List, Tuple, Mapping
 
+import spectralmc.models.torch as sm_torch
 import pytest
 import torch
 
-import spectralmc.models.torch as sm_torch
 
 
 # ──────────────────────────── helpers & fixtures ────────────────────────────
