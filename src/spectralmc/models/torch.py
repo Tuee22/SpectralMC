@@ -41,8 +41,7 @@ if "torch" in sys.modules:
     )
 
 # --- thread‑safety: import must occur before worker threads ---------------- #
-_ALLOW_THREADS: bool = os.getenv("SPECTRALMC_ALLOW_THREADS", "0") == "1"
-if not _ALLOW_THREADS and threading.active_count() > 1:
+if threading.active_count() > 1:
     raise ImportError(
         "SpectralMC façade imported after additional threads were created. "
         "Its global dtype/device helpers are not thread‑safe. "

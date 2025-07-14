@@ -22,7 +22,6 @@ import pytest
 import torch
 
 
-
 # ──────────────────────────── helpers & fixtures ────────────────────────────
 _HAS_CUDA: bool = torch.cuda.is_available()
 
