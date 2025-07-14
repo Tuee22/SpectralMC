@@ -23,11 +23,9 @@ import math
 from typing import Dict, Sequence, Tuple, Union
 
 import pytest
-import torch
-from torch import Tensor
 
 from spectralmc.models.numerical import Precision
-from spectralmc.models.torch import dtype as TorchDTypeEnum
+from spectralmc.models.torch import DType as TorchDTypeEnum
 from spectralmc.cvnn_factory import (
     ActivationCfg,
     ActivationKind,
@@ -43,6 +41,9 @@ from spectralmc.gbm_trainer import (
 )
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.sobol_sampler import BoundSpec
+
+import torch
+from torch import Tensor
 
 # --------------------------------------------------------------------------- #
 # Patch forward reference in SimulationParams                                 #
