@@ -1,4 +1,4 @@
-# tests/test_models_cpu_transfer.py
+# tests/test_models_cpu_gpu_transfer.py
 from __future__ import annotations
 
 from types import ModuleType
@@ -12,10 +12,10 @@ import torch
 # Load the module under test                                                  #
 ###############################################################################
 
-cpu_transfer: ModuleType = importlib.import_module("spectralmc.models.cpu_transfer")
+cpu_gpu_transfer: ModuleType = importlib.import_module("spectralmc.models.cpu_gpu_transfer")
 
 # Import the public alias directly so mypy can “see” it.
-from spectralmc.models.cpu_transfer import TensorTree as _TensorTree  # noqa: E402
+from spectralmc.models.cpu_gpu_transfer import TensorTree as _TensorTree  # noqa: E402
 
 
 ###############################################################################
@@ -34,7 +34,7 @@ class DummyDevice:
 
 
 # Ensure the code under test uses the stub.
-setattr(cpu_transfer, "Device", DummyDevice)
+setattr(cpu_gpu_transfer, "Device", DummyDevice)
 
 
 ###############################################################################
@@ -74,14 +74,14 @@ def test_already_on_destination_raises() -> None:
     """Moving a tensor/tree to the device it already occupies must fail."""
     tree: _TensorTree = [torch.ones(2, 3), {"foo": 123}]
     with pytest.raises(ValueError):
-        cpu_transfer.move_tensor_tree(tree, dest=DummyDevice("cpu"), pin_memory=False)
+        cpu_gpu_transfer.move_tensor_tree(tree, dest=DummyDevice("cpu"), pin_memory=False)
 
 
 def test_unsupported_destination_device() -> None:
     """An unsupported device string triggers a RuntimeError."""
     tensor = torch.zeros(4)
     with pytest.raises(RuntimeError, match="Unsupported destination device"):
-        cpu_transfer.move_tensor_tree(tensor, dest=DummyDevice("xpu"))
+        cpu_gpu_transfer.move_tensor_tree(tensor, dest=DummyDevice("xpu"))
 
 
 def test_cuda_requested_but_not_available(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -89,9 +89,9 @@ def test_cuda_requested_but_not_available(monkeypatch: pytest.MonkeyPatch) -> No
     If CUDA is reported unavailable and the caller explicitly requests it,
     `move_tensor_tree` must raise before attempting any copy.
     """
-    monkeypatch.setattr(cpu_transfer.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(cpu_gpu_transfer.torch.cuda, "is_available", lambda: False)
     with pytest.raises(RuntimeError, match="CUDA destination requested"):
-        cpu_transfer.move_tensor_tree(torch.tensor([1.0]), dest=DummyDevice("cuda:0"))
+        cpu_gpu_transfer.move_tensor_tree(torch.tensor([1.0]), dest=DummyDevice("cuda:0"))
 
 
 ###############################################################################
@@ -123,7 +123,7 @@ def test_cpu_to_cuda_and_back_roundtrip() -> None:
     }
 
     # ----------------------------- CPU ➜ CUDA --------------------------------
-    to_cuda = cpu_transfer.move_tensor_tree(orig_tree, dest=DummyDevice("cuda:0"))
+    to_cuda = cpu_gpu_transfer.move_tensor_tree(orig_tree, dest=DummyDevice("cuda:0"))
     src_flat, dst_flat = _flatten_tensors(orig_tree), _flatten_tensors(to_cuda)
 
     assert len(src_flat) == len(dst_flat)
@@ -135,7 +135,7 @@ def test_cpu_to_cuda_and_back_roundtrip() -> None:
         assert src_t.untyped_storage().data_ptr() != dst_t.untyped_storage().data_ptr()
 
     # ----------------------------- CUDA ➜ CPU --------------------------------
-    roundtrip = cpu_transfer.move_tensor_tree(
+    roundtrip = cpu_gpu_transfer.move_tensor_tree(
         to_cuda, dest=DummyDevice("cpu"), pin_memory=True
     )
     src_flat2, dst_flat2 = _flatten_tensors(to_cuda), _flatten_tensors(roundtrip)
@@ -154,7 +154,7 @@ def test_gpu_to_cpu_pin_memory_respected(pin_memory: bool) -> None:
     _assert_cuda_available()
 
     gpu_tensor = torch.randn(8, 8, device="cuda")
-    cpu_tensor = cpu_transfer.move_tensor_tree(
+    cpu_tensor = cpu_gpu_transfer.move_tensor_tree(
         gpu_tensor, dest=DummyDevice("cpu"), pin_memory=pin_memory
     )
     assert cpu_tensor.device.type == "cpu"
