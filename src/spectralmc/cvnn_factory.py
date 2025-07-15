@@ -219,7 +219,7 @@ def build_model(*, n_inputs: int, n_outputs: int, cfg: CVNNConfig) -> nn.Module:
 
 
 def load_model(*, model: nn.Module, tensors: Dict[str, TensorState]) -> nn.Module:
-    if any(p.device.type != "cpu" for p in model.parameters()):
+    if any(p.device.type != Device.cpu.value for p in model.parameters()):
         raise RuntimeError("`model` must be on CPU before loading weights.")
 
     state_dict = {k: ts.to_torch() for k, ts in tensors.items()}
@@ -228,7 +228,7 @@ def load_model(*, model: nn.Module, tensors: Dict[str, TensorState]) -> nn.Modul
 
 
 def get_safetensors(model: nn.Module) -> Dict[str, TensorState]:
-    if any(p.device.type != "cpu" for p in model.parameters()):
+    if any(p.device.type != Device.cpu.value for p in model.parameters()):
         raise RuntimeError("Model must reside on CPU for serialisation.")
 
     return {name: TensorState.from_torch(t) for name, t in model.state_dict().items()}

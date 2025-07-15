@@ -1,4 +1,4 @@
-# src/spectralmc/models/cpu_transfer.py
+# src/spectralmc/models/cpu_gpu_transfer.py
 from __future__ import annotations
 
 """

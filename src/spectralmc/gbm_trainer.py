@@ -98,33 +98,18 @@ class ComplexValuedModel(Protocol):
     def eval(self) -> None: ...
 
 
-_T = TypeVar("_T")
 
-
-def assert_param_attr(model: ComplexValuedModel, *, attr: str, expected: _T) -> None:
-    """Fail if *any* parameter’s ``attr`` differs from *expected*."""
-    mismatches = [
-        f"{name}: {attr}={getattr(p, attr)} (expected {expected})"
-        for name, p in model.named_parameters()
-        if getattr(p, attr) != expected
-    ]
-    if mismatches:
-        raise RuntimeError(
-            f"Model parameters violate required {attr}:\n  " + "\n  ".join(mismatches)
-        )
-
-
-def _move_optimizer_state(opt: optim.Optimizer, target: torch.device) -> None:
-    """
-    Recursively move **all** tensors in ``opt.state`` to *target*.
-
-    The helper is symmetric – calling it twice with different targets
-    shuttles the optimiser state back and forth without data loss.
-    """
-    for state in opt.state.values():
-        for key, value in state.items():
-            if torch.is_tensor(value) and value.device != target:
-                state[key] = value.to(target)
+# def assert_param_attr(model: ComplexValuedModel, *, attr: str, expected: _T) -> None:
+#     """Fail if *any* parameter’s ``attr`` differs from *expected*."""
+#     mismatches = [
+#         f"{name}: {attr}={getattr(p, attr)} (expected {expected})"
+#         for name, p in model.named_parameters()
+#         if getattr(p, attr) != expected
+#     ]
+#     if mismatches:
+#         raise RuntimeError(
+#             f"Model parameters violate required {attr}:\n  " + "\n  ".join(mismatches)
+#         )
 
 
 # =============================================================================
