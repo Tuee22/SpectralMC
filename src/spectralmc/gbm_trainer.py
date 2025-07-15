@@ -98,7 +98,6 @@ class ComplexValuedModel(Protocol):
     def eval(self) -> None: ...
 
 
-
 # def assert_param_attr(model: ComplexValuedModel, *, attr: str, expected: _T) -> None:
 #     """Fail if *any* parameter’s ``attr`` differs from *expected*."""
 #     mismatches = [
