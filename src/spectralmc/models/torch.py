@@ -58,6 +58,7 @@ _MAIN_THREAD_ID: int = threading.get_ident()
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
 
 import torch  # noqa: E402
+from spectralmc.models.numerical import Precision
 
 # --------------------------------------------------------------------------- #
 #  Determinism knobs                                                          #
@@ -107,7 +108,20 @@ _DTYPE_STR_TO_TORCH: Dict[str, torch.dtype] = {
 _TORCH_DTYPE_TO_STR: Dict[torch.dtype, str] = {
     v: k for k, v in _DTYPE_STR_TO_TORCH.items()
 }
-
+_DTYPE_STR_TO_TORCH_COMPLEX: Dict[str, torch.dtype] = {
+    "float32": torch.complex64,
+    "float64": torch.complex128,
+}
+_TORCH_COMPLEX_DTYPE_TO_STR: Dict[torch.dtype, str] = {
+    v: k for k, v in _DTYPE_STR_TO_TORCH_COMPLEX.items()
+}
+_DTYPE_STR_TO_PRECISION: Dict[str, Precision] = {
+    "float32": Precision.float32,
+    "float64": Precision.float64,
+}
+_PRECISION_DTYPE_TO_STR: Dict[Precision, str] = {
+    v: k for k, v in _DTYPE_STR_TO_PRECISION.items()
+}
 
 class DType(str, Enum):
     float16 = "float16"
@@ -127,6 +141,25 @@ class DType(str, Enum):
         if dt not in _TORCH_DTYPE_TO_STR:
             raise ValueError(f"Unsupported torch.dtype {dt!r}")
         return cls(_TORCH_DTYPE_TO_STR[dt])
+
+    def to_torch_complex(self) -> torch.dtype:
+        """return the complex valued type if real and imaginary components
+        have *precision equal to self.value"""
+        return _DTYPE_STR_TO_TORCH_COMPLEX[self.value]
+
+    @classmethod
+    def from_torch_complex(cls, dt: torch.dtype) -> "DType":
+        if dt not in _TORCH_COMPLEX_DTYPE_TO_STR:
+            raise ValueError(f"Unsupported torch.dtype {dt!r}")
+        return cls(_TORCH_COMPLEX_DTYPE_TO_STR[dt])
+
+    def to_precision(self) -> Precision:
+        """return the precision representation of this type"""
+        return _DTYPE_STR_TO_PRECISION[self.value]
+
+    @classmethod
+    def from_precision(cls, dt: Precision) -> "DType":
+        return cls(_PRECISION_DTYPE_TO_STR[dt])
 
 
 class Device(str, Enum):

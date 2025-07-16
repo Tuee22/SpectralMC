@@ -140,7 +140,7 @@ def move_tensor_tree(
 
 
 # ───────────────────────── tree inspection util ────────────────────────────
-def tree_device_dtype(tree: TensorTree) -> Tuple[Device, DType]:
+def get_tree_device_dtype(tree: TensorTree) -> Tuple[Device, DType]:
     """
     Return the unique ``(Device, DType)`` shared by **all** tensors in *tree*.
 

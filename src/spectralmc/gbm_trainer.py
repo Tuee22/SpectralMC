@@ -69,6 +69,7 @@ from torch.utils.tensorboard import SummaryWriter
 from spectralmc.gbm import BlackScholes, BlackScholesConfig
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.sobol_sampler import BoundSpec, SobolSampler
+from spectralmc.models.cpu_gpu_transfer import get_tree_device_dtype
 
 __all__: Tuple[str, ...] = (
     "GbmCVNNPricerConfig",
@@ -96,19 +97,6 @@ class ComplexValuedModel(Protocol):
     def to(self, device: torch.device, dtype: torch.dtype) -> nn.Module: ...
     def train(self, mode: bool = True) -> None: ...
     def eval(self) -> None: ...
-
-
-# def assert_param_attr(model: ComplexValuedModel, *, attr: str, expected: _T) -> None:
-#     """Fail if *any* parameter’s ``attr`` differs from *expected*."""
-#     mismatches = [
-#         f"{name}: {attr}={getattr(p, attr)} (expected {expected})"
-#         for name, p in model.named_parameters()
-#         if getattr(p, attr) != expected
-#     ]
-#     if mismatches:
-#         raise RuntimeError(
-#             f"Model parameters violate required {attr}:\n  " + "\n  ".join(mismatches)
-#         )
 
 
 # =============================================================================
@@ -213,18 +201,7 @@ class GbmCVNNPricer:
         self._optimizer_state = cfg.optimizer_state
         self._global_step = cfg.global_step
 
-        # Inferred execution device ------------------------------------ #
-        first_param = next(iter(self._cvnn.parameters()), None)
-        if first_param is None:
-            raise RuntimeError("Model has no parameters – cannot infer device.")
-        self._device: torch.device = first_param.device
-        assert_param_attr(self._cvnn, attr="device", expected=self._device)
-
-        # Scalar dtype checks ------------------------------------------- #
-        self._torch_rdtype = (
-            torch.float32 if self._sim_params.dtype == "float32" else torch.float64
-        )
-        assert_param_attr(self._cvnn, attr="dtype", expected=self._torch_rdtype)
+        device, dtype = get_tree_device_dtype(self._cvnn.state_dict())
 
         # Complex dtypes & streams -------------------------------------- #
         self._torch_cdtype = (
