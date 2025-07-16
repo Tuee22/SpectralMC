@@ -13,7 +13,7 @@ or :data:`device.cuda` without allocating on the source GPU.
 * Passes ``mypy --strict``.
 """
 
-from spectralmc.models.torch import Device
+from spectralmc.models.torch import Device, DType
 from typing import Dict, List, Optional, Tuple, Union
 import torch
 
@@ -137,3 +137,45 @@ def move_tensor_tree(
         _CUDA_STREAM.synchronize()
 
     return result
+
+
+# ───────────────────────── tree inspection util ────────────────────────────
+def tree_device_dtype(tree: TensorTree) -> Tuple[Device, DType]:
+    """
+    Return the unique ``(Device, DType)`` shared by **all** tensors in *tree*.
+
+    Raises
+    ------
+    RuntimeError
+        If *tree* contains **no tensors**.
+    ValueError
+        If tensors differ in *device* **or** *dtype*.
+
+    Notes
+    -----
+    * Scalar leaves (ints, floats, ``None`` …) are ignored.
+    * Pure‑functional traversal: recursion, set comprehensions, pattern matching.
+    * No ``Any``, ``cast``, or ``type: ignore`` needed.
+    """
+
+    # one‑pass recursion emitting {(device, dtype)} pairs
+    def _pairs(node: TensorTree) -> set[Tuple[torch.device, torch.dtype]]:
+        match node:
+            case torch.Tensor() as t:
+                return {(t.device, t.dtype)}
+            case list() | tuple() as seq:
+                return {p for item in seq for p in _pairs(item)}
+            case dict() as mapping:
+                return {p for item in mapping.values() for p in _pairs(item)}
+            case _:
+                return set()
+
+    pairs = _pairs(tree)
+
+    if not pairs:
+        raise RuntimeError("TensorTree contains no tensors.")
+    if len(pairs) != 1:
+        raise ValueError("TensorTree contains tensors on different devices or dtypes.")
+
+    dev, dt = next(iter(pairs))
+    return Device.from_torch(dev), DType.from_torch(dt)
