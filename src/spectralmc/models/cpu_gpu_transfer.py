@@ -31,7 +31,7 @@ TensorTree = Union[
 
 # ──────────────────────────── global resources ──────────────────────────────
 _CUDA_STREAM: Optional[torch.cuda.Stream] = (
-    torch.cuda.Stream(device=0) if torch.cuda.is_available() else None
+    torch.cuda.Stream(Device.cuda.to_torch()) if torch.cuda.is_available() else None
 )
 
 
