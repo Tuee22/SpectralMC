@@ -108,12 +108,12 @@ _DTYPE_STR_TO_TORCH: Dict[str, torch.dtype] = {
 _TORCH_DTYPE_TO_STR: Dict[torch.dtype, str] = {
     v: k for k, v in _DTYPE_STR_TO_TORCH.items()
 }
-_DTYPE_STR_TO_TORCH_COMPLEX: Dict[str, torch.dtype] = {
-    "float32": torch.complex64,
-    "float64": torch.complex128,
+_DTYPE_STR_TO_STR_COMPLEX: Dict[str, str] = {
+    "float32": "complex64",
+    "float64": "complex128",
 }
-_TORCH_COMPLEX_DTYPE_TO_STR: Dict[torch.dtype, str] = {
-    v: k for k, v in _DTYPE_STR_TO_TORCH_COMPLEX.items()
+_STR_COMPLEX_DTYPE_TO_STR: Dict[str, str] = {
+    v: k for k, v in _DTYPE_STR_TO_STR_COMPLEX.items()
 }
 _DTYPE_STR_TO_PRECISION: Dict[str, Precision] = {
     "float32": Precision.float32,
@@ -122,6 +122,7 @@ _DTYPE_STR_TO_PRECISION: Dict[str, Precision] = {
 _PRECISION_DTYPE_TO_STR: Dict[Precision, str] = {
     v: k for k, v in _DTYPE_STR_TO_PRECISION.items()
 }
+
 
 class DType(str, Enum):
     float16 = "float16"
@@ -142,16 +143,16 @@ class DType(str, Enum):
             raise ValueError(f"Unsupported torch.dtype {dt!r}")
         return cls(_TORCH_DTYPE_TO_STR[dt])
 
-    def to_torch_complex(self) -> torch.dtype:
+    def to_complex(self) -> "DType":
         """return the complex valued type if real and imaginary components
         have *precision equal to self.value"""
-        return _DTYPE_STR_TO_TORCH_COMPLEX[self.value]
+        return DType(_DTYPE_STR_TO_STR_COMPLEX[self.value])
 
     @classmethod
-    def from_torch_complex(cls, dt: torch.dtype) -> "DType":
-        if dt not in _TORCH_COMPLEX_DTYPE_TO_STR:
+    def from_complex(cls, dt: DType) -> "DType":
+        if dt not in _STR_COMPLEX_DTYPE_TO_STR:
             raise ValueError(f"Unsupported torch.dtype {dt!r}")
-        return cls(_TORCH_COMPLEX_DTYPE_TO_STR[dt])
+        return cls(_STR_COMPLEX_DTYPE_TO_STR[dt])
 
     def to_precision(self) -> Precision:
         """return the precision representation of this type"""

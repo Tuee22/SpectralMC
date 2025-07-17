@@ -204,13 +204,10 @@ class GbmCVNNPricer:
         device, dtype = get_tree_device_dtype(self._cvnn.state_dict())
 
         # Complex dtypes & streams -------------------------------------- #
-        self._torch_cdtype = (
-            torch.complex64 if self._sim_params.dtype == "float32" else torch.complex128
-        )
+        self._torch_cdtype = dtype.to_torch_complex()
         self._cupy_cdtype = (
             cp.complex64 if self._sim_params.dtype == "float32" else cp.complex128
         )
-
         self._torch_stream: Optional[torch.cuda.Stream] = (
             torch.cuda.Stream(device=self._device)
             if self._device.type == "cuda"
