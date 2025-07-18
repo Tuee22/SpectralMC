@@ -207,24 +207,22 @@ class GbmCVNNPricer:
         self._optimizer_state = cfg.optimizer_state
         self._global_step = cfg.global_step
 
-        device, dtype = get_tree_device_dtype(self._cvnn.state_dict())
+        self._device, self._dtype = get_tree_device_dtype(self._cvnn.state_dict())
 
         # Complex dtypes & streams -------------------------------------- #
         self._torch_cdtype = dtype.to_complex().to_torch()
-        self._cupy_cdtype = (
-            cp.complex64 if self._sim_params.dtype == "float32" else cp.complex128
-        )
+        self._cupy_cdtype = dtype.to_complex().to_cupy()
         self._torch_stream: Optional[torch.cuda.Stream] = (
-            torch.cuda.Stream(device=self._device)
-            if self._device.type == "cuda"
+            torch.cuda.Stream(device=self._device.to_torch())
+            if self._device == Device.cuda
             else None
         )
         self._cupy_stream: Optional[CuPyStream] = (
-            CuPyStream() if self._device.type == "cuda" else None
+            CuPyStream() if self._device == Device.cuda else None
         )
 
         # Engines -------------------------------------------------------- #
-        self._mc_engine = BlackScholes(cfg.cfg) if self._device.type == "cuda" else None
+        self._mc_engine = BlackScholes(cfg.cfg) if self._device == Device.cuda else None
         self._sampler: SobolSampler[BlackScholes.Inputs] = SobolSampler(
             pydantic_class=BlackScholes.Inputs,
             dimensions=self._domain_bounds,
@@ -246,7 +244,7 @@ class GbmCVNNPricer:
         :class:`AdamOptimizerState` contains only CPU tensors – a hard
         requirement for the strict serialisation helper.
         """
-        if self._device.type != "cuda" or self._mc_engine is None:
+        if  self._device == Device.cuda or self._mc_engine is None:
             raise RuntimeError("Snapshots can only be taken on CUDA.")
         return GbmCVNNPricerConfig(
             cfg=self._mc_engine.snapshot(),
@@ -303,7 +301,7 @@ class GbmCVNNPricer:
         logger: Optional[StepLogger] = None,
     ) -> None:
         """Run **CUDA‑only** optimisation for *num_batches* steps."""
-        if self._device.type != "cuda":
+        if self._device != Device.cuda:
             raise RuntimeError("Trainer requires a CUDA‑capable GPU.")
 
         adam = optim.Adam(self._cvnn.parameters(), lr=learning_rate)
