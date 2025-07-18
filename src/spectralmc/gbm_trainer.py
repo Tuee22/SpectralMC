@@ -67,7 +67,7 @@ from pydantic import BaseModel, ConfigDict
 from torch.utils.tensorboard import SummaryWriter
 
 from spectralmc.gbm import BlackScholes, BlackScholesConfig
-from spectralmc.models.torch import AdamOptimizerState
+from spectralmc.models.torch import AdamOptimizerState, DType, Device
 from spectralmc.sobol_sampler import BoundSpec, SobolSampler
 from spectralmc.models.cpu_gpu_transfer import get_tree_device_dtype
 
@@ -94,6 +94,12 @@ class ComplexValuedModel(Protocol):
     # minimal subset of the nn.Module API
     def parameters(self) -> Iterable[nn.Parameter]: ...
     def named_parameters(self) -> Iterable[Tuple[str, nn.Parameter]]: ...
+    def state_dict(
+        self,
+        destination: Optional[Dict[str, torch.Tensor]] = None,
+        prefix: str = "",
+        keep_vars: bool = False,
+    ) -> Dict[str, torch.Tensor]: ...
     def to(self, device: torch.device, dtype: torch.dtype) -> nn.Module: ...
     def train(self, mode: bool = True) -> None: ...
     def eval(self) -> None: ...
@@ -204,7 +210,7 @@ class GbmCVNNPricer:
         device, dtype = get_tree_device_dtype(self._cvnn.state_dict())
 
         # Complex dtypes & streams -------------------------------------- #
-        self._torch_cdtype = dtype.to_torch_complex()
+        self._torch_cdtype = dtype.to_complex().to_torch()
         self._cupy_cdtype = (
             cp.complex64 if self._sim_params.dtype == "float32" else cp.complex128
         )
