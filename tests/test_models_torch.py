@@ -1,4 +1,3 @@
-# tests/test_model_torch.py
 """
 End‑to‑end tests for ``spectralmc.models.torch``.
 
@@ -12,15 +11,15 @@ The suite focuses on *reproducibility* and *consistency* of:
 
 All tests are fully typed and mypy‑strict‑clean.
 """
+
 from __future__ import annotations
 
-import contextlib
-from typing import List, Tuple, Mapping
+from typing import List, Mapping, Tuple
 
-import spectralmc.models.torch as sm_torch
 import pytest
 import torch
 
+import spectralmc.models.torch as sm_torch
 
 # ──────────────────────────── helpers & fixtures ────────────────────────────
 _HAS_CUDA: bool = torch.cuda.is_available()
@@ -94,14 +93,19 @@ def test_adam_optimizer_state_roundtrip() -> None:
     loss.backward()
     opt.step()
 
-    state: sm_torch.AdamOptimizerState = sm_torch.AdamOptimizerState.from_torch(opt)
-    # Create a new optimiser and reload the captured state
+    # Capture the optimiser state directly from its `state_dict`
+    state: sm_torch.AdamOptimizerState = sm_torch.AdamOptimizerState.from_torch(
+        opt.state_dict()
+    )
+
+    # Restore into a fresh optimiser instance
     new_opt = torch.optim.Adam(params, lr=0.001)
     new_opt.load_state_dict(state.to_torch())
 
     # All parameter steps should be identical
     for group_old, group_new in zip(opt.param_groups, new_opt.param_groups):
         assert group_old["lr"] == group_new["lr"]
+
     # Internal buffers identical
     sd_old, sd_new = opt.state_dict(), new_opt.state_dict()
     assert sd_old.keys() == sd_new.keys()
