@@ -5,16 +5,18 @@ from __future__ import annotations
 cpu_transfer
 ============
 
-Move an arbitrarily‑nested *TensorTree* to :data:`device.cpu`
-or :data:`device.cuda` without allocating on the source GPU.
+Move an arbitrarily-nested *TensorTree* to :data:`device.cpu`
+or :data:`device.cuda` without allocating on the source GPU.
 
 * One global CUDA stream (`cuda:0`) reused for every copy.
 * Raises :class:`ValueError` as soon as a tensor is already on *dest*.
-* Passes ``mypy --strict``.
+* Passes ``mypy --strict``.
 """
 
+from typing import List, Optional, Tuple, Union, Mapping
+
+
 from spectralmc.models.torch import Device, DType
-from typing import Dict, List, Optional, Tuple, Union
 import torch
 
 __all__ = ["Scalar", "TensorTree", "move_tensor_tree"]
@@ -26,7 +28,7 @@ TensorTree = Union[
     Scalar,
     List["TensorTree"],
     Tuple["TensorTree", ...],
-    Dict[str, "TensorTree"],
+    Mapping[str, "TensorTree"],
 ]
 
 # ──────────────────────────── global resources ──────────────────────────────
@@ -62,7 +64,7 @@ def _copy_tensor(
             dst = torch.empty(
                 *dims,
                 dtype=src.dtype,
-                device="cpu",
+                device=Device.cpu.to_torch(),
                 pin_memory=pin_memory,
             )
             with torch.cuda.stream(_CUDA_STREAM):
@@ -103,7 +105,8 @@ def _move(
             _move(v, target_dev=target_dev, pin_memory=pin_memory) for v in obj
         )
 
-    if isinstance(obj, dict):
+    if isinstance(obj, Mapping):
+        # Object might be an OrderedDict or any Mapping; we return a plain dict
         return {
             k: _move(v, target_dev=target_dev, pin_memory=pin_memory)
             for k, v in obj.items()
@@ -121,7 +124,7 @@ def move_tensor_tree(
     pin_memory: bool = True,
 ) -> TensorTree:
     """
-    Return a deep‑copy of *tree* where **all tensors now live on *dest***.
+    Return a deep-copy of *tree* where **all tensors now live on *dest***.
 
     A :class:`ValueError` is raised immediately if a tensor encountered
     is already on *dest*.
@@ -154,18 +157,18 @@ def get_tree_device_dtype(tree: TensorTree) -> Tuple[Device, DType]:
     Notes
     -----
     * Scalar leaves (ints, floats, ``None`` …) are ignored.
-    * Pure‑functional traversal: recursion, set comprehensions, pattern matching.
+    * Pure-functional traversal: recursion, set comprehensions, pattern matching.
     * No ``Any``, ``cast``, or ``type: ignore`` needed.
     """
 
-    # one‑pass recursion emitting {(device, dtype)} pairs
+    # one-pass recursion emitting {(device, dtype)} pairs
     def _pairs(node: TensorTree) -> set[Tuple[torch.device, torch.dtype]]:
         match node:
             case torch.Tensor() as t:
                 return {(t.device, t.dtype)}
             case list() | tuple() as seq:
                 return {p for item in seq for p in _pairs(item)}
-            case dict() as mapping:
+            case Mapping() as mapping:
                 return {p for item in mapping.values() for p in _pairs(item)}
             case _:
                 return set()
