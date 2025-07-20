@@ -68,6 +68,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from spectralmc.gbm import BlackScholes, BlackScholesConfig
 from spectralmc.models.torch import AdamOptimizerState, DType, Device
+from spectralmc.models.numerical import Precision
 from spectralmc.sobol_sampler import BoundSpec, SobolSampler
 from spectralmc.models.cpu_gpu_transfer import get_tree_device_dtype
 
@@ -207,6 +208,8 @@ class GbmCVNNPricer:
         self._optimizer_state = cfg.optimizer_state
         self._global_step = cfg.global_step
 
+        self._device: Device
+        self._dtype: DType
         self._device, self._dtype = get_tree_device_dtype(self._cvnn.state_dict())
 
         assert (
@@ -214,19 +217,21 @@ class GbmCVNNPricer:
         ), f"Error: gbm sim dtype {cfg.cfg.sim_params.dtype} does not match cvnn dtype {self._dtype}"
 
         # Complex dtypes & streams -------------------------------------- #
-        self._torch_cdtype = dtype.to_complex().to_torch()
-        self._cupy_cdtype = dtype.to_complex().to_cupy()
+        self._complex_dtype: Precision = self._dtype.to_precision().to_complex()
+        self._torch_cdtype: torch.dtype = DType(self._complex_dtype).to_torch()
+        self._cupy_cdtype: cp.dtype = self._complex_dtype.to_cupy()
+        self._using_cuda: bool = self._device == Device.cuda
         self._torch_stream: Optional[torch.cuda.Stream] = (
             torch.cuda.Stream(device=self._device.to_torch())
-            if self._device == Device.cuda
+            if self._using_cuda
             else None
         )
         self._cupy_stream: Optional[CuPyStream] = (
-            CuPyStream() if self._device == Device.cuda else None
+            CuPyStream() if self._using_cuda else None
         )
 
         # Engines -------------------------------------------------------- #
-        self._mc_engine = BlackScholes(cfg.cfg) if self._device == Device.cuda else None
+        self._mc_engine = BlackScholes(cfg.cfg) if self._using_cuda else None
         self._sampler: SobolSampler[BlackScholes.Inputs] = SobolSampler(
             pydantic_class=BlackScholes.Inputs,
             dimensions=self._domain_bounds,
@@ -248,7 +253,7 @@ class GbmCVNNPricer:
         :class:`AdamOptimizerState` contains only CPU tensors – a hard
         requirement for the strict serialisation helper.
         """
-        if self._device != Device.cpu or self._mc_engine is None:
+        if self._using_cuda is False or self._mc_engine is None:
             raise RuntimeError("Snapshots can only be taken on CUDA.")
         return GbmCVNNPricerConfig(
             cfg=self._mc_engine.snapshot(),
