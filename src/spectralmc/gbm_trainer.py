@@ -209,6 +209,10 @@ class GbmCVNNPricer:
 
         self._device, self._dtype = get_tree_device_dtype(self._cvnn.state_dict())
 
+        assert (
+            self._dtype == cfg.cfg.sim_params.dtype
+        ), f"Error: gbm sim dtype {cfg.cfg.sim_params.dtype} does not match cvnn dtype {self._dtype}"
+
         # Complex dtypes & streams -------------------------------------- #
         self._torch_cdtype = dtype.to_complex().to_torch()
         self._cupy_cdtype = dtype.to_complex().to_cupy()
@@ -244,7 +248,7 @@ class GbmCVNNPricer:
         :class:`AdamOptimizerState` contains only CPU tensors – a hard
         requirement for the strict serialisation helper.
         """
-        if  self._device == Device.cuda or self._mc_engine is None:
+        if self._device =! Device.cuda or self._mc_engine is None:
             raise RuntimeError("Snapshots can only be taken on CUDA.")
         return GbmCVNNPricerConfig(
             cfg=self._mc_engine.snapshot(),

@@ -170,9 +170,9 @@ class Precision(str, Enum):
     # ------------------------------------------------------------------ #
     def to_complex(self) -> "Precision":
         """Return the complex counterpart (idempotent for complex inputs)."""
-        return Precision(_PRECISION_TO_COMPLEX_STR.get(self.value, self.value))
+        return Precision(_PRECISION_TO_COMPLEX_STR[self.value])
 
     @classmethod
     def from_complex(cls, prec: "Precision") -> "Precision":
         """Return the *real* precision behind a complex format (idempotent)."""
-        return cls(_COMPLEX_TO_FLOAT_STR.get(prec.value, prec.value))
+        return cls(_COMPLEX_TO_FLOAT_STR[prec.value])
