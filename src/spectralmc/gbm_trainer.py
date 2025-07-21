@@ -55,6 +55,7 @@ from typing import (
     Sequence,
     Tuple,
     TypeVar,
+    Mapping,
     runtime_checkable,
 )
 
@@ -66,7 +67,7 @@ import torch.optim as optim
 from pydantic import BaseModel, ConfigDict
 from torch.utils.tensorboard import SummaryWriter
 
-from spectralmc.gbm import BlackScholes, BlackScholesConfig
+from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
 from spectralmc.models.torch import AdamOptimizerState, DType, Device
 from spectralmc.models.numerical import Precision
 from spectralmc.sobol_sampler import BoundSpec, SobolSampler
@@ -120,7 +121,7 @@ class GbmCVNNPricerConfig(BaseModel):
     cfg: BlackScholesConfig
     domain_bounds: Dict[str, BoundSpec]
     cvnn: ComplexValuedModel
-    optimizer_state: Optional[AdamOptimizerState] = None
+    optimizer_state: Optional[Mapping[str, object]] = None
     global_step: int = 0
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
@@ -202,15 +203,16 @@ class GbmCVNNPricer:
     def __init__(self, cfg: GbmCVNNPricerConfig) -> None:
         """Instantiate a trainer from its immutable configuration."""
         # User payload -------------------------------------------------- #
-        self._sim_params = cfg.cfg.sim_params
+        self._sim_params: SimulationParams = cfg.cfg.sim_params
         self._cvnn: ComplexValuedModel = cfg.cvnn
-        self._domain_bounds = cfg.domain_bounds
-        self._optimizer_state = cfg.optimizer_state
-        self._global_step = cfg.global_step
+        self._domain_bounds: Dict[str, BoundSpec] = cfg.domain_bounds
+        self._optimizer_state: Optional[Mapping[str, object]] = cfg.optimizer_state
+        self._global_step: int = cfg.global_step
 
         self._device: Device
         self._dtype: DType
         self._device, self._dtype = get_tree_device_dtype(self._cvnn.state_dict())
+        self._using_cuda: bool = self._device == Device.cuda
 
         assert (
             self._dtype.to_precision() == cfg.cfg.sim_params.dtype
@@ -218,9 +220,10 @@ class GbmCVNNPricer:
 
         # Complex dtypes & streams -------------------------------------- #
         self._complex_dtype: Precision = self._dtype.to_precision().to_complex()
-        self._torch_cdtype: torch.dtype = DType(self._complex_dtype).to_torch()
+        self._torch_cdtype: torch.dtype = DType.from_precision(
+            self._complex_dtype
+        ).to_torch()
         self._cupy_cdtype: cp.dtype = self._complex_dtype.to_cupy()
-        self._using_cuda: bool = self._device == Device.cuda
         self._torch_stream: Optional[torch.cuda.Stream] = (
             torch.cuda.Stream(device=self._device.to_torch())
             if self._using_cuda
@@ -238,6 +241,9 @@ class GbmCVNNPricer:
             skip=self._sim_params.skip,
             seed=self._sim_params.mc_seed,
         )
+
+        # check that device and dtype of passed optimizer matches that of cvnn
+        self._check_optimizer_state()
 
     # ------------------------------------------------------------------ #
     # Checkpointing                                                      #
@@ -301,6 +307,17 @@ class GbmCVNNPricer:
     # Public API: training                                               #
     # ------------------------------------------------------------------ #
 
+    def _check_optimizer_state(self) -> None:
+        """check that device and dtype of passed optimizer matches that of cvnn"""
+        if self._optimizer_state is not None:
+            o_device, o_dtype = get_tree_device_dtype(self._optimizer_state)
+            assert (
+                o_device == self._device
+            ), f"Error: optimizer device {o_device} does not match cvnn device {self._device}"
+            assert (
+                o_dtype == self._dtype
+            ), f"Error: optimizer dtype {o_dtype} does not match cvnn dtype {self._dtype}"
+
     def train(
         self,
         *,
@@ -310,15 +327,15 @@ class GbmCVNNPricer:
         logger: Optional[StepLogger] = None,
     ) -> None:
         """Run **CUDA‑only** optimisation for *num_batches* steps."""
-        if self._device != Device.cuda:
+        if not self._using_cuda:
             raise RuntimeError("Trainer requires a CUDA‑capable GPU.")
 
         adam = optim.Adam(self._cvnn.parameters(), lr=learning_rate)
 
         # (re‑)attach previous optimiser state -------------------------- #
         if self._optimizer_state is not None:
-            adam.load_state_dict(self._optimizer_state.to_torch())
-            _move_optimizer_state(adam, self._device)  # GPU ← CPU
+            self._check_optimizer_state()
+            adam.load_state_dict(self._optimizer_state)
 
         self._cvnn.train()
 
@@ -366,8 +383,7 @@ class GbmCVNNPricer:
             self._global_step += 1
 
         # ── Snapshot optimiser (CPU) ─────────────────────────────────── #
-        _move_optimizer_state(adam, torch.device("cpu"))  # CPU ← GPU
-        self._optimizer_state = AdamOptimizerState.from_torch(adam)
+        self._optimizer_state = AdamOptimizerState.state_dict()
 
     # ------------------------------------------------------------------ #
     # Public API: inference                                              #

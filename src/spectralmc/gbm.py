@@ -67,10 +67,10 @@ class SimulationParams(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     # ..................................... convenience ......................
-    @property
-    def cp_dtype(self) -> cp.dtype:  # noqa: D401
-        """Return the equivalent :class:`cupy.dtype`."""
-        return cp.dtype(self.dtype.value)
+    # @property
+    # def cp_dtype(self) -> cp.dtype:  # noqa: D401
+    #    """Return the equivalent :class:`cupy.dtype`."""
+    #    return cp.dtype(self.dtype.value)
 
     def total_paths(self) -> int:  # noqa: D401
         """Total number of simulated paths."""
@@ -187,9 +187,9 @@ class BlackScholes:
 
     # ....................................... construction ...................
     def __init__(self, cfg: BlackScholesConfig) -> None:
-        self._cfg = cfg
-        self._sp = cfg.sim_params
-        self._cp_dtype = self._sp.cp_dtype
+        self._cfg: BlackScholesConfig = cfg
+        self._sp: SimulationParams = cfg.sim_params
+        self._cp_dtype = self._sp.dtype.to_cupy()
 
         self._cp_stream = cp.cuda.Stream(non_blocking=True)
         self._numba_stream = cuda.stream()
