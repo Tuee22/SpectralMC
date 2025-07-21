@@ -112,7 +112,7 @@ def test_module_state_device_dtype() -> None:
 
 
 def test_optimizer_state_device_dtype_after_step() -> None:
-    state: Mapping[Hashable, object] = {
+    state: Mapping[str, object] = {  # keys are str
         "state": {0: {"exp_avg": torch.ones(1), "exp_avg_sq": torch.ones(1)}},
         "param_groups": [{"lr": 1e-3}],
     }

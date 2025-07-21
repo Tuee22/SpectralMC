@@ -68,10 +68,13 @@ from pydantic import BaseModel, ConfigDict
 from torch.utils.tensorboard import SummaryWriter
 
 from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
-from spectralmc.models.torch import AdamOptimizerState, DType, Device
+from spectralmc.models.torch import DType, Device
 from spectralmc.models.numerical import Precision
 from spectralmc.sobol_sampler import BoundSpec, SobolSampler
-from spectralmc.models.cpu_gpu_transfer import get_tree_device_dtype
+from spectralmc.models.cpu_gpu_transfer import (
+    module_state_device_dtype,
+    optimizer_state_device_dtype,
+)
 
 __all__: Tuple[str, ...] = (
     "GbmCVNNPricerConfig",
@@ -211,7 +214,7 @@ class GbmCVNNPricer:
 
         self._device: Device
         self._dtype: DType
-        self._device, self._dtype = get_tree_device_dtype(self._cvnn.state_dict())
+        self._device, self._dtype = module_state_device_dtype(self._cvnn.state_dict())
         self._using_cuda: bool = self._device == Device.cuda
 
         assert (
@@ -310,7 +313,7 @@ class GbmCVNNPricer:
     def _check_optimizer_state(self) -> None:
         """check that device and dtype of passed optimizer matches that of cvnn"""
         if self._optimizer_state is not None:
-            o_device, o_dtype = get_tree_device_dtype(self._optimizer_state)
+            o_device, o_dtype = optimizer_state_device_dtype(self._optimizer_state)
             assert (
                 o_device == self._device
             ), f"Error: optimizer device {o_device} does not match cvnn device {self._device}"
@@ -362,7 +365,9 @@ class GbmCVNNPricer:
                     .detach()
                 )
                 real_in, imag_in = _split_inputs(
-                    sobol_inputs, dtype=self._torch_rdtype, device=self._device
+                    sobol_inputs,
+                    dtype=self._dtype.to_torch(),
+                    device=self._device.to_torch(),
                 )
                 loss, grad_norm = self._torch_step(real_in, imag_in, targets, adam)
             self._torch_stream.synchronize()
@@ -382,8 +387,8 @@ class GbmCVNNPricer:
                 )
             self._global_step += 1
 
-        # ── Snapshot optimiser (CPU) ─────────────────────────────────── #
-        self._optimizer_state = AdamOptimizerState.state_dict()
+        # ── Snapshot optimiser      ─────────────────────────────────── #
+        self._optimizer_state = adam.state_dict()
 
     # ------------------------------------------------------------------ #
     # Public API: inference                                              #
@@ -398,7 +403,7 @@ class GbmCVNNPricer:
 
         self._cvnn.eval()
         real_in, imag_in = _split_inputs(
-            inputs, dtype=self._torch_rdtype, device=self._device
+            inputs, dtype=self._dtype.to_torch(), device=self._device.to_torch()
         )
 
         if self._torch_stream is None:

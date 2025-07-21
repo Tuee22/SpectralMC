@@ -9,7 +9,9 @@ Pure‑functional helpers to
 * derive that pair for model / optimiser ``state_dict`` objects.
 
 No explicit ``if``/``for`` loops in user‑level code; comprehensions,
-pattern‑matching and expressions do the work.  Fully ``mypy --strict``.
+pattern‑matching, and expression‑level guards do the work.
+
+Fully ``mypy --strict`` clean.
 """
 
 from collections.abc import Hashable, Mapping
@@ -44,7 +46,7 @@ _CUDA_STREAM: Optional[torch.cuda.Stream] = (
 
 
 # ───────────────────────── functional helpers ───────────────────────────────
-def _raise(exc: Exception) -> NoReturn:  # tiny helper for expression‑level raises
+def _raise(exc: Exception) -> NoReturn:  # expression‑level raise
     raise exc
 
 
@@ -125,10 +127,7 @@ def move_tensor_tree(
     )
 
     result = _move(tree, target_dev=tgt, pin_memory=pin_memory)
-
-    # ternary form to satisfy mypy (no value expected)
     (None if _CUDA_STREAM is None else _CUDA_STREAM.synchronize())
-
     return result
 
 
@@ -166,7 +165,7 @@ def module_state_device_dtype(
 
 
 def optimizer_state_device_dtype(
-    state: Mapping[Hashable, object],
+    state: Mapping[str, object],  # <-- keys are *str* now
 ) -> Tuple[Device, DType]:
     """Device/dtype for an *optimizer* ``state_dict`` (Adam, etc.)."""
 
