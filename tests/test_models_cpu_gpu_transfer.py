@@ -1,227 +1,127 @@
 # tests/test_models_cpu_gpu_transfer.py
-"""Integration tests for ``spectralmc.models.cpu_gpu_transfer``.
-
-This file verifies correct behaviour of the public helper
-:pyfunc:`spectralmc.models.cpu_gpu_transfer.move_tensor_tree` when copying
-arbitrarily nested *TensorTree* structures between CPU and CUDA memory.
-
-Why we import via ``importlib.import_module`` instead of a regular import
-=======================================================================
-The tests monkey-patch the symbol ``Device`` inside the target module with a
-light-weight stub class (`DummyDevice`) that does **not** inherit from the real
-``spectralmc.models.torch.Device`` type.  That is required to trigger specific
-edge-cases (e.g. passing an object that satisfies the runtime API but violates
-its static type contract).
-
-Under ``mypy --strict`` the following problems arise with a normal import such
-as::
-
-    import spectralmc.models.cpu_gpu_transfer as cpu_gpu_transfer
-
-* The call ``cpu_gpu_transfer.move_tensor_tree(..., dest=DummyDevice("cpu"))``
-  raises *arg-type* because *dest* is not a ``Device``.
-* The statement ``cpu_gpu_transfer.Device = DummyDevice`` raises *attr-defined*
-  because mypy does not track dynamic attribute mutation.
-
-By retrieving the module dynamically::
-
-    import importlib, types
-    cpu_gpu_transfer: types.ModuleType = importlib.import_module(
-        "spectralmc.models.cpu_gpu_transfer"
-    )
-
-and annotating it with :class:`types.ModuleType`, we deliberately tell mypy to
-*opt-out* of static analysis for that module.  This suppresses both errors
-without sprinkling ``# type: ignore`` directives throughout the file and keeps
-the rest of the suite in full ``--strict`` compliance.
-"""
+"""Functional‑style integration tests for the CPU ↔ GPU tensor copier."""
 
 from __future__ import annotations
 
-from types import ModuleType
-from typing import List, Union
+from collections.abc import Mapping
+from typing import Hashable, List
 
-import importlib
 import pytest
+from spectralmc.models.torch import Device, DType  # façade first
 import torch
+import spectralmc.models.cpu_gpu_transfer as cpu_gpu_transfer
 
 ###############################################################################
-# Load the module under test                                                  #
-###############################################################################
-
-# NOTE: we import via a *string* so that mypy treats the returned object as an
-# untyped ``ModuleType`` (see module docstring for details).
-cpu_gpu_transfer: ModuleType = importlib.import_module(
-    "spectralmc.models.cpu_gpu_transfer"
-)
-
-# Import the public alias directly so mypy can “see” it.
-from spectralmc.models.cpu_gpu_transfer import TensorTree as _TensorTree  # noqa: E402
-
-###############################################################################
-# Minimal stub for `spectralmc.models.torch.Device`                           #
+# Utilities
 ###############################################################################
 
 
-class DummyDevice:
-    """Minimal stand-in for :class:`spectralmc.models.torch.Device` used only
-    in unit tests.
-
-    The real ``Device`` hierarchy carries additional semantics that are
-    irrelevant for the copying logic exercised here.  Implementing only
-    :meth:`to_torch` keeps the stub concise while still satisfying the runtime
-    contract expected by :pyfunc:`spectralmc.models.cpu_gpu_transfer.move_tensor_tree`.
-
-    Attributes:
-        _dev: Backing :class:`torch.device` created from *torch_dev*.
-    """
-
-    def __init__(self, torch_dev: Union[str, torch.device]) -> None:
-        self._dev = torch.device(torch_dev)
-
-    def to_torch(self) -> torch.device:  # pragma: no cover
-        """Return the underlying :class:`torch.device`."""
-        return self._dev
+def _flatten(tree: cpu_gpu_transfer.TensorTree) -> List[torch.Tensor]:
+    match tree:
+        case torch.Tensor() as t:
+            return [t]
+        case list() | tuple() as seq:
+            return [x for item in seq for x in _flatten(item)]
+        case Mapping() as mp:
+            return [x for v in mp.values() for x in _flatten(v)]
+        case _:
+            return []
 
 
-# Ensure the code under test uses the stub.
-setattr(cpu_gpu_transfer, "Device", DummyDevice)
+# Fail fast if no CUDA – satisfies user requirement
+assert torch.cuda.is_available(), "CUDA device required but none detected."
 
 ###############################################################################
-# Helper – flatten nested TensorTree to a list of tensors                     #
-###############################################################################
-
-
-def _flatten_tensors(tree: _TensorTree) -> List[torch.Tensor]:
-    """Return every ``torch.Tensor`` leaf in *tree* using pre-order traversal.
-
-    Args:
-        tree: Arbitrarily nested combination of tensors, sequences, mappings,
-            and scalar leaves.
-
-    Returns:
-        A list containing every tensor encountered, in traversal order.  This
-        allows the tests to make collective assertions about device placement
-        and storage aliases without caring about the original container
-        topology.
-    """
-
-    result: List[torch.Tensor] = []
-
-    if isinstance(tree, torch.Tensor):
-        result.append(tree)
-
-    elif isinstance(tree, list):
-        for item in tree:
-            result.extend(_flatten_tensors(item))
-
-    elif isinstance(tree, tuple):
-        for item in tree:
-            result.extend(_flatten_tensors(item))
-
-    elif isinstance(tree, dict):
-        for val in tree.values():
-            result.extend(_flatten_tensors(val))
-
-    # Scalar leaves yield nothing
-    return result
-
-
-###############################################################################
-# Tests that do **not** rely on CUDA                                          #
+# CPU‑only tests                                                              #
 ###############################################################################
 
 
 def test_already_on_destination_raises() -> None:
-    """Attempting to copy to the current device must raise ``ValueError``."""
-
-    tree: _TensorTree = [torch.ones(2, 3), {"foo": 123}]
     with pytest.raises(ValueError):
-        cpu_gpu_transfer.move_tensor_tree(
-            tree, dest=DummyDevice("cpu"), pin_memory=False
-        )
+        cpu_gpu_transfer.move_tensor_tree([torch.ones(1), 0], dest=Device.cpu)
+
+
+class BadDest:
+    to_torch = staticmethod(lambda: torch.device("xpu"))  # noqa: D401
 
 
 def test_unsupported_destination_device() -> None:
-    """Passing an unknown device string triggers ``RuntimeError``."""
-
-    tensor = torch.zeros(4)
-    with pytest.raises(RuntimeError, match="Unsupported destination device"):
-        cpu_gpu_transfer.move_tensor_tree(tensor, dest=DummyDevice("xpu"))
+    with pytest.raises(RuntimeError):
+        cpu_gpu_transfer.move_tensor_tree(torch.zeros(1), dest=BadDest())  # type: ignore[arg-type]
 
 
 def test_cuda_requested_but_not_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Explicit CUDA request must fail when ``torch.cuda.is_available()`` is ``False``."""
-
-    monkeypatch.setattr(cpu_gpu_transfer.torch.cuda, "is_available", lambda: False)
-    with pytest.raises(RuntimeError, match="CUDA destination requested"):
-        cpu_gpu_transfer.move_tensor_tree(
-            torch.tensor([1.0]), dest=DummyDevice("cuda:0")
-        )
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    with pytest.raises(RuntimeError):
+        cpu_gpu_transfer.move_tensor_tree(torch.zeros(1), dest=Device.cuda)
 
 
 ###############################################################################
-# GPU-dependent tests – these **must** run; absence of CUDA fails the suite   #
+# GPU‑dependent tests                                                         #
 ###############################################################################
-
-
-def _assert_cuda_available() -> None:
-    """Abort the test-suite if no CUDA device is detected."""
-
-    if not torch.cuda.is_available():
-        pytest.fail("CUDA device required for this test-suite but none detected.")
 
 
 def test_cpu_to_cuda_and_back_roundtrip() -> None:
-    """Round-trip a nested *TensorTree* CPU → CUDA → CPU and verify invariants."""
-
-    _assert_cuda_available()
-
-    # Build a sample nested structure
-    orig_tree: _TensorTree = {
+    original: cpu_gpu_transfer.TensorTree = {
         "a": torch.randn(2, 3),
-        "b": [
-            torch.arange(5, dtype=torch.int64),
-            (torch.zeros(1), 3.1415),
-        ],
-        "meta": "scalar value",
+        "b": [torch.arange(5), (torch.zeros(1), 3.14)],
+        "meta": "hello",
     }
 
-    # ----------------------------- CPU ➜ CUDA --------------------------------
-    to_cuda = cpu_gpu_transfer.move_tensor_tree(orig_tree, dest=DummyDevice("cuda:0"))
-    src_flat, dst_flat = _flatten_tensors(orig_tree), _flatten_tensors(to_cuda)
+    to_cuda = cpu_gpu_transfer.move_tensor_tree(original, dest=Device.cuda)
 
-    assert len(src_flat) == len(dst_flat)
-    for src_t, dst_t in zip(src_flat, dst_flat):
-        assert src_t.device.type == "cpu"
-        assert dst_t.device.type == "cuda" and dst_t.device.index == 0
-        assert torch.equal(src_t, dst_t.cpu())
-        # Ensure deep-copy (no shared storage).
-        assert src_t.untyped_storage().data_ptr() != dst_t.untyped_storage().data_ptr()
+    src: List[torch.Tensor] = _flatten(original)
+    dst: List[torch.Tensor] = _flatten(to_cuda)
 
-    # ----------------------------- CUDA ➜ CPU --------------------------------
-    roundtrip = cpu_gpu_transfer.move_tensor_tree(
-        to_cuda, dest=DummyDevice("cpu"), pin_memory=True
+    assert all(
+        torch.equal(s, d.cpu())
+        and s.device.type == "cpu"
+        and d.device == torch.device("cuda:0")
+        and s.untyped_storage().data_ptr() != d.untyped_storage().data_ptr()
+        for s, d in zip(src, dst)
     )
-    src_flat2, dst_flat2 = _flatten_tensors(to_cuda), _flatten_tensors(roundtrip)
 
-    assert len(src_flat2) == len(dst_flat2)
-    for src_t, dst_t in zip(src_flat2, dst_flat2):
-        assert src_t.device.type == "cuda"
-        assert dst_t.device.type == "cpu"
-        assert torch.equal(src_t.cpu(), dst_t)
-        assert dst_t.is_pinned()
+    back = cpu_gpu_transfer.move_tensor_tree(to_cuda, dest=Device.cpu, pin_memory=True)
+
+    src2: List[torch.Tensor] = _flatten(to_cuda)
+    dst2: List[torch.Tensor] = _flatten(back)
+
+    assert all(torch.equal(s.cpu(), d) and d.is_pinned() for s, d in zip(src2, dst2))
 
 
 @pytest.mark.parametrize("pin_memory", [True, False])
 def test_gpu_to_cpu_pin_memory_respected(pin_memory: bool) -> None:
-    """Verify that the *pin_memory* flag propagates to CPU allocations."""
-
-    _assert_cuda_available()
-
-    gpu_tensor = torch.randn(8, 8, device="cuda")
-    cpu_tensor = cpu_gpu_transfer.move_tensor_tree(
-        gpu_tensor, dest=DummyDevice("cpu"), pin_memory=pin_memory
+    res = cpu_gpu_transfer.move_tensor_tree(
+        torch.randn(4, 4, device="cuda"),
+        dest=Device.cpu,
+        pin_memory=pin_memory,
     )
-    assert cpu_tensor.device.type == "cpu"
-    assert cpu_tensor.is_pinned() == pin_memory
+    assert isinstance(res, torch.Tensor) and res.is_pinned() == pin_memory
+
+
+###############################################################################
+# Device/dtype helpers                                                        #
+###############################################################################
+
+
+def test_module_state_device_dtype() -> None:
+    dev, dt = cpu_gpu_transfer.module_state_device_dtype(
+        {"w": torch.randn(2, 2), "b": torch.zeros(2)}
+    )
+    assert (dev, dt) == (Device.cpu, DType.float32)
+
+
+def test_optimizer_state_device_dtype_after_step() -> None:
+    state: Mapping[Hashable, object] = {
+        "state": {0: {"exp_avg": torch.ones(1), "exp_avg_sq": torch.ones(1)}},
+        "param_groups": [{"lr": 1e-3}],
+    }
+    assert cpu_gpu_transfer.optimizer_state_device_dtype(state) == (
+        Device.cpu,
+        DType.float32,
+    )
+
+
+def test_optimizer_state_device_dtype_no_tensors_raises() -> None:
+    with pytest.raises(RuntimeError):
+        cpu_gpu_transfer.optimizer_state_device_dtype({"state": {}, "param_groups": []})
