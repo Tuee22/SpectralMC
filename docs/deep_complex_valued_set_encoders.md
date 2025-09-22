@@ -17,17 +17,17 @@
 ## 1  Introduction
 
 ### 1.1  Point Clouds as Local‑Vol Surfaces  
-A **point cloud** is an unordered set of points  
+A **point cloud** is an unordered set of points
 
-$${x_i}_{i=1}^N \subset \mathbb{R}^d .$$  
+$$\{x_i\}_{i=1}^N \subset \mathbb{R}^d$$
 
-Most deep‑learning layers assume a *fixed ordering*, but point clouds are **permutation invariant**:  
+Most deep‑learning layers assume a *fixed ordering*, but point clouds are **permutation invariant**:
 
-$$f\big({x_{\pi(i)}}\big) = f\big({x_i}\big) \quad \forall\,\text{permutations } \pi .$$  
+$$f\big(\{x_{\pi(i)}\}\big) = f\big(\{x_i\}\big) \quad \forall\,\text{permutations } \pi$$
 
 In option pricing under a **Dupire local‑volatility model**, each market surface is an irregular set of tuples  
 
-$$x_i = (K_i,\; T_i,\; \sigma^{\text{loc}}_i),$$  
+$$x_i = (K_i,\; T_i,\; \sigma^{\text{loc}}_i)$$
 
 where $K$ is strike, $T$ maturity, and $\sigma^{\text{loc}}$ the local volatility.  The number and placement of quotes varies day‑to‑day, so we need a model that handles **variable‑length, unordered inputs**.
 
@@ -35,9 +35,9 @@ where $K$ is strike, $T$ maturity, and $\sigma^{\text{loc}}$ the local volatilit
 Transformers replace recurrence with **self‑attention**, allowing every token to attend to every other.  If we drop positional encodings (or use content‑based encodings), attention becomes **order agnostic** (Set Transformer, 2019).
 
 ### 1.3  Complex‑Valued Networks & *modReLU*  
-Our network outputs the complex **characteristic function**  
+Our network outputs the complex **characteristic function**
 
-$$\varphi(u) = \mathbb{E}\big[e^{i u X_T}\big],$$  
+$$\varphi(u) = \mathbb{E}\big[e^{i u X_T}\big]$$
 
 so we keep tensors **complex throughout** and use the *modReLU* activation:
 
@@ -55,21 +55,18 @@ def modrelu(z, b):
 ### 2.1  Motivation  
 Raw coordinates make it hard for a network to learn high‑frequency structure.  **Random Fourier Features (RFF)** embed inputs in a richer basis:
 
-$$\phi_{\boldsymbol\omega}(x) = e^{i\,\boldsymbol\omega^{\top} x}, 
-\quad \boldsymbol\omega \sim \mathcal{N}(0,\Sigma).$$
+$$\phi_{\boldsymbol\omega}(x) = e^{i\,\boldsymbol\omega^{\top} x}, \quad \boldsymbol\omega \sim \mathcal{N}(0,\Sigma)$$
 
 ### 2.2  Complex RFF for $(K,T)$  
 Work in **log‑moneyness** $m = \log(K/S_0)$ and maturity $T$.  
-Draw $D$ frequencies ${\omega_j}$ from a suitable spread.  
+Draw $D$ frequencies $\{\omega_j\}$ from a suitable spread.  
 Define  
 
-$$\text{RFF}(m,T) = 
-\big[e^{i\omega_1 m},\; e^{i\omega_1 T},\;\dots, e^{i\omega_D T}\big].$$
+$$\text{RFF}(m,T) = \big[e^{i\omega_1 m},\; e^{i\omega_1 T},\;\dots, e^{i\omega_D T}\big]$$
 
 Concatenate the scalar local vol:
 
-$$x_i = \sigma^{\text{loc}}_i \;\otimes\; \text{RFF}(m_i,T_i) 
-\;\in\; \mathbb{C}^{2D}.$$
+$$x_i = \sigma^{\text{loc}}_i \;\otimes\; \text{RFF}(m_i,T_i) \;\in\; \mathbb{C}^{2D}$$
 
 ### 2.3  Minimal PyTorch Snippet
 ```python
@@ -99,7 +96,7 @@ class ComplexRFF(nn.Module):
 ### 3.2  Complex Set Transformer  
 Self‑attention weights  
 
-$$\alpha_{ij} = \text{softmax}\big(\operatorname{Re}(Q_i K_j^{\dagger})\big)$$  
+$$\alpha_{ij} = \text{softmax}\big(\operatorname{Re}(Q_i K_j^{\dagger})\big)$$
 
 give explicit pair interactions; Pooling‑by‑Multi‑Head Attention extracts global code.
 
@@ -146,7 +143,7 @@ for step in range(200):
 
 <a name="extensions--practical-tips"></a>
 ## 5  Extensions & Tips
-* Martingale penalty: add $\lvert\varphi(0)-1\rvert^2$.  
+* Martingale penalty: add $|\varphi(0)-1|^2$.  
 * Frequency curriculum: start low‑freq, add highs progressively.  
 * Complex LayerNorm: normalize magnitudes only.  
 * Cross‑attention: query the vol set with target $(K^*,T^*)$.
