@@ -23,6 +23,11 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
+    networks:
+      spectralmc-net:
+        aliases:
+          - s3
+          - storage
 
 # --------------------------------------------------------------------------- #
 # One-shot job – create buckets (idempotent)                                  #
@@ -38,6 +43,8 @@ services:
         mc mb -p local/opt-models       || true &&
         mc mb -p local/opt-models/tb    || true
       "
+    networks:
+      - spectralmc-net
 
 # --------------------------------------------------------------------------- #
 # Main dev / training container                                               #
@@ -72,6 +79,8 @@ services:
             - driver: nvidia
               count: all
               capabilities: ["gpu"]
+    networks:
+      - spectralmc-net
 
 # --------------------------------------------------------------------------- #
 # TensorBoard – same image, different entry-point                             #
@@ -102,3 +111,13 @@ services:
       S3_VERIFY_SSL:         "0"
     ports:
       - "6006:6006"
+    networks:
+      - spectralmc-net
+
+# --------------------------------------------------------------------------- #
+# Networks                                                                    #
+# --------------------------------------------------------------------------- #
+networks:
+  spectralmc-net:
+    name: spectralmc-net
+    driver: bridge
