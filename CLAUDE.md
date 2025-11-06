@@ -39,25 +39,145 @@ SpectralMC is a GPU-accelerated library for online machine learning using Monte 
 3. **CVNN Training**: Update complex-valued neural network parameters to approximate the characteristic function
 4. **CVNN Inference**: Produce estimated distributions for computing means, moments, quantiles, and other metrics
 
+## 🐳 Docker Development
+
+### Critical Development Rules
+- ❌ **NEVER** run commands directly on host (poetry, pytest, mypy)
+- ✅ **ALWAYS** use: `docker compose -f docker/docker-compose.yml exec spectralmc <command>`
+- ✅ **ALL** commands run inside container
+
+### Docker Commands
+```bash
+# Start services (SpectralMC, MinIO, TensorBoard)
+cd docker && docker compose up -d
+
+# View logs
+docker compose -f docker/docker-compose.yml logs -f spectralmc
+
+# Execute commands inside container
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run mypy src/spectralmc --strict
+docker compose -f docker/docker-compose.yml exec spectralmc python -m pytest tests/
+
+# Stop services
+docker compose -f docker/docker-compose.yml down
+```
+
+### Test Output Handling
+
+**CRITICAL - Output Truncation Issue**:
+
+The Bash tool truncates output at 30,000 characters. Test suites may produce large output that WILL BE TRUNCATED, making it impossible to properly analyze failures.
+
+**REQUIRED Pattern for Test Analysis**:
+
+Always redirect test output to files in /tmp/, then read the complete output:
+
+```bash
+# Step 1: Run tests with output redirection
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all > /tmp/test-output.txt 2>&1
+
+# Step 2: Read complete output using Read tool
+# Read /tmp/test-output.txt
+
+# Step 3: Analyze ALL failures, not just visible ones
+```
+
+**For Specific Test Categories**:
+```bash
+# CPU tests only
+docker compose -f docker/docker-compose.yml exec spectralmc pytest tests -m 'not gpu' > /tmp/test-cpu.txt 2>&1
+
+# GPU tests only
+docker compose -f docker/docker-compose.yml exec spectralmc pytest tests -m gpu > /tmp/test-gpu.txt 2>&1
+
+# Type checking
+docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc --strict > /tmp/mypy-output.txt 2>&1
+```
+
+**Why This Matters**:
+- Bash tool output truncation at 30K chars is HARD LIMIT
+- Test suites can produce 100KB+ of output
+- Truncated output hides most failures, making diagnosis impossible
+- File-based approach ensures complete output is always available
+- Read tool has no size limits for files
+
+### Test Execution Requirements
+
+**Forbidden**:
+- ❌ `Bash(command="...test...", timeout=60000)` - Truncates output, kills tests mid-run
+- ❌ `Bash(command="...test...", run_in_background=True)` - Can't see failures in real-time
+- ❌ Reading only partial output with `head -n 100` or similar truncation
+- ❌ Checking test status before completion (polling BashOutput prematurely)
+
+**Required**:
+- ✅ No timeout parameter on test commands
+- ✅ Wait for complete test execution (GPU tests can take several minutes)
+- ✅ Review ALL stdout/stderr output before drawing conclusions
+- ✅ Let tests complete naturally, read full results
+
+## 🔍 Type Safety
+
+SpectralMC enforces **strict static typing** with zero compromises.
+
+### Requirements
+
+**Core Rules**:
+- ❌ **NO** `Any` types (explicit or implicit via `--disallow-any-explicit`)
+- ❌ **NO** `cast()` expressions
+- ❌ **NO** `# type: ignore` comments
+- ✅ All functions must have complete type hints (parameters and return types)
+- ✅ All Pydantic models must use `ConfigDict(extra="forbid")`
+
+### Type Checking
+
+```bash
+# Run mypy with strict mode and explicit Any disallowed
+docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc --strict --disallow-any-explicit > /tmp/mypy.txt 2>&1
+
+# Verify no forbidden constructs
+docker compose -f docker/docker-compose.yml exec spectralmc grep -r "# type: ignore" src/spectralmc/ && echo "FOUND type:ignore" || echo "OK"
+docker compose -f docker/docker-compose.yml exec spectralmc grep -r "cast(" src/spectralmc/ && echo "FOUND cast()" || echo "OK"
+docker compose -f docker/docker-compose.yml exec spectralmc grep -r ": Any" src/spectralmc/ && echo "FOUND Any" || echo "OK"
+```
+
+**Success Criteria**:
+- `mypy --strict --disallow-any-explicit` exits with code 0
+- Zero occurrences of `# type: ignore`, `cast()`, or explicit `Any`
+- All modules pass individual type checking
+
+### Rationale
+
+Type safety is **non-negotiable** for SpectralMC:
+- **Reproducibility**: Type errors can silently break deterministic guarantees
+- **Correctness**: Numerical code with `Any` can produce wrong results at runtime
+- **Maintainability**: Complete types serve as executable documentation
+- **Refactoring**: Strong types enable confident large-scale changes
+
 ## Testing
 
 ### Running Tests
 
-SpectralMC uses pytest with GPU and CPU test separation:
+SpectralMC uses pytest with GPU and CPU test separation. **All commands must run inside Docker container**:
 
 ```bash
-# Run all tests (CPU + GPU)
-poetry run test-all
+# Run all tests (CPU + GPU) - redirect to file for complete output
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all > /tmp/test-all.txt 2>&1
 
 # Run default tests (CPU only, excludes @pytest.mark.gpu)
-pytest tests
+docker compose -f docker/docker-compose.yml exec spectralmc pytest tests -m 'not gpu' > /tmp/test-cpu.txt 2>&1
 
 # Run only GPU tests
-pytest tests -m gpu
+docker compose -f docker/docker-compose.yml exec spectralmc pytest tests -m gpu > /tmp/test-gpu.txt 2>&1
 
 # Run with coverage
-pytest tests --cov=spectralmc --cov-report=term-missing
+docker compose -f docker/docker-compose.yml exec spectralmc pytest tests --cov=spectralmc --cov-report=term-missing > /tmp/test-coverage.txt 2>&1
+
+# Type checking
+docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc --strict > /tmp/mypy.txt 2>&1
 ```
+
+**IMPORTANT**: Always redirect output to /tmp/ files and read complete output with Read tool.
 
 ### Test Configuration
 
@@ -320,7 +440,7 @@ Before committing:
 
 ### Required Workflow
 - ✅ Make all code changes as requested
-- ✅ Run tests and validation (`poetry run test-all`, `mypy`)
+- ✅ Run tests and validation (via Docker: `docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all`)
 - ✅ Leave ALL changes as **uncommitted** working directory changes
 - ✅ User reviews changes using `git status` and `git diff`
 - ✅ User manually commits and pushes when satisfied

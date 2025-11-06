@@ -22,6 +22,7 @@ import pytest
 from pydantic import ValidationError
 
 from spectralmc import async_normals
+from spectralmc.async_normals import BufferConfig
 from spectralmc.models.numerical import Precision
 
 # --------------------------------------------------------------------------- #
@@ -92,7 +93,9 @@ def test_checkpoint_reproducibility(precision: Precision) -> None:
         dtype=precision,
         skips=0,
     )
-    gen0 = async_normals.ConcurrentNormGenerator(buffer, cfg0)
+    gen0 = async_normals.ConcurrentNormGenerator(
+        BufferConfig.create(buffer, rows, cols), cfg0
+    )
 
     initial = _collect(gen0, 10)
     snap = gen0.snapshot()
@@ -100,11 +103,15 @@ def test_checkpoint_reproducibility(precision: Precision) -> None:
     expected = _collect(gen0, 6)
     assert len(initial) == 10
 
-    gen_same = async_normals.ConcurrentNormGenerator(buffer, snap)
+    gen_same = async_normals.ConcurrentNormGenerator(
+        BufferConfig.create(buffer, snap.rows, snap.cols), snap
+    )
     got_same = _collect(gen_same, 6)
     assert all(cp.allclose(e, g) for e, g in zip(expected, got_same, strict=True))
 
-    gen_diff = async_normals.ConcurrentNormGenerator(buffer + 2, snap)
+    gen_diff = async_normals.ConcurrentNormGenerator(
+        BufferConfig.create(buffer + 2, snap.rows, snap.cols), snap
+    )
     got_diff = _collect(gen_diff, 6)
     assert all(cp.allclose(e, g) for e, g in zip(expected, got_diff, strict=True))
 
@@ -118,7 +125,9 @@ def test_diagnostics(precision: Precision) -> None:
         dtype=precision,
         skips=0,
     )
-    gen = async_normals.ConcurrentNormGenerator(2, cfg)
+    gen = async_normals.ConcurrentNormGenerator(
+        BufferConfig.create(2, cfg.rows, cfg.cols), cfg
+    )
 
     t0 = gen.get_time_spent_synchronizing()
     _ = gen.get_matrix()

@@ -119,11 +119,11 @@ _PRECISION_DTYPE_TO_STR: Dict[Precision, str] = {
 }
 
 
-class DType(str, Enum):
-    float16 = "float16"
+class FullPrecisionDType(str, Enum):
+    """DTypes with corresponding Precision representation (for MC simulation)."""
+
     float32 = "float32"
     float64 = "float64"
-    bfloat16 = "bfloat16"
     complex64 = "complex64"
     complex128 = "complex128"
 
@@ -133,18 +133,49 @@ class DType(str, Enum):
         return _DTYPE_STR_TO_TORCH[self.value]
 
     @classmethod
-    def from_torch(cls, dt: torch.dtype) -> "DType":
+    def from_torch(cls, dt: torch.dtype) -> "FullPrecisionDType":
         if dt not in _TORCH_DTYPE_TO_STR:
             raise ValueError(f"Unsupported torch.dtype {dt!r}")
-        return cls(_TORCH_DTYPE_TO_STR[dt])
+        dtype_str = _TORCH_DTYPE_TO_STR[dt]
+        if dtype_str not in ("float32", "float64", "complex64", "complex128"):
+            raise ValueError(f"torch.dtype {dt!r} is not a full precision dtype")
+        return cls(dtype_str)
 
     def to_precision(self) -> Precision:
         """Return the numeric ``Precision`` representation of this dtype."""
         return _DTYPE_STR_TO_PRECISION[self.value]
 
     @classmethod
-    def from_precision(cls, p: Precision) -> "DType":
+    def from_precision(cls, p: Precision) -> "FullPrecisionDType":
         return cls(_PRECISION_DTYPE_TO_STR[p])
+
+
+class ReducedPrecisionDType(str, Enum):
+    """DTypes without Precision representation (for storage/mixed-precision training)."""
+
+    float16 = "float16"
+    bfloat16 = "bfloat16"
+
+    # --- conversion helpers -------------------------------------------------
+    def to_torch(self) -> torch.dtype:  # noqa: D401
+        """Return the corresponding ``torch.dtype``."""
+        return _DTYPE_STR_TO_TORCH[self.value]
+
+    @classmethod
+    def from_torch(cls, dt: torch.dtype) -> "ReducedPrecisionDType":
+        if dt not in _TORCH_DTYPE_TO_STR:
+            raise ValueError(f"Unsupported torch.dtype {dt!r}")
+        dtype_str = _TORCH_DTYPE_TO_STR[dt]
+        if dtype_str not in ("float16", "bfloat16"):
+            raise ValueError(f"torch.dtype {dt!r} is not a reduced precision dtype")
+        return cls(dtype_str)
+
+
+# Union type for contexts accepting any dtype
+AnyDType = FullPrecisionDType | ReducedPrecisionDType
+
+# Backward compatibility alias (deprecated, prefer explicit types)
+DType = FullPrecisionDType
 
 
 class Device(str, Enum):
@@ -214,7 +245,7 @@ class TensorState(BaseModel):
 
     data: bytes
     shape: Tuple[int, ...]
-    dtype: DType
+    dtype: AnyDType
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=False)
 
@@ -224,19 +255,30 @@ class TensorState(BaseModel):
         if t.device != Device.cpu.to_torch():
             raise RuntimeError("Tensor must reside on CPU to enter TensorState.")
         blob: bytes = _sf_save({"tensor": t})
-        return TensorState(
-            data=blob, shape=tuple(t.shape), dtype=DType.from_torch(t.dtype)
-        )
+
+        # Determine which dtype enum to use
+        dt_torch = t.dtype
+        if dt_torch not in _TORCH_DTYPE_TO_STR:
+            raise ValueError(f"Unsupported torch.dtype {dt_torch!r}")
+        dtype_str = _TORCH_DTYPE_TO_STR[dt_torch]
+
+        dtype: AnyDType
+        if dtype_str in ("float32", "float64", "complex64", "complex128"):
+            dtype = FullPrecisionDType(dtype_str)
+        else:
+            dtype = ReducedPrecisionDType(dtype_str)
+
+        return TensorState(data=blob, shape=tuple(t.shape), dtype=dtype)
 
     def to_torch(self) -> torch.Tensor:
         tensor_dict: Dict[str, torch.Tensor] = _sf_load(self.data)
         tensor = tensor_dict["tensor"]
         if tensor.device != Device.cpu.to_torch():
             raise RuntimeError("Tensor deserialized onto a non‑CPU device.")
-        if (
-            tuple(tensor.shape) != self.shape
-            or DType.from_torch(tensor.dtype) != self.dtype
-        ):
+
+        # Validate dtype matches
+        expected_dtype = self.dtype.to_torch()
+        if tuple(tensor.shape) != self.shape or tensor.dtype != expected_dtype:
             raise RuntimeError("Tensor metadata mismatch on deserialization.")
         return tensor
 
@@ -250,9 +292,20 @@ class TensorState(BaseModel):
         t = tensor_dict["tensor"]
         if t.device != Device.cpu.to_torch():
             raise RuntimeError("Tensor deserialized onto a non‑CPU device.")
-        return TensorState(
-            data=raw, shape=tuple(t.shape), dtype=DType.from_torch(t.dtype)
-        )
+
+        # Determine which dtype enum to use
+        dt_torch = t.dtype
+        if dt_torch not in _TORCH_DTYPE_TO_STR:
+            raise ValueError(f"Unsupported torch.dtype {dt_torch!r}")
+        dtype_str = _TORCH_DTYPE_TO_STR[dt_torch]
+
+        dtype: AnyDType
+        if dtype_str in ("float32", "float64", "complex64", "complex128"):
+            dtype = FullPrecisionDType(dtype_str)
+        else:
+            dtype = ReducedPrecisionDType(dtype_str)
+
+        return TensorState(data=raw, shape=tuple(t.shape), dtype=dtype)
 
 
 # --------------------------------------------------------------------------- #
@@ -426,7 +479,10 @@ class AdamOptimizerState(BaseModel):
 #  Public API                                                                 #
 # --------------------------------------------------------------------------- #
 __all__: Tuple[str, ...] = (
-    "DType",
+    "FullPrecisionDType",
+    "ReducedPrecisionDType",
+    "AnyDType",
+    "DType",  # Backward compatibility alias
     "Device",
     "TensorState",
     "TorchEnv",

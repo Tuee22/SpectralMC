@@ -23,6 +23,7 @@ Typical usage
 Example::
 
     from spectralmc.async_normals import (
+        BufferConfig,
         ConcurrentNormGenerator,
         ConcurrentNormGeneratorConfig,
     )
@@ -34,7 +35,8 @@ Example::
         seed=123,
         dtype=Precision.float32,
     )
-    gen = ConcurrentNormGenerator(buffer_size=4, config=cfg)
+    buffer = BufferConfig.create(size=4, matrix_rows=cfg.rows, matrix_cols=cfg.cols)
+    gen = ConcurrentNormGenerator(buffer=buffer, config=cfg)
 
     gpu_matrix = gen.get_matrix()   # cupy.ndarray on the device
     checkpoint = gen.snapshot()     # serialisable pydantic model
@@ -44,7 +46,7 @@ from __future__ import annotations
 
 from itertools import cycle
 from time import time
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
 import cupy as cp
 import numpy as np
@@ -53,6 +55,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from spectralmc.models.numerical import Precision
 
 __all__: list[str] = [
+    "BufferConfig",
     "ConcurrentNormGeneratorConfig",
     "ConcurrentNormGenerator",
 ]
@@ -76,8 +79,57 @@ def _validate_cupy_dtype(dtype: cp.dtype) -> cp.dtype:
 
 
 # --------------------------------------------------------------------------- #
-# Pydantic checkpoint model                                                   #
+# Pydantic configuration models                                               #
 # --------------------------------------------------------------------------- #
+
+
+class BufferConfig(BaseModel):
+    """Buffer size configuration with validation against matrix dimensions.
+
+    Attributes
+    ----------
+    size
+        Number of concurrent workers (must be positive and ≤ matrix elements).
+
+    Notes
+    -----
+    Use the `create` class method to construct with cross-field validation.
+    """
+
+    size: Annotated[int, Field(gt=0, description="Number of concurrent worker streams")]
+
+    model_config = ConfigDict(frozen=True)
+
+    @classmethod
+    def create(cls, size: int, matrix_rows: int, matrix_cols: int) -> "BufferConfig":
+        """Construct BufferConfig with validation against matrix dimensions.
+
+        Parameters
+        ----------
+        size
+            Desired buffer size (number of concurrent workers).
+        matrix_rows
+            Matrix height.
+        matrix_cols
+            Matrix width.
+
+        Returns
+        -------
+        BufferConfig
+            Validated configuration instance.
+
+        Raises
+        ------
+        ValueError
+            If size exceeds total matrix elements (wastes memory).
+        """
+        max_size = matrix_rows * matrix_cols
+        if size > max_size:
+            raise ValueError(
+                f"buffer_size ({size}) exceeds matrix elements ({max_size}). "
+                f"Cannot allocate more buffers than matrix elements."
+            )
+        return cls(size=size)
 
 
 class ConcurrentNormGeneratorConfig(BaseModel):
@@ -193,9 +245,9 @@ class ConcurrentNormGenerator:
     # Construction                                                       #
     # ------------------------------------------------------------------ #
 
-    def __init__(self, buffer_size: int, config: ConcurrentNormGeneratorConfig) -> None:
-        if buffer_size <= 0:
-            raise ValueError("buffer_size must be positive")
+    def __init__(
+        self, buffer: BufferConfig, config: ConcurrentNormGeneratorConfig
+    ) -> None:
 
         # Static parameters
         self._rows: int = config.rows
@@ -216,7 +268,7 @@ class ConcurrentNormGenerator:
             gen.enqueue(seed)
             return gen
 
-        self._pool: List[_NormGenerator] = [_make() for _ in range(buffer_size)]
+        self._pool: List[_NormGenerator] = [_make() for _ in range(buffer.size)]
         self._it = cycle(self._pool)
 
         # Idle‑time diagnostics

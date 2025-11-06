@@ -68,13 +68,16 @@ from pydantic import BaseModel, ConfigDict
 from torch.utils.tensorboard import SummaryWriter
 
 from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
-from spectralmc.models.torch import DType, Device
-from spectralmc.models.numerical import Precision
-from spectralmc.sobol_sampler import BoundSpec, SobolSampler
-from spectralmc.models.cpu_gpu_transfer import (
-    module_state_device_dtype,
-    optimizer_state_device_dtype,
+from spectralmc.models.torch import (
+    AdamOptimizerState,
+    AnyDType,
+    DType,
+    Device,
+    FullPrecisionDType,
 )
+from spectralmc.models.numerical import Precision
+from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler
+from spectralmc.models.cpu_gpu_transfer import module_state_device_dtype
 
 __all__: Tuple[str, ...] = (
     "GbmCVNNPricerConfig",
@@ -124,8 +127,9 @@ class GbmCVNNPricerConfig(BaseModel):
     cfg: BlackScholesConfig
     domain_bounds: Dict[str, BoundSpec]
     cvnn: ComplexValuedModel
-    optimizer_state: Optional[Mapping[str, object]] = None
+    optimizer_state: Optional[AdamOptimizerState] = None
     global_step: int = 0
+    sobol_skip: int = 0
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
@@ -209,13 +213,21 @@ class GbmCVNNPricer:
         self._sim_params: SimulationParams = cfg.cfg.sim_params
         self._cvnn: ComplexValuedModel = cfg.cvnn
         self._domain_bounds: Dict[str, BoundSpec] = cfg.domain_bounds
-        self._optimizer_state: Optional[Mapping[str, object]] = cfg.optimizer_state
+        self._optimizer_state: Optional[AdamOptimizerState] = cfg.optimizer_state
         self._global_step: int = cfg.global_step
+        self._sobol_skip: int = cfg.sobol_skip
 
         self._device: Device
-        self._dtype: DType
-        self._device, self._dtype = module_state_device_dtype(self._cvnn.state_dict())
+        dtype_any: AnyDType
+        self._device, dtype_any = module_state_device_dtype(self._cvnn.state_dict())
         self._using_cuda: bool = self._device == Device.cuda
+
+        # GBM simulation requires full precision (not float16/bfloat16)
+        assert isinstance(dtype_any, FullPrecisionDType), (
+            f"CVNN must use full precision dtype (float32/64, complex64/128), "
+            f"got {dtype_any}"
+        )
+        self._dtype: FullPrecisionDType = dtype_any
 
         assert (
             self._dtype.to_precision() == cfg.cfg.sim_params.dtype
@@ -241,12 +253,11 @@ class GbmCVNNPricer:
         self._sampler: SobolSampler[BlackScholes.Inputs] = SobolSampler(
             pydantic_class=BlackScholes.Inputs,
             dimensions=self._domain_bounds,
-            skip=self._sim_params.skip,
-            seed=self._sim_params.mc_seed,
+            config=SobolConfig(
+                seed=self._sim_params.mc_seed,
+                skip=self._sobol_skip,
+            ),
         )
-
-        # check that device and dtype of passed optimizer matches that of cvnn
-        self._check_optimizer_state()
 
     # ------------------------------------------------------------------ #
     # Checkpointing                                                      #
@@ -270,6 +281,7 @@ class GbmCVNNPricer:
             cvnn=self._cvnn,
             optimizer_state=self._optimizer_state,
             global_step=self._global_step,
+            sobol_skip=self._sobol_skip,
         )
 
     # ------------------------------------------------------------------ #
@@ -310,17 +322,6 @@ class GbmCVNNPricer:
     # Public API: training                                               #
     # ------------------------------------------------------------------ #
 
-    def _check_optimizer_state(self) -> None:
-        """check that device and dtype of passed optimizer matches that of cvnn"""
-        if self._optimizer_state is not None:
-            o_device, o_dtype = optimizer_state_device_dtype(self._optimizer_state)
-            assert (
-                o_device == self._device
-            ), f"Error: optimizer device {o_device} does not match cvnn device {self._device}"
-            assert (
-                o_dtype == self._dtype
-            ), f"Error: optimizer dtype {o_dtype} does not match cvnn dtype {self._dtype}"
-
     def train(
         self,
         *,
@@ -337,8 +338,7 @@ class GbmCVNNPricer:
 
         # (re‑)attach previous optimiser state -------------------------- #
         if self._optimizer_state is not None:
-            self._check_optimizer_state()
-            adam.load_state_dict(self._optimizer_state)
+            adam.load_state_dict(self._optimizer_state.to_torch())
 
         self._cvnn.train()
 
@@ -348,6 +348,7 @@ class GbmCVNNPricer:
 
             # ── Monte‑Carlo + FFT (CuPy) ─────────────────────────────── #
             sobol_inputs = self._sampler.sample(batch_size)
+            self._sobol_skip += batch_size
             assert self._cupy_stream is not None
             with self._cupy_stream:
                 fft_buf = cp.asarray(
@@ -388,7 +389,15 @@ class GbmCVNNPricer:
             self._global_step += 1
 
         # ── Snapshot optimiser      ─────────────────────────────────── #
-        self._optimizer_state = adam.state_dict()
+        state_dict = adam.state_dict()
+        # Move all tensors to CPU for serialization
+        for param_id in state_dict["state"]:
+            for key in state_dict["state"][param_id]:
+                if isinstance(state_dict["state"][param_id][key], torch.Tensor):
+                    state_dict["state"][param_id][key] = state_dict["state"][param_id][
+                        key
+                    ].cpu()
+        self._optimizer_state = AdamOptimizerState.from_torch(state_dict)
 
     # ------------------------------------------------------------------ #
     # Public API: inference                                              #

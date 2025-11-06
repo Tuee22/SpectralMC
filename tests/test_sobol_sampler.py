@@ -28,7 +28,7 @@ from typing import List, Sequence, Tuple
 import pytest
 from pydantic import BaseModel, ValidationError, model_validator
 
-from spectralmc.sobol_sampler import BoundSpec, SobolSampler
+from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler
 
 # --------------------------------------------------------------------------- #
 # Constants                                                                   #
@@ -93,11 +93,11 @@ def test_skip_repro(n_skip: int, n_check: int) -> None:
         "y": BoundSpec(lower=-1.0, upper=1.0),
     }
 
-    manual = SobolSampler(Point, dims, seed=_SEED)
+    manual = SobolSampler(Point, dims, config=SobolConfig(seed=_SEED))
     _ = manual.sample(n_skip)  # burn‑in
     expected = manual.sample(n_check)
 
-    fast = SobolSampler(Point, dims, seed=_SEED, skip=n_skip)
+    fast = SobolSampler(Point, dims, config=SobolConfig(seed=_SEED, skip=n_skip))
     got = fast.sample(n_check)
 
     assert _pairs(expected) == _pairs(got)
@@ -119,7 +119,7 @@ _BOUND_CASES: Tuple[Tuple[dict[str, BoundSpec], type[BaseModel]], ...] = (
 @pytest.mark.parametrize(("dims", "model_cls"), _BOUND_CASES)
 def test_bounds(dims: dict[str, BoundSpec], model_cls: type[BaseModel]) -> None:
     """Every generated coordinate must lie within its declared bounds."""
-    sampler = SobolSampler(model_cls, dims, seed=_SEED)
+    sampler = SobolSampler(model_cls, dims, config=SobolConfig(seed=_SEED))
     pts = sampler.sample(_N_SAMPLES_BOUND_CHECK)
 
     for obj in pts:
@@ -143,19 +143,19 @@ def test_dim_mismatch() -> None:
 
     dims = {"x": BoundSpec(lower=0.0, upper=1.0)}
     with pytest.raises(ValueError, match="dimension keys do not match"):
-        SobolSampler(XY, dims, seed=_SEED)
+        SobolSampler(XY, dims, config=SobolConfig(seed=_SEED))
 
 
 @pytest.mark.parametrize("param", ["skip", "seed"])
 def test_negative_args(param: str) -> None:
-    """Negative `skip` or `seed` must raise *ValueError*."""
+    """Negative `skip` or `seed` must raise *ValidationError* via Pydantic."""
     dims = {"x": BoundSpec(lower=0.0, upper=1.0)}
     if param == "skip":
-        with pytest.raises(ValueError):
-            SobolSampler(Point, dims, seed=_SEED, skip=-1)
+        with pytest.raises(ValidationError):
+            SobolSampler(Point, dims, config=SobolConfig(seed=_SEED, skip=-1))
     else:
-        with pytest.raises(ValueError):
-            SobolSampler(Point, dims, seed=-1)
+        with pytest.raises(ValidationError):
+            SobolSampler(Point, dims, config=SobolConfig(seed=-1))
 
 
 def test_validator_bubbles() -> None:
@@ -169,7 +169,7 @@ def test_validator_bubbles() -> None:
             raise ValueError("forced failure")
 
     dims = {"z": BoundSpec(lower=0.0, upper=1.0)}
-    sampler = SobolSampler(AlwaysFail, dims, seed=_SEED)
+    sampler = SobolSampler(AlwaysFail, dims, config=SobolConfig(seed=_SEED))
     with pytest.raises(ValidationError, match="forced failure"):
         sampler.sample(1)
 
@@ -180,7 +180,7 @@ def test_smoke_two_dim() -> None:
         "x": BoundSpec(lower=0.0, upper=1.0),
         "y": BoundSpec(lower=-1.0, upper=1.0),
     }
-    sampler = SobolSampler(Point, dims, seed=_SEED)
+    sampler = SobolSampler(Point, dims, config=SobolConfig(seed=_SEED))
     pts = sampler.sample(4)
 
     pairs = _pairs(pts)

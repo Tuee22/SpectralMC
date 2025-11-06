@@ -15,12 +15,14 @@ Fully ``mypy --strict`` clean.
 """
 
 from collections.abc import Hashable, Mapping
+from enum import Enum
 from typing import List, Optional, Tuple, Union, NoReturn
 
 import torch
-from spectralmc.models.torch import Device, DType
+from spectralmc.models.torch import Device, AnyDType
 
 __all__ = [
+    "TransferDestination",
     "Scalar",
     "TensorTree",
     "move_tensor_tree",
@@ -28,6 +30,33 @@ __all__ = [
     "module_state_device_dtype",
     "optimizer_state_device_dtype",
 ]
+
+
+# ────────────────────────────── enums ──────────────────────────────────────
+class TransferDestination(Enum):
+    """Transfer destination eliminating illegal (device, pin_memory) combinations.
+
+    CPU: Transfer to CPU without pinned memory.
+    CPU_PINNED: Transfer to CPU with pinned memory (faster GPU↔CPU transfers).
+    CUDA: Transfer to CUDA device (pin_memory is meaningless here).
+    """
+
+    CPU = "cpu"
+    CPU_PINNED = "cpu_pinned"
+    CUDA = "cuda"
+
+    def to_torch_device(self) -> torch.device:
+        """Convert to torch.device."""
+        match self:
+            case TransferDestination.CPU | TransferDestination.CPU_PINNED:
+                return Device.cpu.to_torch()
+            case TransferDestination.CUDA:
+                return Device.cuda.to_torch()
+
+    def should_pin_memory(self) -> bool:
+        """Return True if memory should be pinned (only for CPU_PINNED)."""
+        return self == TransferDestination.CPU_PINNED
+
 
 # ────────────────────────────── type aliases ────────────────────────────────
 Scalar = Union[int, float, bool, str, bytes, None]
@@ -53,10 +82,11 @@ def _raise(exc: Exception) -> NoReturn:  # expression‑level raise
 def _copy_tensor(
     src: torch.Tensor,
     *,
-    target_dev: torch.device,
-    pin_memory: bool,
+    dest: TransferDestination,
 ) -> torch.Tensor:
-    """Clone *src* onto *target_dev* (non‑blocking, global stream)."""
+    """Clone *src* to *dest* (non‑blocking, global stream)."""
+    target_dev = dest.to_torch_device()
+
     src.device == target_dev and _raise(
         ValueError("Attempted to move a tensor to its current device.")
     )
@@ -70,7 +100,7 @@ def _copy_tensor(
                 *dims,
                 dtype=src.dtype,
                 device=Device.cpu.to_torch(),
-                pin_memory=pin_memory,
+                pin_memory=dest.should_pin_memory(),
             )
             with torch.cuda.stream(_CUDA_STREAM):
                 dst.copy_(src.detach(), non_blocking=True)
@@ -90,24 +120,18 @@ def _copy_tensor(
 def _move(
     obj: TensorTree,
     *,
-    target_dev: torch.device,
-    pin_memory: bool,
+    dest: TransferDestination,
 ) -> TensorTree:
     """Pure‑functional recursion via pattern matching."""
     match obj:
         case torch.Tensor():
-            return _copy_tensor(obj, target_dev=target_dev, pin_memory=pin_memory)
+            return _copy_tensor(obj, dest=dest)
         case list() as seq:
-            return [_move(v, target_dev=target_dev, pin_memory=pin_memory) for v in seq]
+            return [_move(v, dest=dest) for v in seq]
         case tuple() as seq:
-            return tuple(
-                _move(v, target_dev=target_dev, pin_memory=pin_memory) for v in seq
-            )
+            return tuple(_move(v, dest=dest) for v in seq)
         case Mapping() as mp:
-            return {
-                k: _move(v, target_dev=target_dev, pin_memory=pin_memory)
-                for k, v in mp.items()
-            }
+            return {k: _move(v, dest=dest) for k, v in mp.items()}
         case _:
             return obj  # scalar leaf
 
@@ -116,24 +140,23 @@ def _move(
 def move_tensor_tree(
     tree: TensorTree,
     *,
-    dest: Device,
-    pin_memory: bool = True,
+    dest: TransferDestination,
 ) -> TensorTree:
-    """Copy *tree* so every tensor lives on *dest* (CPU or cuda:0)."""
-    tgt = dest.to_torch()
+    """Copy *tree* so every tensor lives on *dest* (CPU, CPU_PINNED, or CUDA)."""
+    tgt = dest.to_torch_device()
 
     (tgt.type == "cuda" and not torch.cuda.is_available()) and _raise(
         RuntimeError("CUDA destination requested but CUDA is unavailable.")
     )
 
-    result = _move(tree, target_dev=tgt, pin_memory=pin_memory)
+    result = _move(tree, dest=dest)
     (None if _CUDA_STREAM is None else _CUDA_STREAM.synchronize())
     return result
 
 
 # ───────────────────────── tree inspection util ────────────────────────────
-def get_tree_device_dtype(tree: TensorTree) -> Tuple[Device, DType]:
-    """Return the unique ``(Device, DType)`` shared by *all* tensors in *tree*."""
+def get_tree_device_dtype(tree: TensorTree) -> Tuple[Device, AnyDType]:
+    """Return the unique ``(Device, AnyDType)`` shared by *all* tensors in *tree*."""
 
     def _pairs(node: TensorTree) -> set[Tuple[torch.device, torch.dtype]]:
         match node:
@@ -153,20 +176,38 @@ def get_tree_device_dtype(tree: TensorTree) -> Tuple[Device, DType]:
     )
 
     dev, dt = next(iter(pairs))
-    return Device.from_torch(dev), DType.from_torch(dt)
+
+    # Import here to access the new types
+    from spectralmc.models.torch import (
+        FullPrecisionDType,
+        ReducedPrecisionDType,
+        _TORCH_DTYPE_TO_STR,
+    )
+
+    if dt not in _TORCH_DTYPE_TO_STR:
+        _raise(ValueError(f"Unsupported torch.dtype {dt!r}"))
+    dtype_str = _TORCH_DTYPE_TO_STR[dt]
+
+    dtype: AnyDType
+    if dtype_str in ("float32", "float64", "complex64", "complex128"):
+        dtype = FullPrecisionDType(dtype_str)
+    else:
+        dtype = ReducedPrecisionDType(dtype_str)
+
+    return Device.from_torch(dev), dtype
 
 
 # ───────────────────── state‑dict helpers (strictly typed) ──────────────────
 def module_state_device_dtype(
     state: Mapping[str, torch.Tensor],
-) -> Tuple[Device, DType]:
+) -> Tuple[Device, AnyDType]:
     """Device/dtype for a *model* ``state_dict``."""
     return get_tree_device_dtype(tuple(state.values()))
 
 
 def optimizer_state_device_dtype(
     state: Mapping[str, object],  # <-- keys are *str* now
-) -> Tuple[Device, DType]:
+) -> Tuple[Device, AnyDType]:
     """Device/dtype for an *optimizer* ``state_dict`` (Adam, etc.)."""
 
     def _tensors(node: object) -> List[torch.Tensor]:

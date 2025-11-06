@@ -164,6 +164,9 @@ def test_default_device_cuda_context() -> None:
 # ────────────────────────────── sanity check ---------------------------------
 def test_public_api_all_exports() -> None:
     expected: Tuple[str, ...] = (
+        "FullPrecisionDType",
+        "ReducedPrecisionDType",
+        "AnyDType",
         "DType",
         "Device",
         "TensorState",

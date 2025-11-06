@@ -39,6 +39,7 @@ from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field
 
 from spectralmc.async_normals import (
+    BufferConfig,
     ConcurrentNormGenerator,
     ConcurrentNormGeneratorConfig,
 )
@@ -201,7 +202,10 @@ class BlackScholes:
             dtype=self._sp.dtype,
             skips=self._sp.skip,
         )
-        self._ngen = ConcurrentNormGenerator(self._sp.buffer_size, ngen_cfg)
+        buffer_cfg = BufferConfig.create(
+            self._sp.buffer_size, ngen_cfg.rows, ngen_cfg.cols
+        )
+        self._ngen = ConcurrentNormGenerator(buffer_cfg, ngen_cfg)
 
     # ....................................... snapshot interface .............
     def snapshot(self) -> BlackScholesConfig:

@@ -10,6 +10,7 @@ import pytest
 from spectralmc.models.torch import Device, DType  # façade first
 import torch
 import spectralmc.models.cpu_gpu_transfer as cpu_gpu_transfer
+from spectralmc.models.cpu_gpu_transfer import TransferDestination
 
 ###############################################################################
 # Utilities
@@ -38,7 +39,9 @@ assert torch.cuda.is_available(), "CUDA device required but none detected."
 
 def test_already_on_destination_raises() -> None:
     with pytest.raises(ValueError):
-        cpu_gpu_transfer.move_tensor_tree([torch.ones(1), 0], dest=Device.cpu)
+        cpu_gpu_transfer.move_tensor_tree(
+            [torch.ones(1), 0], dest=TransferDestination.CPU
+        )
 
 
 class BadDest:
@@ -46,14 +49,14 @@ class BadDest:
 
 
 def test_unsupported_destination_device() -> None:
-    with pytest.raises(RuntimeError):
+    with pytest.raises(AttributeError):
         cpu_gpu_transfer.move_tensor_tree(torch.zeros(1), dest=BadDest())  # type: ignore[arg-type]
 
 
 def test_cuda_requested_but_not_available(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     with pytest.raises(RuntimeError):
-        cpu_gpu_transfer.move_tensor_tree(torch.zeros(1), dest=Device.cuda)
+        cpu_gpu_transfer.move_tensor_tree(torch.zeros(1), dest=TransferDestination.CUDA)
 
 
 ###############################################################################
@@ -68,7 +71,7 @@ def test_cpu_to_cuda_and_back_roundtrip() -> None:
         "meta": "hello",
     }
 
-    to_cuda = cpu_gpu_transfer.move_tensor_tree(original, dest=Device.cuda)
+    to_cuda = cpu_gpu_transfer.move_tensor_tree(original, dest=TransferDestination.CUDA)
 
     src: List[torch.Tensor] = _flatten(original)
     dst: List[torch.Tensor] = _flatten(to_cuda)
@@ -81,7 +84,9 @@ def test_cpu_to_cuda_and_back_roundtrip() -> None:
         for s, d in zip(src, dst)
     )
 
-    back = cpu_gpu_transfer.move_tensor_tree(to_cuda, dest=Device.cpu, pin_memory=True)
+    back = cpu_gpu_transfer.move_tensor_tree(
+        to_cuda, dest=TransferDestination.CPU_PINNED
+    )
 
     src2: List[torch.Tensor] = _flatten(to_cuda)
     dst2: List[torch.Tensor] = _flatten(back)
@@ -89,14 +94,21 @@ def test_cpu_to_cuda_and_back_roundtrip() -> None:
     assert all(torch.equal(s.cpu(), d) and d.is_pinned() for s, d in zip(src2, dst2))
 
 
-@pytest.mark.parametrize("pin_memory", [True, False])
-def test_gpu_to_cpu_pin_memory_respected(pin_memory: bool) -> None:
+@pytest.mark.parametrize(
+    "dest,expected_pinned",
+    [
+        (TransferDestination.CPU, False),
+        (TransferDestination.CPU_PINNED, True),
+    ],
+)
+def test_gpu_to_cpu_pin_memory_respected(
+    dest: TransferDestination, expected_pinned: bool
+) -> None:
     res = cpu_gpu_transfer.move_tensor_tree(
         torch.randn(4, 4, device="cuda"),
-        dest=Device.cpu,
-        pin_memory=pin_memory,
+        dest=dest,
     )
-    assert isinstance(res, torch.Tensor) and res.is_pinned() == pin_memory
+    assert isinstance(res, torch.Tensor) and res.is_pinned() == expected_pinned
 
 
 ###############################################################################

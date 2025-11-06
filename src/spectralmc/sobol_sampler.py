@@ -31,20 +31,41 @@ Both classes pass **``mypy --strict``** without ignores, casts, or Any.
 
 from __future__ import annotations
 
-from typing import Dict, Generic, List, Type, TypeVar
+from typing import Annotated, Dict, Generic, List, Type, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from scipy.stats.qmc import Sobol
 
-__all__: list[str] = ["BoundSpec", "SobolSampler"]
+__all__: list[str] = ["BoundSpec", "SobolConfig", "SobolSampler"]
 
 # --------------------------------------------------------------------------- #
 # Type helpers                                                                #
 # --------------------------------------------------------------------------- #
 
 PointT = TypeVar("PointT", bound=BaseModel)
+
+
+class SobolConfig(BaseModel):
+    """Configuration for Sobol sampler with validated parameters.
+
+    Attributes
+    ----------
+    seed
+        Non-negative seed for deterministic reproducibility.
+    skip
+        Non-negative number of initial points to discard (default: 0).
+
+    Notes
+    -----
+    Validation is declarative via Pydantic Field constraints.
+    """
+
+    seed: Annotated[int, Field(ge=0, description="Non-negative seed for Sobol engine")]
+    skip: Annotated[
+        int, Field(ge=0, description="Number of initial points to skip")
+    ] = 0
 
 
 class BoundSpec(BaseModel):
@@ -88,12 +109,9 @@ class SobolSampler(Generic[PointT]):
     dimensions
         Mapping ``field_name → BoundSpec``.  The keys **must** match the
         field names in ``pydantic_class``; order is irrelevant.
-    seed
-        Non‑negative seed forwarded to :class:`scipy.stats.qmc.Sobol` for
-        deterministic reproducibility.
-    skip
-        The Sobol engine index to start from (i.e. discard the first
-        ``skip`` points).  Must be non‑negative.  Default is ``0``.
+    config
+        :class:`SobolConfig` instance containing seed and skip parameters.
+        Validation is performed by Pydantic at construction time.
 
     Notes
     -----
@@ -112,13 +130,8 @@ class SobolSampler(Generic[PointT]):
         pydantic_class: Type[PointT],
         dimensions: Dict[str, BoundSpec],
         *,
-        seed: int,
-        skip: int = 0,
+        config: SobolConfig,
     ) -> None:
-        if seed < 0:
-            raise ValueError("`seed` must be non‑negative")
-        if skip < 0:
-            raise ValueError("`skip` must be non‑negative")
 
         # Field names in deterministic order
         self._fields: List[str] = list(pydantic_class.model_fields)
@@ -134,9 +147,11 @@ class SobolSampler(Generic[PointT]):
         )
 
         self._model: Type[PointT] = pydantic_class
-        self._sampler: Sobol = Sobol(d=len(self._fields), scramble=True, seed=seed)
-        if skip:
-            self._sampler.fast_forward(skip)
+        self._sampler: Sobol = Sobol(
+            d=len(self._fields), scramble=True, seed=config.seed
+        )
+        if config.skip:
+            self._sampler.fast_forward(config.skip)
 
     # ------------------------------------------------------------------ #
     # Private helpers                                                    #

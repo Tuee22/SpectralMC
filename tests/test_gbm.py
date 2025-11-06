@@ -18,7 +18,7 @@ import pytest
 from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
 from spectralmc.models.numerical import Precision
 from spectralmc.quantlib import bs_price_quantlib
-from spectralmc.sobol_sampler import BoundSpec, SobolSampler
+from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler
 
 # ─────────────────────────────── type aliases ───────────────────────────────
 Inputs: TypeAlias = BlackScholes.Inputs
@@ -89,7 +89,11 @@ def _collect(engine: BlackScholes, inp: Inputs, n: int) -> List[HostPriceResults
 def test_black_scholes_mc(precision: Precision) -> None:
     """Aggregate MC accuracy against analytic Black–Scholes."""
     engine = _make_engine(precision)
-    sampler = SobolSampler(BlackScholes.Inputs, _BS_DIMENSIONS, seed=31)
+    sampler = SobolSampler(
+        pydantic_class=BlackScholes.Inputs,
+        dimensions=_BS_DIMENSIONS,
+        config=SobolConfig(seed=31, skip=0),
+    )
 
     def _stats(inp: Inputs) -> tuple[float, float | None]:
         mc_vals = np.array(
