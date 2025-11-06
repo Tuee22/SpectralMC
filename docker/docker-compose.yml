@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
     command: server /data --console-address ":9001"
     volumes:
-      - ../.data/minio:/data                # persistent host path
+      - ../.miniodata/minio:/data                # persistent host path
     environment:
       MINIO_ROOT_USER:     minioadmin
       MINIO_ROOT_PASSWORD: minioadmin

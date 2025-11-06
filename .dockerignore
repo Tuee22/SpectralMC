@@ -34,4 +34,4 @@ data/
 setup.sh
 **/.failed_artifacts
 **/.logs
-**/.data
+**/.miniodata
