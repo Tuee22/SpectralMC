@@ -24,7 +24,7 @@ class _AdamParamState(TypedDict, total=False):
     max_exp_avg_sq: torch.Tensor | None
 
 class _OptimizerStateDict(TypedDict):
-    state: dict[int, _AdamParamState]
+    state: dict[int, dict[str, torch.Tensor | int]]  # More flexible for iteration
     param_groups: list[dict[str, object]]
 
 # -------------------------------------------------------------------- #
@@ -41,7 +41,7 @@ class Optimizer:
     def zero_grad(self, *, set_to_none: bool | None = ...) -> None: ...
     def step(self) -> None: ...
     def load_state_dict(self, state: Mapping[str, object]) -> None: ...
-    def state_dict(self) -> Mapping[str, object]: ...
+    def state_dict(self) -> _OptimizerStateDict: ...
 
 # -------------------------------------------------------------------- #
 #  Concrete optimiser classes used in SpectralMC

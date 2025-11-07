@@ -30,6 +30,7 @@ from spectralmc.cvnn_factory import (
     ActivationCfg,
     ActivationKind,
     CVNNConfig,
+    ExplicitWidth,
     LinearCfg,
     build_model,
 )
@@ -38,6 +39,7 @@ from spectralmc.gbm_trainer import (
     ComplexValuedModel,
     GbmCVNNPricer,
     GbmCVNNPricerConfig,
+    TrainingConfig,
 )
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.sobol_sampler import BoundSpec
@@ -111,8 +113,11 @@ def _make_cvnn(
     cfg = CVNNConfig(
         dtype=enum_dtype,
         layers=[
-            LinearCfg(width=32, activation=ActivationCfg(kind=ActivationKind.MOD_RELU)),
-            LinearCfg(width=n_outputs),
+            LinearCfg(
+                width=ExplicitWidth(value=32),
+                activation=ActivationCfg(kind=ActivationKind.MOD_RELU),
+            ),
+            LinearCfg(width=ExplicitWidth(value=n_outputs)),
         ],
         seed=seed,
     )
@@ -180,8 +185,11 @@ def test_lockstep_training(precision: Precision) -> None:
     second = _make_gbm_trainer(precision, seed=43)
 
     for batches in (2, 3, 1):
-        first.train(num_batches=batches, batch_size=8, learning_rate=LEARNING_RATE)
-        second.train(num_batches=batches, batch_size=8, learning_rate=LEARNING_RATE)
+        cfg = TrainingConfig(
+            num_batches=batches, batch_size=8, learning_rate=LEARNING_RATE
+        )
+        first.train(cfg)
+        second.train(cfg)
         assert _max_param_diff(first._cvnn, second._cvnn) == 0.0
 
 
@@ -193,13 +201,16 @@ def test_lockstep_training(precision: Precision) -> None:
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_snapshot_cycle_deterministic(precision: Precision) -> None:
     trainer = _make_gbm_trainer(precision, seed=44)
-    trainer.train(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE)
+    trainer.train(
+        TrainingConfig(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE)
+    )
 
     snap = trainer.snapshot().model_copy(update={"cvnn": _clone_model(trainer._cvnn)})
     clone = GbmCVNNPricer(snap)
 
-    trainer.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
-    clone.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
+    cfg = TrainingConfig(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
+    trainer.train(cfg)
+    clone.train(cfg)
 
     assert _max_param_diff(trainer._cvnn, clone._cvnn) == 0.0
 
@@ -212,15 +223,21 @@ def test_snapshot_cycle_deterministic(precision: Precision) -> None:
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_snapshot_restart_without_optimizer(precision: Precision) -> None:
     trainer = _make_gbm_trainer(precision, seed=45)
-    trainer.train(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE)
+    trainer.train(
+        TrainingConfig(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE)
+    )
 
     snap = trainer.snapshot().model_copy(
         update={"optimizer_state": None, "cvnn": _clone_model(trainer._cvnn)}
     )
     restarted = GbmCVNNPricer(snap)
 
-    trainer.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
-    restarted.train(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
+    # Reset original trainer's optimizer state to match restarted trainer
+    trainer._optimizer_state = None
+
+    cfg = TrainingConfig(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
+    trainer.train(cfg)
+    restarted.train(cfg)
 
     assert _max_param_diff(trainer._cvnn, restarted._cvnn) == 0.0
 
@@ -233,7 +250,9 @@ def test_snapshot_restart_without_optimizer(precision: Precision) -> None:
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_snapshot_optimizer_serialization_roundtrip(precision: Precision) -> None:
     trainer = _make_gbm_trainer(precision, seed=50)
-    trainer.train(num_batches=4, batch_size=8, learning_rate=LEARNING_RATE)
+    trainer.train(
+        TrainingConfig(num_batches=4, batch_size=8, learning_rate=LEARNING_RATE)
+    )
     snap = trainer.snapshot()
 
     opt_state = snap.optimizer_state
@@ -256,7 +275,9 @@ def test_snapshot_optimizer_serialization_roundtrip(precision: Precision) -> Non
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_predict_price_smoke(precision: Precision) -> None:
     trainer = _make_gbm_trainer(precision, seed=60)
-    trainer.train(num_batches=1, batch_size=4, learning_rate=LEARNING_RATE)
+    trainer.train(
+        TrainingConfig(num_batches=1, batch_size=4, learning_rate=LEARNING_RATE)
+    )
 
     contracts: Sequence[BlackScholes.Inputs] = [
         BlackScholes.Inputs(X0=100.0, K=100.0, T=1.0, r=0.05, d=0.02, v=0.20),

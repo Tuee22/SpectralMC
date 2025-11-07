@@ -1,0 +1,39 @@
+// src/spectralmc/proto/training.proto
+syntax = "proto3";
+
+package spectralmc.proto;
+
+import "simulation.proto";
+import "tensors.proto";
+
+// ──────────────────────────── Training Config ─────────────────────────────
+message TrainingConfigProto {
+  uint32 num_batches = 1;
+  uint32 batch_size = 2;
+  double learning_rate = 3;
+}
+
+// ──────────────────────────── Training Step Metrics ───────────────────────
+message StepMetricsProto {
+  uint64 step = 1;
+  double loss = 2;
+  double gradient_norm = 3;
+  double learning_rate = 4;
+  double batch_time_ms = 5;
+}
+
+// ──────────────────────────── GBM CVNN Pricer Config ──────────────────────
+message GbmCVNNPricerConfigProto {
+  BlackScholesConfigProto cfg = 1;
+  SobolConfigProto domain_bounds = 2;
+  
+  // Model checkpoint (includes cvnn, optimizer, RNG state)
+  ModelCheckpointProto checkpoint = 3;
+  
+  // Optional optimizer state (None when restarting without momentum)
+  AdamOptimizerStateProto optimizer_state = 4;
+  
+  // RNG state for reproducibility
+  bytes torch_cpu_rng_state = 5;
+  repeated bytes torch_cuda_rng_states = 6;
+}

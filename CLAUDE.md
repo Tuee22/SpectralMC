@@ -31,6 +31,81 @@ SpectralMC is a GPU-accelerated library for online machine learning using Monte 
   - `torch.py` - PyTorch-based model definitions
   - `numerical.py` - Numerical model utilities
   - `cpu_gpu_transfer.py` - CPU/GPU memory transfer utilities
+- `storage/` - Blockchain model versioning
+  - `chain.py` - Blockchain primitives (ModelVersion, hashing, semantic versioning)
+  - `store.py` - BlockchainModelStore for checkpoint storage
+  - `errors.py` - Exception hierarchy for storage operations
+- `serialization/` - Protocol Buffer serialization
+  - `common.py` - Enum converters (Precision, Device, DType)
+  - `simulation.py` - Simulation parameter converters
+  - `models.py` - Model configuration converters
+  - `training.py` - Training configuration converters
+- `proto/` - Generated Protocol Buffer code
+  - `common_pb2.py` - Common message types
+  - `simulation_pb2.py` - Simulation messages
+  - `models_pb2.py` - Model configuration messages
+  - `training_pb2.py` - Training configuration messages
+
+### Blockchain Model Versioning
+
+SpectralMC uses a simplified blockchain approach for model versioning, providing:
+
+**Features**:
+- Immutable version history with SHA256 integrity
+- Semantic versioning (MAJOR.MINOR.PATCH)
+- Parent-child chain linking for tamper detection
+- Protocol Buffer serialization for cross-platform compatibility
+- Local filesystem storage (production would use S3)
+
+**Key Classes**:
+```python
+from spectralmc.storage import BlockchainModelStore, ModelVersion
+
+# Initialize store
+store = BlockchainModelStore("/path/to/storage")
+
+# Commit a checkpoint
+checkpoint_data = b"serialized model weights"
+content_hash = "sha256_of_checkpoint"
+version = store.commit(checkpoint_data, content_hash, "Training epoch 100")
+
+# Retrieve HEAD
+head = store.get_head()
+
+# Load checkpoint
+loaded_data = store.load_checkpoint(version)
+```
+
+**Storage Structure**:
+```
+storage_path/
+├── chain.json                 # Current HEAD pointer
+└── versions/
+    ├── v0000000000_1.0.0_abcd1234/
+    │   ├── checkpoint.pb      # Model checkpoint
+    │   └── metadata.json      # Version metadata
+    ├── v0000000001_1.0.1_ef567890/
+    │   ├── checkpoint.pb
+    │   └── metadata.json
+    └── ...
+```
+
+**ModelVersion Properties**:
+- `counter`: Monotonically increasing version number
+- `semantic_version`: Human-readable version (e.g., "1.2.3")
+- `parent_hash`: SHA256 of parent version (empty for genesis)
+- `content_hash`: SHA256 of checkpoint data
+- `commit_timestamp`: ISO 8601 UTC timestamp
+- `commit_message`: Optional commit description
+- `compute_hash()`: SHA256 of all fields for chain integrity
+
+**Production Enhancements** (not implemented in this simplified version):
+- Async S3 operations with `aioboto3`
+- 10-step atomic commit with CAS using ETag/If-Match
+- Conflict resolution and rollback
+- TensorBoard event upload
+- Garbage collection for old versions
+- Inference client with pinned/tracking modes
 
 ### Workflow
 

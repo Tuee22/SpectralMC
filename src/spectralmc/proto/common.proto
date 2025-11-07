@@ -1,0 +1,55 @@
+// src/spectralmc/proto/common.proto
+syntax = "proto3";
+
+package spectralmc.proto;
+
+// ──────────────────────────── Precision Enum ──────────────────────────────
+enum PrecisionProto {
+  PRECISION_UNSPECIFIED = 0;
+  PRECISION_FLOAT32 = 1;
+  PRECISION_FLOAT64 = 2;
+}
+
+// ──────────────────────────── Device Type Enum ────────────────────────────
+enum DeviceProto {
+  DEVICE_UNSPECIFIED = 0;
+  DEVICE_CPU = 1;
+  DEVICE_CUDA = 2;
+}
+
+// ──────────────────────────── DType Enum ──────────────────────────────────
+enum DTypeProto {
+  DTYPE_UNSPECIFIED = 0;
+  DTYPE_FLOAT32 = 1;
+  DTYPE_FLOAT64 = 2;
+  DTYPE_FLOAT16 = 3;
+  DTYPE_BFLOAT16 = 4;
+  DTYPE_COMPLEX64 = 5;
+  DTYPE_COMPLEX128 = 6;
+}
+
+// ──────────────────────────── Model Version ───────────────────────────────
+message ModelVersionProto {
+  uint32 counter = 1;
+  string semantic_version = 2;  // semver format: "MAJOR.MINOR.PATCH"
+  string parent_hash = 3;        // SHA256 of parent version (empty for v0)
+  string content_hash = 4;       // SHA256 of checkpoint.pb
+  string commit_timestamp = 5;   // ISO 8601 UTC timestamp
+  string commit_message = 6;     // Optional user-provided message
+}
+
+// ──────────────────────────── PyTorch Environment ─────────────────────────
+message TorchEnvProto {
+  string python_version = 1;
+  string torch_version = 2;
+  string cuda_version = 3;
+  bool cudnn_enabled = 4;
+  string platform = 5;
+}
+
+// ──────────────────────────── Architecture Fingerprint ────────────────────
+message ArchitectureFingerprintProto {
+  string cvnn_structure_hash = 1;  // SHA256 of layer config
+  uint32 total_parameters = 2;
+  string activation_kinds = 3;     // Comma-separated activation types
+}

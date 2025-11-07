@@ -20,6 +20,7 @@ from spectralmc.cvnn_factory import (
     ActivationKind,
     CVNNConfig,
     CovBNCfg,
+    ExplicitWidth,
     LayerKind,
     LinearCfg,
     NaiveBNCfg,
@@ -84,7 +85,7 @@ def _example_cfg(dtype: DType = DType.float32, seed: int = 314159) -> CVNNConfig
         layers=[
             # Linear → modReLU
             LinearCfg(
-                width=8,
+                width=ExplicitWidth(value=8),
                 bias=True,
                 activation=ActivationCfg(kind=ActivationKind.MOD_RELU),
             ),
@@ -94,7 +95,7 @@ def _example_cfg(dtype: DType = DType.float32, seed: int = 314159) -> CVNNConfig
             ResidualCfg(
                 body=SequentialCfg(
                     layers=[
-                        LinearCfg(width=8, bias=False),
+                        LinearCfg(width=ExplicitWidth(value=8), bias=False),
                         CovBNCfg(),
                     ],
                 ),

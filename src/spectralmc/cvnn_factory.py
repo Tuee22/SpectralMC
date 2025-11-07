@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple, TypeAlias, Union
 
 import torch
 import torch.nn as nn
-from pydantic import BaseModel, PositiveInt
+from pydantic import BaseModel, ConfigDict, PositiveInt
 
 from spectralmc.models.torch import (
     TensorState,
@@ -28,6 +28,9 @@ from spectralmc.cvnn import (
 __all__: Tuple[str, ...] = (
     "ActivationKind",
     "LayerKind",
+    "WidthSpec",
+    "PreserveWidth",
+    "ExplicitWidth",
     "CVNNConfig",
     "build_model",
     "load_model",
@@ -50,13 +53,34 @@ class LayerKind(str, Enum):
 
 
 # ───────────────────────────── config schemas ───────────────────────────────
+
+
+# Width specification ADT: explicit or preserve input width
+class WidthSpec(BaseModel):
+    """Base class for width specification."""
+
+    model_config = ConfigDict(frozen=True)
+
+
+class PreserveWidth(WidthSpec):
+    """Tag-only class indicating width should be preserved from input."""
+
+    pass
+
+
+class ExplicitWidth(WidthSpec):
+    """Explicit width specification."""
+
+    value: PositiveInt
+
+
 class ActivationCfg(BaseModel):
     kind: ActivationKind
 
 
 class LinearCfg(BaseModel):
     kind: LayerKind = LayerKind.LINEAR
-    width: Optional[int] = None
+    width: WidthSpec = PreserveWidth()
     bias: bool = True
     activation: Optional[ActivationCfg] = None
 
@@ -129,7 +153,12 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
     match cfg:
 
         case LinearCfg() as c:
-            out_w = c.width or cur_w
+            # Pattern match on WidthSpec to determine output width
+            match c.width:
+                case PreserveWidth():
+                    out_w = cur_w
+                case ExplicitWidth(value=w):
+                    out_w = w
             lyr = ComplexLinear(cur_w, out_w, bias=c.bias)
             return _maybe_activate(lyr, c.activation, out_w), out_w
 

@@ -61,10 +61,11 @@ from typing import (
 
 import cupy as cp
 from cupy.cuda import Stream as CuPyStream
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 from torch.utils.tensorboard import SummaryWriter
 
 from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
@@ -121,6 +122,16 @@ StepLogger = Callable[["StepMetrics"], None]
 """User‑supplied callback executed once after every optimiser step."""
 
 
+class TrainingConfig(BaseModel):
+    """Validated training hyperparameters."""
+
+    num_batches: PositiveInt
+    batch_size: PositiveInt
+    learning_rate: float = Field(gt=0.0, lt=1.0)
+
+    model_config = ConfigDict(frozen=True)
+
+
 class GbmCVNNPricerConfig(BaseModel):
     """Frozen snapshot used for (de‑)serialising a trainer."""
 
@@ -130,6 +141,8 @@ class GbmCVNNPricerConfig(BaseModel):
     optimizer_state: Optional[AdamOptimizerState] = None
     global_step: int = 0
     sobol_skip: int = 0
+    torch_cpu_rng_state: Optional[bytes] = None
+    torch_cuda_rng_states: Optional[List[bytes]] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
@@ -259,6 +272,21 @@ class GbmCVNNPricer:
             ),
         )
 
+        # Restore RNG states for deterministic reproducibility ----------- #
+        if cfg.torch_cpu_rng_state is not None:
+            torch.set_rng_state(
+                torch.from_numpy(
+                    np.frombuffer(cfg.torch_cpu_rng_state, dtype=np.uint8).copy()
+                )
+            )
+        if cfg.torch_cuda_rng_states is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(
+                [
+                    torch.from_numpy(np.frombuffer(state_bytes, dtype=np.uint8).copy())
+                    for state_bytes in cfg.torch_cuda_rng_states
+                ]
+            )
+
     # ------------------------------------------------------------------ #
     # Checkpointing                                                      #
     # ------------------------------------------------------------------ #
@@ -275,6 +303,15 @@ class GbmCVNNPricer:
         """
         if self._using_cuda is False or self._mc_engine is None:
             raise RuntimeError("Snapshots can only be taken on CUDA.")
+
+        # Capture RNG states for reproducibility
+        torch_cpu_rng = torch.get_rng_state().cpu().numpy().tobytes()
+        torch_cuda_rng = (
+            [state.cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()]
+            if torch.cuda.is_available() and torch.cuda.device_count() > 0
+            else None
+        )
+
         return GbmCVNNPricerConfig(
             cfg=self._mc_engine.snapshot(),
             domain_bounds=self._domain_bounds,
@@ -282,6 +319,8 @@ class GbmCVNNPricer:
             optimizer_state=self._optimizer_state,
             global_step=self._global_step,
             sobol_skip=self._sobol_skip,
+            torch_cpu_rng_state=torch_cpu_rng,
+            torch_cuda_rng_states=torch_cuda_rng,
         )
 
     # ------------------------------------------------------------------ #
@@ -324,17 +363,15 @@ class GbmCVNNPricer:
 
     def train(
         self,
+        config: TrainingConfig,
         *,
-        num_batches: int,
-        batch_size: int,
-        learning_rate: float,
         logger: Optional[StepLogger] = None,
     ) -> None:
-        """Run **CUDA‑only** optimisation for *num_batches* steps."""
+        """Run **CUDA‑only** optimisation for *config.num_batches* steps."""
         if not self._using_cuda:
             raise RuntimeError("Trainer requires a CUDA‑capable GPU.")
 
-        adam = optim.Adam(self._cvnn.parameters(), lr=learning_rate)
+        adam = optim.Adam(self._cvnn.parameters(), lr=config.learning_rate)
 
         # (re‑)attach previous optimiser state -------------------------- #
         if self._optimizer_state is not None:
@@ -343,12 +380,12 @@ class GbmCVNNPricer:
         self._cvnn.train()
 
         # main loop ------------------------------------------------------ #
-        for _ in range(num_batches):
+        for _ in range(config.num_batches):
             tic = time.perf_counter()
 
             # ── Monte‑Carlo + FFT (CuPy) ─────────────────────────────── #
-            sobol_inputs = self._sampler.sample(batch_size)
-            self._sobol_skip += batch_size
+            sobol_inputs = self._sampler.sample(config.batch_size)
+            self._sobol_skip += config.batch_size
             assert self._cupy_stream is not None
             with self._cupy_stream:
                 fft_buf = cp.asarray(
@@ -393,10 +430,9 @@ class GbmCVNNPricer:
         # Move all tensors to CPU for serialization
         for param_id in state_dict["state"]:
             for key in state_dict["state"][param_id]:
-                if isinstance(state_dict["state"][param_id][key], torch.Tensor):
-                    state_dict["state"][param_id][key] = state_dict["state"][param_id][
-                        key
-                    ].cpu()
+                val = state_dict["state"][param_id][key]
+                if isinstance(val, torch.Tensor):
+                    state_dict["state"][param_id][key] = val.cpu()
         self._optimizer_state = AdamOptimizerState.from_torch(state_dict)
 
     # ------------------------------------------------------------------ #

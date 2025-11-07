@@ -1,0 +1,88 @@
+// src/spectralmc/proto/models.proto
+syntax = "proto3";
+
+package spectralmc.proto;
+
+import "common.proto";
+
+// ──────────────────────────── Activation Kind Enum ────────────────────────
+enum ActivationKindProto {
+  ACTIVATION_KIND_UNSPECIFIED = 0;
+  ACTIVATION_KIND_MOD_RELU = 1;
+  ACTIVATION_KIND_Z_RELU = 2;
+  ACTIVATION_KIND_C_RELU = 3;
+}
+
+// ──────────────────────────── Layer Kind Enum ─────────────────────────────
+enum LayerKindProto {
+  LAYER_KIND_UNSPECIFIED = 0;
+  LAYER_KIND_LINEAR = 1;
+  LAYER_KIND_NAIVE_BN = 2;
+  LAYER_KIND_COV_BN = 3;
+  LAYER_KIND_SEQUENTIAL = 4;
+  LAYER_KIND_RESIDUAL = 5;
+}
+
+// ──────────────────────────── Width Spec (ADT) ────────────────────────────
+message WidthSpecProto {
+  oneof spec {
+    PreserveWidthProto preserve = 1;
+    ExplicitWidthProto explicit = 2;
+  }
+}
+
+message PreserveWidthProto {}
+
+message ExplicitWidthProto {
+  uint32 value = 1;
+}
+
+// ──────────────────────────── Activation Config ───────────────────────────
+message ActivationCfgProto {
+  ActivationKindProto kind = 1;
+  double bias = 2;  // Only used for ModReLU
+}
+
+// ──────────────────────────── Layer Configs (ADT via oneof) ───────────────
+message LayerCfgProto {
+  oneof cfg {
+    LinearCfgProto linear = 1;
+    NaiveBNCfgProto naive_bn = 2;
+    CovBNCfgProto cov_bn = 3;
+    SequentialCfgProto sequential = 4;
+    ResidualCfgProto residual = 5;
+  }
+}
+
+message LinearCfgProto {
+  WidthSpecProto width = 1;
+  bool bias = 2;
+  ActivationCfgProto activation = 3;
+}
+
+message NaiveBNCfgProto {
+  double eps = 1;
+  double momentum = 2;
+}
+
+message CovBNCfgProto {
+  double eps = 1;
+  double momentum = 2;
+  uint32 num_groups = 3;
+}
+
+message SequentialCfgProto {
+  repeated LayerCfgProto layers = 1;  // Recursive: Sequential can contain any layer
+}
+
+message ResidualCfgProto {
+  LayerCfgProto block = 1;  // Recursive: Residual wraps another layer
+  bool learnable_scale = 2;
+}
+
+// ──────────────────────────── CVNN Config ─────────────────────────────────
+message CVNNConfigProto {
+  DTypeProto dtype = 1;
+  repeated LayerCfgProto layers = 2;
+  uint32 seed = 3;
+}

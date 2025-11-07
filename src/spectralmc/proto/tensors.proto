@@ -1,0 +1,61 @@
+// src/spectralmc/proto/tensors.proto
+syntax = "proto3";
+
+package spectralmc.proto;
+
+import "common.proto";
+
+// ──────────────────────────── Tensor State ────────────────────────────────
+message TensorStateProto {
+  repeated int64 shape = 1;
+  DTypeProto dtype = 2;
+  DeviceProto device = 3;
+  bytes data = 4;  // Serialized tensor data
+  bool requires_grad = 5;
+}
+
+// ──────────────────────────── Adam Optimizer State ────────────────────────
+message AdamParamStateProto {
+  int32 step = 1;
+  TensorStateProto exp_avg = 2;        // First moment estimate
+  TensorStateProto exp_avg_sq = 3;     // Second moment estimate
+}
+
+message AdamParamGroupProto {
+  double lr = 1;
+  double beta1 = 2;
+  double beta2 = 3;
+  double eps = 4;
+  double weight_decay = 5;
+  bool amsgrad = 6;
+}
+
+message AdamOptimizerStateProto {
+  map<int32, AdamParamStateProto> state = 1;  // param_id → state
+  repeated AdamParamGroupProto param_groups = 2;
+}
+
+// ──────────────────────────── RNG State ───────────────────────────────────
+message RNGStateProto {
+  bytes torch_cpu_rng_state = 1;
+  repeated bytes torch_cuda_rng_states = 2;  // One per CUDA device
+}
+
+// ──────────────────────────── Model Checkpoint ────────────────────────────
+message ModelCheckpointProto {
+  // Model parameters
+  map<string, TensorStateProto> model_state_dict = 1;
+  
+  // Optimizer state
+  AdamOptimizerStateProto optimizer_state = 2;
+  
+  // RNG state for reproducibility
+  RNGStateProto rng_state = 3;
+  
+  // Training progress
+  uint64 global_step = 4;
+  
+  // Metadata
+  TorchEnvProto torch_env = 5;
+  ArchitectureFingerprintProto architecture = 6;
+}

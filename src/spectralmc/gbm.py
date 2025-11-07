@@ -30,13 +30,13 @@ Public API
 from __future__ import annotations
 
 from math import exp, sqrt
-from typing import Annotated, Optional, TypeAlias
+from typing import Annotated, Literal, Optional, TypeAlias
 
 import cupy as cp
 import numpy as np
 from numba import cuda
 from numpy.typing import NDArray
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from spectralmc.async_normals import (
     BufferConfig,
@@ -50,6 +50,9 @@ PosFloat = Annotated[float, Field(gt=0)]
 NonNegFloat = Annotated[float, Field(ge=0)]
 DeviceNDArray: TypeAlias = NDArray[np.generic]
 
+# Valid CUDA thread block sizes (must be power of 2, range [32, 1024])
+ThreadsPerBlock: TypeAlias = Literal[32, 64, 128, 256, 512, 1024]
+
 # ───────────────────────── simulation‑parameter schema ──────────────────────
 
 
@@ -59,13 +62,34 @@ class SimulationParams(BaseModel):
     timesteps: int = Field(..., gt=0)
     network_size: int = Field(..., gt=0)
     batches_per_mc_run: int = Field(..., gt=0)
-    threads_per_block: int = Field(..., gt=0)
+    threads_per_block: ThreadsPerBlock
     mc_seed: int = Field(..., gt=0)
     buffer_size: int = Field(..., gt=0)
     skip: int = Field(0, ge=0)
     dtype: Precision
 
     model_config = ConfigDict(frozen=True)
+
+    @model_validator(mode="after")
+    def validate_gpu_memory(self) -> "SimulationParams":
+        """
+        Validate that GPU memory requirements are reasonable.
+
+        The total memory footprint is roughly:
+        network_size * batches_per_mc_run * timesteps * sizeof(dtype)
+
+        This is a soft limit to catch configuration errors early.
+        """
+        total_paths = self.network_size * self.batches_per_mc_run
+        # Rough estimate: 1 billion paths for float32, 500M for float64
+        max_paths = 1_000_000_000 if self.dtype.value == "float32" else 500_000_000
+        if total_paths > max_paths:
+            raise ValueError(
+                f"GPU memory limit exceeded: "
+                f"{total_paths:,} paths > {max_paths:,} (network_size={self.network_size}, "
+                f"batches_per_mc_run={self.batches_per_mc_run})"
+            )
+        return self
 
     # ..................................... convenience ......................
     # @property

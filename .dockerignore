@@ -30,6 +30,7 @@ data/
 .env
 .gitignore
 .dockerignore
+poetry.lock
 **/.mypy_cache
 setup.sh
 **/.failed_artifacts
