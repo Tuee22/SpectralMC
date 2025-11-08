@@ -40,6 +40,7 @@ int64: dtype
 float: dtype  # legacy aliases
 double: dtype
 long: dtype
+complex: dtype  # alias for complex64/complex128
 
 def get_default_dtype() -> dtype: ...
 def set_default_dtype(d: dtype) -> None: ...
@@ -95,6 +96,7 @@ class Tensor:
     requires_grad: bool
 
     def backward(self, gradient: "Tensor | None" = ...) -> None: ...
+    def requires_grad_(self, requires_grad: bool = ...) -> "Tensor": ...
 
     # Core properties --------------------------------------------------------
     @property
@@ -108,6 +110,7 @@ class Tensor:
     @property
     def T(self) -> "Tensor": ...
     def type(self, t: str | None = ...) -> str | "Tensor": ...
+    def view(self, dtype: _DType) -> "Tensor": ...
 
     # Presence checks used in tests
     def is_floating_point(self) -> bool: ...
@@ -192,10 +195,19 @@ class Tensor:
     ) -> "Tensor": ...
     def tolist(self) -> list[_b.int | _b.float]: ...
     def item(self) -> _b.int | _b.float: ...
+    @overload
     def to(
         self: _TTensor,
         dtype: _DType | None = ...,
         device: _TorchDevice | str | None = ...,
+        copy: bool | None = ...,
+        non_blocking: bool | None = ...,
+    ) -> _TTensor: ...
+    @overload
+    def to(
+        self: _TTensor,
+        device: _TorchDevice,
+        dtype: _DType | None = ...,
         copy: bool | None = ...,
         non_blocking: bool | None = ...,
     ) -> _TTensor: ...
@@ -235,6 +247,14 @@ def full_like(
     device: _TorchDevice | str | None = ...,
 ) -> Tensor: ...
 def zeros_like(a: Tensor) -> Tensor: ...
+def randn_like(
+    a: Tensor,
+    *,
+    dtype: _DType | None = ...,
+    device: _TorchDevice | str | None = ...,
+    requires_grad: bool = ...,
+    generator: "Generator | None" = ...,
+) -> Tensor: ...
 def randn(
     *size: int,
     dtype: _DType | None = ...,

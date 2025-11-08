@@ -140,7 +140,7 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
         threads_per_block=256,
         mc_seed=seed,
         buffer_size=1,
-        dtype=precision.value,  # Precision → str
+        dtype=precision,
     )
 
     cfg = BlackScholesConfig(

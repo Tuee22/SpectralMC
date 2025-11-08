@@ -17,13 +17,12 @@ from spectralmc.models.numerical import Precision
 
 
 async def main() -> None:
-    print("=== InferenceClient Pinned Mode Example ===
-")
+    print("=== InferenceClient Pinned Mode Example ===\n")
 
     # 1. Connect to storage
     print("1. Connecting to blockchain storage")
     bucket_name = "opt-models"
-    
+
     async with AsyncBlockchainModelStore(bucket_name) as store:
         # 2. Check available versions
         print("\n2. Fetching available versions")
@@ -32,7 +31,7 @@ async def main() -> None:
             print("   ERROR: No versions found in storage!")
             print("   Run checkpoint_training_example.py first to create versions.")
             return
-        
+
         print(f"   Latest version: {head.counter}")
         print(f"   Semantic version: {head.semantic_version}")
         print(f"   Content hash: {head.content_hash[:16]}...")
@@ -80,7 +79,7 @@ async def main() -> None:
         pinned_version = 0
         print(f"\n4. Creating InferenceClient (PINNED to version {pinned_version})")
         print(f"   Mode: Pinned (never auto-updates)")
-        
+
         client = InferenceClient(
             version_counter=pinned_version,  # Pin to specific version
             poll_interval=60.0,  # Ignored in pinned mode
@@ -92,7 +91,7 @@ async def main() -> None:
         # 6. Start client and run predictions
         async with client:
             print("\n5. Client started")
-            
+
             # Get loaded version info
             loaded_version = client.get_current_version()
             assert loaded_version is not None
@@ -103,7 +102,7 @@ async def main() -> None:
             # Get model snapshot
             snapshot = client.get_model()
             print(f"   Global step: {snapshot.global_step}")
-            
+
             # Run predictions
             print("\n6. Running predictions")
             model = snapshot.cvnn
@@ -114,13 +113,29 @@ async def main() -> None:
                     inputs = torch.randn(10, 5)
                     # Note: For actual ComplexValuedModel, use:
                     # real, imag = model(real_in, imag_in)
-                    outputs = model(inputs)  # type: ignore[call-arg]
-                    print(f"   Batch {i+1}: input={inputs.shape}, output={outputs.shape}")
+                    raw_outputs = model(inputs)  # type: ignore[call-arg]
+                    # CVNN models return tuple (real, imag), extract first element
+                    outputs = (
+                        raw_outputs[0]
+                        if isinstance(raw_outputs, tuple)
+                        else raw_outputs
+                    )
+                    print(
+                        f"   Batch {i+1}: input={inputs.shape}, output={outputs.shape}"
+                    )
 
             print("\n7. Simulating long-running service")
-            print("   (In production, model remains pinned to version {})".format(pinned_version))
-            print("   Even if new versions are committed, this client stays on v{}.".format(pinned_version))
-            
+            print(
+                "   (In production, model remains pinned to version {})".format(
+                    pinned_version
+                )
+            )
+            print(
+                "   Even if new versions are committed, this client stays on v{}.".format(
+                    pinned_version
+                )
+            )
+
             # Wait a bit to simulate service running
             await asyncio.sleep(1.0)
 

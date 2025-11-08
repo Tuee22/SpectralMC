@@ -90,13 +90,13 @@ mypy is configured with **strict mode** in `pyproject.toml`:
 
 ```toml
 [tool.mypy]
-mypy_path = "typings"
+mypy_path = "stubs"
 python_version = "3.12"
 strict = true
 files = ["src/spectralmc", "tests"]
 ```
 
-The `typings` directory provides project-specific stubs for all third-party dependencies, ensuring complete type coverage.
+The `stubs` directory provides project-specific stubs for all third-party dependencies, ensuring complete type coverage.
 
 ### Zero Tolerance Policy
 
@@ -160,10 +160,10 @@ SpectralMC maintains custom type stubs for all third-party libraries to ensure:
 
 ### Organization
 
-Type stubs are organized in the `typings/` directory:
+Type stubs are organized in the `stubs/` directory:
 
 ```
-typings/
+stubs/
 ├── torch/
 │   ├── __init__.pyi
 │   ├── nn/
@@ -198,7 +198,7 @@ All stubs must be:
 Example stub structure:
 
 ```python
-# typings/torch/__init__.pyi
+# stubs/torch/__init__.pyi
 """
 Strict, project‑specific stub for the **top‑level** :pymod:`torch` namespace.
 
@@ -225,7 +225,7 @@ def set_default_dtype(d: dtype) -> None: ...
 
 When adding a new third-party dependency:
 
-1. Create corresponding stub files in `typings/`
+1. Create corresponding stub files in `stubs/`
 2. Include only the minimal API surface used by SpectralMC
 3. Ensure all stubs pass `mypy --strict`
 4. Document the stub's purpose and scope
@@ -747,6 +747,6 @@ This style guide ensures that SpectralMC maintains:
 - **Consistent formatting** with Black
 - **Robust testing** with full type coverage
 
-All code must pass `mypy --strict` and `black --check` before being committed. The custom type stubs in `typings/` ensure complete type coverage for all dependencies, while the PyTorch facade guarantees reproducible, deterministic execution across environments.
+All code must pass `mypy --strict` and `black --check` before being committed. The custom type stubs in `stubs/` ensure complete type coverage for all dependencies, while the PyTorch facade guarantees reproducible, deterministic execution across environments.
 
 Following these guidelines ensures that SpectralMC remains a high-quality, maintainable, and reliable codebase for GPU-accelerated Monte Carlo learning.

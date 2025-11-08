@@ -53,13 +53,16 @@ async def test_fast_forward_validation(async_store: AsyncBlockchainModelStore) -
     # (would be v2_1.0.2 if it had succeeded)
     import botocore.exceptions
 
+    assert async_store._s3_client is not None
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
     version_dirs = []
     async for page in paginator.paginate(
         Bucket=async_store.bucket_name, Prefix="versions/"
     ):
-        if "Contents" in page:
-            for obj in page["Contents"]:
+        if isinstance(page, dict) and "Contents" in page:
+            contents = page["Contents"]
+            assert isinstance(contents, list)
+            for obj in contents:
                 key = obj["Key"]
                 # Extract version directory
                 parts = key.split("/")

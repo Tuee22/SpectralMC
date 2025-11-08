@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 from spectralmc.storage import AsyncBlockchainModelStore
 from spectralmc.storage.errors import ConflictError
+from spectralmc.storage.store import _S3ResponseProtocol
 
 
 @pytest.mark.asyncio
@@ -24,11 +25,12 @@ async def test_retry_on_throttling(async_store: AsyncBlockchainModelStore) -> No
     """
     # Create a function that throttles 3 times then succeeds
     call_count = 0
+    assert async_store._s3_client is not None
     original_get_object = async_store._s3_client.get_object
 
     async def get_object_with_throttling(
         *args: object, **kwargs: object
-    ) -> dict[str, object]:
+    ) -> _S3ResponseProtocol:
         """Simulate throttling errors that eventually succeed."""
         nonlocal call_count
         call_count += 1
@@ -98,6 +100,7 @@ async def test_retry_exhaustion(async_store: AsyncBlockchainModelStore) -> None:
 
     # Create a function that always throttles
     call_count = 0
+    assert async_store._s3_client is not None
     original_get_object = async_store._s3_client.get_object
 
     async def always_throttle(*args: object, **kwargs: object) -> dict[str, object]:
@@ -137,11 +140,14 @@ async def test_no_retry_on_conflict(async_store: AsyncBlockchainModelStore) -> N
     version1 = await async_store.commit(checkpoint1, hash1, "First")
 
     # Get current ETag
+    assert async_store._s3_client is not None
     response = await async_store._s3_client.get_object(
         Bucket=async_store.bucket_name,
         Key="chain.json",
     )
-    etag1 = response["ETag"].strip('"')
+    etag1_raw = response["ETag"]
+    assert isinstance(etag1_raw, str)
+    etag1 = etag1_raw.strip('"')
 
     # Commit again to change ETag
     checkpoint2 = b"checkpoint 2"
@@ -150,9 +156,10 @@ async def test_no_retry_on_conflict(async_store: AsyncBlockchainModelStore) -> N
 
     # Track put_object calls
     call_count = 0
+    assert async_store._s3_client is not None
     original_put_object = async_store._s3_client.put_object
 
-    async def track_put_calls(*args: object, **kwargs: object) -> dict[str, object]:
+    async def track_put_calls(*args: object, **kwargs: object) -> object:
         """Track put_object calls."""
         nonlocal call_count
         call_count += 1
@@ -163,6 +170,7 @@ async def test_no_retry_on_conflict(async_store: AsyncBlockchainModelStore) -> N
     ):
         # Try to write with stale ETag
         with pytest.raises(ClientError, match="PreconditionFailed"):
+            assert async_store._s3_client is not None
             await async_store._s3_client.put_object(
                 Bucket=async_store.bucket_name,
                 Key="chain.json",

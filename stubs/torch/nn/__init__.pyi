@@ -28,7 +28,12 @@ class Module:
     def __call__(self, x: torch.Tensor) -> torch.Tensor: ...
 
     # ─────────────────────── state helpers ─────────────────────────────
-    def state_dict(self) -> dict[str, torch.Tensor]: ...
+    def state_dict(
+        self,
+        destination: dict[str, torch.Tensor] | None = ...,
+        prefix: str = ...,
+        keep_vars: bool = ...,
+    ) -> dict[str, torch.Tensor]: ...
     def load_state_dict(
         self: TMod,
         state_dict: dict[str, torch.Tensor],
@@ -50,12 +55,15 @@ class Module:
         device: torch.device | str | None = ...,
         dtype: torch.dtype | None = ...,
     ) -> TMod: ...
+    def cuda(self: TMod, device: int | torch.device | str | None = ...) -> TMod: ...
     def named_parameters(
         self, prefix: str = ..., recurse: bool = ...
     ) -> Iterator[Tuple[str, "Parameter"]]: ...
 
 # ─────────────────────────────── Parameter ──────────────────────────────────
 class Parameter(torch.Tensor):
+    data: torch.Tensor
+
     def __init__(
         self, data: torch.Tensor | None = ..., requires_grad: bool = ...
     ) -> None: ...
@@ -69,8 +77,30 @@ class Parameter(torch.Tensor):
     ) -> "Parameter": ...
     def zero_(self) -> "Parameter": ...
     def fill_(self, value: int | float) -> "Parameter": ...
+    def numel(self) -> int: ...
 
 # ───────────────────── concrete layers used in the project ──────────────────
+class Linear(Module):
+    weight: Parameter
+    bias: Parameter | None
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        bias: bool = ...,
+        device: torch.device | str | None = ...,
+        dtype: torch.dtype | None = ...,
+    ) -> None: ...
+    def cuda(self, device: int | torch.device | str | None = ...) -> "Linear": ...
+
+class ReLU(Module):
+    def __init__(self, inplace: bool = ...) -> None: ...
+
+class Sequential(Module):
+    def __init__(self, *args: Module) -> None: ...
+    def cuda(self, device: int | torch.device | str | None = ...) -> "Sequential": ...
+
 class BatchNorm1d(Module):
     def __init__(
         self,

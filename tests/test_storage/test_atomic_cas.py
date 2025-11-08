@@ -25,11 +25,14 @@ async def test_concurrent_commit_etag_changes(
     assert version1.counter == 0
 
     # Get ETag after first commit
+    assert async_store._s3_client is not None
     response1 = await async_store._s3_client.get_object(
         Bucket=async_store.bucket_name,
         Key="chain.json",
     )
-    etag1 = response1["ETag"].strip('"')
+    etag1_raw = response1["ETag"]
+    assert isinstance(etag1_raw, str)
+    etag1 = etag1_raw.strip('"')
 
     # Second commit
     checkpoint2 = b"checkpoint 2"
@@ -38,17 +41,21 @@ async def test_concurrent_commit_etag_changes(
     assert version2.counter == 1
 
     # Get ETag after second commit
+    assert async_store._s3_client is not None
     response2 = await async_store._s3_client.get_object(
         Bucket=async_store.bucket_name,
         Key="chain.json",
     )
-    etag2 = response2["ETag"].strip('"')
+    etag2_raw = response2["ETag"]
+    assert isinstance(etag2_raw, str)
+    etag2 = etag2_raw.strip('"')
 
     # ETags should be different (this enables conflict detection)
     assert etag1 != etag2, "ETag must change with each commit for CAS to work"
 
     # Verify we can't write with stale ETag
     with pytest.raises(ClientError) as exc_info:
+        assert async_store._s3_client is not None
         await async_store._s3_client.put_object(
             Bucket=async_store.bucket_name,
             Key="chain.json",
@@ -72,6 +79,7 @@ async def test_cas_etag_mismatch() -> None:
 
     async with AsyncBlockchainModelStore(bucket_name) as store1:
         # Create bucket
+        assert store1._s3_client is not None
         try:
             await store1._s3_client.create_bucket(Bucket=bucket_name)
         except Exception:
@@ -89,7 +97,9 @@ async def test_cas_etag_mismatch() -> None:
             Bucket=bucket_name,
             Key="chain.json",
         )
-        old_etag = response["ETag"].strip('"')
+        old_etag_raw = response["ETag"]
+        assert isinstance(old_etag_raw, str)
+        old_etag = old_etag_raw.strip('"')
 
         # Another process commits (changes ETag)
         checkpoint2 = b"checkpoint 2"
@@ -101,7 +111,9 @@ async def test_cas_etag_mismatch() -> None:
             Bucket=bucket_name,
             Key="chain.json",
         )
-        new_etag = response["ETag"].strip('"')
+        new_etag_raw = response["ETag"]
+        assert isinstance(new_etag_raw, str)
+        new_etag = new_etag_raw.strip('"')
 
         assert old_etag != new_etag, "ETag should change after commit"
 
@@ -119,8 +131,10 @@ async def test_cas_etag_mismatch() -> None:
         # Cleanup: Delete all objects first, then bucket
         paginator = store1._s3_client.get_paginator("list_objects_v2")
         async for page in paginator.paginate(Bucket=bucket_name):
-            if "Contents" in page:
-                objects = [{"Key": obj["Key"]} for obj in page["Contents"]]
+            if isinstance(page, dict) and "Contents" in page:
+                contents = page["Contents"]
+                assert isinstance(contents, list)
+                objects = [{"Key": obj["Key"]} for obj in contents]
                 if objects:
                     await store1._s3_client.delete_objects(
                         Bucket=bucket_name, Delete={"Objects": objects}

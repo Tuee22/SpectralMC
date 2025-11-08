@@ -4,7 +4,12 @@
 from __future__ import annotations
 
 from spectralmc.models.numerical import Precision
-from spectralmc.models.torch import Device, DType as TorchDType
+from spectralmc.models.torch import (
+    Device,
+    FullPrecisionDType,
+    ReducedPrecisionDType,
+    AnyDType,
+)
 from spectralmc.proto import common_pb2
 
 
@@ -53,27 +58,38 @@ class DeviceConverter:
 
 
 class DTypeConverter:
-    """Convert between Pydantic TorchDType and Protobuf DTypeProto."""
+    """Convert between Pydantic DType enums and Protobuf DTypeProto."""
 
     @staticmethod
-    def to_proto(dtype: TorchDType) -> int:
-        """Convert TorchDType enum to proto enum value."""
-        mapping = {
-            TorchDType.float32: common_pb2.DTYPE_FLOAT32,
-            TorchDType.float64: common_pb2.DTYPE_FLOAT64,
-            TorchDType.complex64: common_pb2.DTYPE_COMPLEX64,
-            TorchDType.complex128: common_pb2.DTYPE_COMPLEX128,
-        }
-        return mapping[dtype]
+    def to_proto(dtype: AnyDType) -> int:
+        """Convert FullPrecisionDType or ReducedPrecisionDType to proto enum value."""
+        if isinstance(dtype, FullPrecisionDType):
+            mapping_full = {
+                FullPrecisionDType.float32: common_pb2.DTYPE_FLOAT32,
+                FullPrecisionDType.float64: common_pb2.DTYPE_FLOAT64,
+                FullPrecisionDType.complex64: common_pb2.DTYPE_COMPLEX64,
+                FullPrecisionDType.complex128: common_pb2.DTYPE_COMPLEX128,
+            }
+            return mapping_full[dtype]
+        elif isinstance(dtype, ReducedPrecisionDType):
+            mapping_reduced = {
+                ReducedPrecisionDType.float16: common_pb2.DTYPE_FLOAT16,
+                ReducedPrecisionDType.bfloat16: common_pb2.DTYPE_BFLOAT16,
+            }
+            return mapping_reduced[dtype]
+        else:
+            raise TypeError(f"Unknown dtype type: {type(dtype)}")
 
     @staticmethod
-    def from_proto(proto_value: int) -> TorchDType:
-        """Convert proto enum value to TorchDType enum."""
-        mapping = {
-            common_pb2.DTYPE_FLOAT32: TorchDType.float32,
-            common_pb2.DTYPE_FLOAT64: TorchDType.float64,
-            common_pb2.DTYPE_COMPLEX64: TorchDType.complex64,
-            common_pb2.DTYPE_COMPLEX128: TorchDType.complex128,
+    def from_proto(proto_value: int) -> AnyDType:
+        """Convert proto enum value to FullPrecisionDType or ReducedPrecisionDType."""
+        mapping: dict[int, AnyDType] = {
+            common_pb2.DTYPE_FLOAT32: FullPrecisionDType.float32,
+            common_pb2.DTYPE_FLOAT64: FullPrecisionDType.float64,
+            common_pb2.DTYPE_COMPLEX64: FullPrecisionDType.complex64,
+            common_pb2.DTYPE_COMPLEX128: FullPrecisionDType.complex128,
+            common_pb2.DTYPE_FLOAT16: ReducedPrecisionDType.float16,
+            common_pb2.DTYPE_BFLOAT16: ReducedPrecisionDType.bfloat16,
         }
         return mapping[proto_value]
 

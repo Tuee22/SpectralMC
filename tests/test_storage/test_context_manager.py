@@ -1,3 +1,4 @@
+# mypy: warn_unreachable=False
 # tests/test_storage/test_context_manager.py
 """Tests for async context manager functionality."""
 
@@ -36,15 +37,18 @@ async def test_context_manager_cleanup() -> None:
 
         # Verify bucket exists
         response = await store._s3_client.list_buckets()
-        bucket_names = [b["Name"] for b in response["Buckets"]]
+        assert isinstance(response, dict)
+        assert "Buckets" in response
+        buckets = response["Buckets"]
+        assert isinstance(buckets, list)
+        bucket_names = [b["Name"] for b in buckets]
         assert bucket_name in bucket_names
 
         # Cleanup bucket
         await store._s3_client.delete_bucket(Bucket=bucket_name)
 
     # After exiting context, client should be None
-    assert store._s3_client is None
-    assert store._client_context is None
+    assert store._s3_client is None and store._client_context is None
 
 
 @pytest.mark.asyncio
@@ -72,8 +76,7 @@ async def test_context_manager_exception_handling() -> None:
             raise ValueError("Simulated error")
 
     # Even after exception, cleanup should have occurred
-    assert store._s3_client is None
-    assert store._client_context is None
+    assert store._s3_client is None and store._client_context is None
 
     # Verify we can still use a new context with the same store instance
     async with store:

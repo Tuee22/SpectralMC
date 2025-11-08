@@ -25,6 +25,7 @@ from spectralmc.gbm_trainer import (
     TrainingConfig,
 )
 from spectralmc.models.numerical import Precision
+from spectralmc.sobol_sampler import BoundSpec
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     InferenceClient,
@@ -75,12 +76,12 @@ def create_training_config() -> GbmCVNNPricerConfig:
 
     # Domain bounds for option parameters
     domain_bounds = {
-        "spot": (80.0, 120.0),
-        "strike": (80.0, 120.0),
-        "time_to_maturity": (0.1, 2.0),
-        "volatility": (0.1, 0.5),
-        "risk_free_rate": (0.0, 0.1),
-        "dividend_yield": (0.0, 0.05),
+        "X0": BoundSpec(lower=80.0, upper=120.0),
+        "K": BoundSpec(lower=80.0, upper=120.0),
+        "T": BoundSpec(lower=0.1, upper=2.0),
+        "v": BoundSpec(lower=0.1, upper=0.5),
+        "r": BoundSpec(lower=0.0, upper=0.1),
+        "d": BoundSpec(lower=0.0, upper=0.05),
     }
 
     # Get RNG state for reproducibility
@@ -164,6 +165,9 @@ async def train_with_blockchain() -> None:
 
         config_template = create_training_config()
 
+        # Type narrowing for head (cannot be None after commit)
+        assert head is not None, "HEAD should exist after training commit"
+
         loaded_snapshot = await load_snapshot_from_checkpoint(
             store,
             head,
@@ -180,12 +184,12 @@ async def train_with_blockchain() -> None:
 
         # Create sample input
         test_input = BlackScholes.Inputs(
-            spot=100.0,
-            strike=100.0,
-            time_to_maturity=1.0,
-            volatility=0.2,
-            risk_free_rate=0.05,
-            dividend_yield=0.0,
+            X0=100.0,
+            K=100.0,
+            T=1.0,
+            v=0.2,
+            r=0.05,
+            d=0.0,
         )
 
         results = loaded_pricer.predict_price([test_input])
@@ -225,18 +229,21 @@ async def demonstrate_inference_client() -> None:
             snapshot = client.get_model()
             version = client.get_current_version()
 
+            # Type narrowing for version (cannot be None after getting model)
+            assert version is not None, "Version should exist after get_model()"
+
             print(f"   - Loaded version: v{version.counter:010d}")
             print(f"   - Global step: {snapshot.global_step}")
 
             # Run inference
             pricer = GbmCVNNPricer(snapshot)
             test_input = BlackScholes.Inputs(
-                spot=105.0,
-                strike=100.0,
-                time_to_maturity=0.5,
-                volatility=0.25,
-                risk_free_rate=0.03,
-                dividend_yield=0.01,
+                X0=105.0,
+                K=100.0,
+                T=0.5,
+                v=0.25,
+                r=0.03,
+                d=0.01,
             )
 
             results = pricer.predict_price([test_input])

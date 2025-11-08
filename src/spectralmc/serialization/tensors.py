@@ -118,8 +118,19 @@ class TensorStateConverter:
         import numpy as np
 
         # Map torch dtype to numpy dtype
-        if torch_dtype in (torch.float32, torch.float16):
-            np_dtype = np.float32 if torch_dtype == torch.float32 else np.float16
+        # Use explicit union type to avoid Any
+        np_dtype: (
+            type[np.float32]
+            | type[np.float64]
+            | type[np.float16]
+            | type[np.complex64]
+            | type[np.complex128]
+            | type[np.uint16]
+        )
+        if torch_dtype == torch.float32:
+            np_dtype = np.float32
+        elif torch_dtype == torch.float16:
+            np_dtype = np.float16
         elif torch_dtype == torch.float64:
             np_dtype = np.float64
         elif torch_dtype == torch.complex64:

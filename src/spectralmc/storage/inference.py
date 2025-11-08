@@ -283,7 +283,7 @@ class InferenceClient:
         logger.info(
             f"Loaded version {version.counter}: "
             f"global_step={snapshot.global_step}, "
-            f"params={sum(p.numel() for p in snapshot.cvnn.parameters())}"  # type: ignore[attr-defined]
+            f"params={sum(p.numel() for p in snapshot.cvnn.parameters())}"
         )
 
     async def _fetch_version_by_counter(self, counter: int) -> ModelVersion:

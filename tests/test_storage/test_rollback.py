@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from spectralmc.storage import AsyncBlockchainModelStore
 from spectralmc.storage.errors import ConflictError, CommitError
+from spectralmc.storage.store import _S3ResponseProtocol, JsonDict
 
 
 @pytest.mark.asyncio
@@ -28,11 +29,14 @@ async def test_rollback_on_cas_failure(async_store: AsyncBlockchainModelStore) -
     assert version1.counter == 0
 
     # Get current ETag
+    assert async_store._s3_client is not None
     response = await async_store._s3_client.get_object(
         Bucket=async_store.bucket_name,
         Key="chain.json",
     )
-    etag1 = response["ETag"].strip('"')
+    etag1_raw = response["ETag"]
+    assert isinstance(etag1_raw, str)
+    etag1 = etag1_raw.strip('"')
 
     # Simulate concurrent modification by committing again
     checkpoint2 = b"checkpoint 2"
@@ -44,7 +48,9 @@ async def test_rollback_on_cas_failure(async_store: AsyncBlockchainModelStore) -
         Bucket=async_store.bucket_name,
         Key="chain.json",
     )
-    etag2 = response["ETag"].strip('"')
+    etag2_raw = response["ETag"]
+    assert isinstance(etag2_raw, str)
+    etag2 = etag2_raw.strip('"')
     assert etag1 != etag2
 
     # Now attempt a commit that will fail due to stale ETag
@@ -53,12 +59,13 @@ async def test_rollback_on_cas_failure(async_store: AsyncBlockchainModelStore) -
 
     async def get_object_with_stale_etag(
         *args: object, **kwargs: object
-    ) -> dict[str, object]:
+    ) -> _S3ResponseProtocol:
         """Return stale ETag to simulate race condition."""
         result = await original_get_object(*args, **kwargs)
         if kwargs.get("Key") == "chain.json":
-            # Return the old ETag to force conflict
-            result["ETag"] = f'"{etag1}"'
+            # Return the old ETag to force conflict - we need to mutate the response
+            # This is safe because we control the mock
+            result["ETag"] = f'"{etag1}"'  # type: ignore[index]
         return result
 
     # Patch get_object to return stale ETag
@@ -76,6 +83,7 @@ async def test_rollback_on_cas_failure(async_store: AsyncBlockchainModelStore) -
     version_dir = "v2_1.0.2"  # Would be version 2's directory
 
     # Check that artifacts were cleaned up
+    assert async_store._s3_client is not None
     with pytest.raises(ClientError) as exc_info:
         await async_store._s3_client.head_object(
             Bucket=async_store.bucket_name, Key=f"versions/{version_dir}/checkpoint.pb"
@@ -106,16 +114,16 @@ async def test_rollback_on_upload_failure(
     original_upload_json = async_store._upload_json
     upload_call_count = 0
 
-    async def upload_json_with_failure(*args: object, **kwargs: object) -> None:
+    async def upload_json_with_failure(key: str, data: JsonDict) -> None:
         """Fail on first metadata.json upload."""
         nonlocal upload_call_count
         upload_call_count += 1
-        if upload_call_count == 1 and args[0].endswith("metadata.json"):  # type: ignore[union-attr]
+        if upload_call_count == 1 and key.endswith("metadata.json"):
             raise ClientError(
                 {"Error": {"Code": "InternalError", "Message": "Simulated failure"}},
                 "PutObject",
             )
-        await original_upload_json(*args, **kwargs)
+        await original_upload_json(key, data)
 
     with patch.object(
         async_store, "_upload_json", side_effect=upload_json_with_failure
@@ -126,13 +134,16 @@ async def test_rollback_on_upload_failure(
 
     # Verify no artifacts were left behind
     # List all objects in versions/
+    assert async_store._s3_client is not None
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
     all_objects = []
     async for page in paginator.paginate(
         Bucket=async_store.bucket_name, Prefix="versions/"
     ):
-        if "Contents" in page:
-            all_objects.extend([obj["Key"] for obj in page["Contents"]])
+        if isinstance(page, dict) and "Contents" in page:
+            contents = page["Contents"]
+            assert isinstance(contents, list)
+            all_objects.extend([obj["Key"] for obj in contents])
 
     # Should be empty (genesis commit was never completed)
     assert len(all_objects) == 0, f"Found leftover artifacts: {all_objects}"

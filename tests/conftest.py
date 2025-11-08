@@ -98,6 +98,7 @@ async def async_store() -> AsyncGenerator[AsyncBlockchainModelStore, None]:
 
     async with AsyncBlockchainModelStore(bucket_name) as store:
         # Create test bucket
+        assert store._s3_client is not None
         try:
             await store._s3_client.create_bucket(Bucket=bucket_name)
         except Exception as e:
@@ -108,12 +109,15 @@ async def async_store() -> AsyncGenerator[AsyncBlockchainModelStore, None]:
         yield store
 
         # Cleanup: Delete all objects in bucket, then delete bucket
+        assert store._s3_client is not None
         try:
             # List and delete all objects
             paginator = store._s3_client.get_paginator("list_objects_v2")
             async for page in paginator.paginate(Bucket=bucket_name):
-                if "Contents" in page:
-                    objects = [{"Key": obj["Key"]} for obj in page["Contents"]]
+                if isinstance(page, dict) and "Contents" in page:
+                    contents = page["Contents"]
+                    assert isinstance(contents, list)
+                    objects = [{"Key": obj["Key"]} for obj in contents]
                     if objects:
                         await store._s3_client.delete_objects(
                             Bucket=bucket_name, Delete={"Objects": objects}

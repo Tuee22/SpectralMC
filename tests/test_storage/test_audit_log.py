@@ -28,13 +28,16 @@ async def test_audit_log_append(async_store: AsyncBlockchainModelStore) -> None:
         versions.append(version)
 
     # List all audit log entries
+    assert async_store._s3_client is not None
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
     audit_entries = []
     async for page in paginator.paginate(
         Bucket=async_store.bucket_name, Prefix="audit_log/"
     ):
-        if "Contents" in page:
-            audit_entries.extend([obj["Key"] for obj in page["Contents"]])
+        if isinstance(page, dict) and "Contents" in page:
+            contents = page["Contents"]
+            assert isinstance(contents, list)
+            audit_entries.extend([obj["Key"] for obj in contents])
 
     # Should have 3 audit log entries
     assert (
@@ -44,11 +47,14 @@ async def test_audit_log_append(async_store: AsyncBlockchainModelStore) -> None:
     # Verify each entry contains correct metadata
     for i, entry_key in enumerate(sorted(audit_entries)):
         # Download and parse the log entry
+        assert async_store._s3_client is not None
         response = await async_store._s3_client.get_object(
             Bucket=async_store.bucket_name,
             Key=entry_key,
         )
-        log_data = await response["Body"].read()
+        body = response["Body"]
+        assert hasattr(body, "read")
+        log_data = await body.read()
         log_entry = json.loads(log_data.decode("utf-8"))
 
         # Verify log entry matches version metadata
@@ -102,13 +108,16 @@ async def test_audit_log_failure_non_blocking(
         assert head.content_hash == content_hash
 
     # Verify no audit log entries were created (because it failed)
+    assert async_store._s3_client is not None
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
     audit_entries = []
     async for page in paginator.paginate(
         Bucket=async_store.bucket_name, Prefix="audit_log/"
     ):
-        if "Contents" in page:
-            audit_entries.extend([obj["Key"] for obj in page["Contents"]])
+        if isinstance(page, dict) and "Contents" in page:
+            contents = page["Contents"]
+            assert isinstance(contents, list)
+            audit_entries.extend([obj["Key"] for obj in contents])
 
     assert (
         len(audit_entries) == 0

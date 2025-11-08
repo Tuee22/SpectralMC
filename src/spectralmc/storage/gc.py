@@ -199,6 +199,11 @@ class GarbageCollector:
         Returns:
             Approximate bytes freed
         """
+        if self.store._s3_client is None:
+            raise RuntimeError(
+                "S3 client not initialized. Use 'async with' context manager."
+            )
+
         version_dir = version.directory_name
         prefix = f"versions/{version_dir}/"
 
@@ -207,15 +212,29 @@ class GarbageCollector:
         objects_to_delete = []
 
         paginator = self.store._s3_client.get_paginator("list_objects_v2")
+        # paginator.paginate returns an async iterator
         async for page in paginator.paginate(
             Bucket=self.store.bucket_name, Prefix=prefix
         ):
+            # Runtime validation of page structure
+            if not isinstance(page, dict):
+                continue
             if "Contents" not in page:
                 continue
 
-            for obj in page["Contents"]:
-                objects_to_delete.append({"Key": obj["Key"]})
-                total_size += obj.get("Size", 0)
+            contents = page["Contents"]
+            if not isinstance(contents, list):
+                continue
+
+            for obj in contents:
+                if not isinstance(obj, dict):
+                    continue
+                key = obj.get("Key")
+                if isinstance(key, str):
+                    objects_to_delete.append({"Key": key})
+                size = obj.get("Size", 0)
+                if isinstance(size, int):
+                    total_size += size
 
         # Delete objects
         if objects_to_delete:
@@ -235,19 +254,36 @@ class GarbageCollector:
         Returns:
             Approximate size in bytes
         """
+        if self.store._s3_client is None:
+            raise RuntimeError(
+                "S3 client not initialized. Use 'async with' context manager."
+            )
+
         version_dir = version.directory_name
         prefix = f"versions/{version_dir}/"
 
         total_size = 0
         paginator = self.store._s3_client.get_paginator("list_objects_v2")
+        # paginator.paginate returns an async iterator
         async for page in paginator.paginate(
             Bucket=self.store.bucket_name, Prefix=prefix
         ):
+            # Runtime validation of page structure
+            if not isinstance(page, dict):
+                continue
             if "Contents" not in page:
                 continue
 
-            for obj in page["Contents"]:
-                total_size += obj.get("Size", 0)
+            contents = page["Contents"]
+            if not isinstance(contents, list):
+                continue
+
+            for obj in contents:
+                if not isinstance(obj, dict):
+                    continue
+                size = obj.get("Size", 0)
+                if isinstance(size, int):
+                    total_size += size
 
         return total_size
 

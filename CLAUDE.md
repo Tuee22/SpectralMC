@@ -453,20 +453,56 @@ SpectralMC enforces **strict static typing** with zero compromises.
 
 ### Type Checking
 
-```bash
-# Run mypy with strict mode and explicit Any disallowed
-docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc --strict --disallow-any-explicit > /tmp/mypy.txt 2>&1
+**CRITICAL**: Always run mypy from the **repository root** with **no path arguments**:
 
-# Verify no forbidden constructs
+```bash
+# CORRECT: Run mypy from repo root, no path argument
+docker compose -f docker/docker-compose.yml exec spectralmc mypy
+
+# WRONG: Don't specify paths or run from subdirectories
+# docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc
+# cd src && mypy spectralmc
+```
+
+**Why no path argument?**
+- Configuration in `pyproject.toml` controls what gets checked via `files = [...]`
+- Currently checks: `src/spectralmc/`, `tests/`, `examples/`
+- Running `mypy` with no args uses the config automatically
+- Specifying paths bypasses config and can miss folders
+
+**Configuration** (`pyproject.toml`):
+```toml
+[tool.mypy]
+files = ["src/spectralmc", "tests", "examples"]  # What gets checked
+strict = true                                     # All --strict checks
+disallow_any_explicit = true                      # No explicit Any types
+disallow_any_unimported = true                    # No Any from missing stubs
+disallow_any_decorated = true                     # No Any from untyped decorators
+warn_unreachable = true                           # Warn unreachable code
+extra_checks = true                               # Experimental checks
+```
+
+**Adding new folders to type checking:**
+1. Edit `pyproject.toml` and add folder to `files = [...]` list
+2. Run `mypy` from repo root to verify
+
+**Why check tests and examples?**
+- Tests contain critical type stub usage (torch.nn.Linear, S3 protocols)
+- Type errors in tests can hide bugs in production code
+- Examples are user-facing documentation - must be correct
+- Tests and examples document expected types through usage
+
+**Verify no forbidden constructs**:
+```bash
 docker compose -f docker/docker-compose.yml exec spectralmc grep -r "# type: ignore" src/spectralmc/ && echo "FOUND type:ignore" || echo "OK"
 docker compose -f docker/docker-compose.yml exec spectralmc grep -r "cast(" src/spectralmc/ && echo "FOUND cast()" || echo "OK"
 docker compose -f docker/docker-compose.yml exec spectralmc grep -r ": Any" src/spectralmc/ && echo "FOUND Any" || echo "OK"
 ```
 
 **Success Criteria**:
-- `mypy --strict --disallow-any-explicit` exits with code 0
-- Zero occurrences of `# type: ignore`, `cast()`, or explicit `Any`
-- All modules pass individual type checking
+- `mypy` exits with code 0 (checks all configured files)
+- Zero occurrences of `# type: ignore`, `cast()`, or explicit `Any` in `src/`
+- All source, tests, and examples pass type checking
 
 ### Rationale
 

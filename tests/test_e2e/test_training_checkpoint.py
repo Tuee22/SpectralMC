@@ -75,7 +75,7 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
 
     # Capture RNG state
     cpu_rng_state = torch.get_rng_state().numpy().tobytes()
-    cuda_rng_states = []
+    cuda_rng_states: list[bytes] = []
 
     snapshot = GbmCVNNPricerConfig(
         cfg=bs_config,

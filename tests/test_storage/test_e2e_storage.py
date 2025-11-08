@@ -31,7 +31,7 @@ def make_test_snapshot(
     global_step: int = 0, model_size: tuple[int, int] = (5, 5)
 ) -> GbmCVNNPricerConfig:
     """Create a test snapshot programmatically (CPU-only)."""
-    model = torch.nn.Linear(*model_size)  # type: ignore[attr-defined]
+    model = torch.nn.Linear(*model_size)
 
     sim_params = SimulationParams(
         timesteps=10,

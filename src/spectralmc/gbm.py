@@ -30,13 +30,16 @@ Public API
 from __future__ import annotations
 
 from math import exp, sqrt
-from typing import Annotated, Literal, Optional, TypeAlias
+from typing import Annotated, Literal, Optional, TypeAlias, TYPE_CHECKING
 
 import cupy as cp
 import numpy as np
 from numba import cuda
 from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+if TYPE_CHECKING:
+    from numba.cuda import DeviceNDArray
 
 from spectralmc.async_normals import (
     BufferConfig,
@@ -48,7 +51,6 @@ from spectralmc.models.numerical import Precision
 # ──────────────────────────────── typing helpers ─────────────────────────────
 PosFloat = Annotated[float, Field(gt=0)]
 NonNegFloat = Annotated[float, Field(ge=0)]
-DeviceNDArray: TypeAlias = NDArray[np.generic]
 
 # Valid CUDA thread block sizes (must be power of 2, range [32, 1024])
 ThreadsPerBlock: TypeAlias = Literal[32, 64, 128, 256, 512, 1024]
@@ -209,6 +211,8 @@ class BlackScholes:
         call_convexity: float
         put_price: float
         call_price: float
+
+        model_config = ConfigDict(frozen=True)
 
     # ....................................... construction ...................
     def __init__(self, cfg: BlackScholesConfig) -> None:

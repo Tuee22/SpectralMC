@@ -46,7 +46,7 @@ def test_tensor_state_round_trip_complex64() -> None:
     """Test TensorStateConverter with complex64 tensor."""
     real = torch.randn(4, 4, dtype=torch.float32)
     imag = torch.randn(4, 4, dtype=torch.float32)
-    original = torch.complex(real, imag)
+    original = torch.view_as_complex(torch.stack([real, imag], dim=-1))
 
     proto = TensorStateConverter.to_proto(original)
     recovered = TensorStateConverter.from_proto(proto)
@@ -59,7 +59,7 @@ def test_tensor_state_round_trip_complex128() -> None:
     """Test TensorStateConverter with complex128 tensor."""
     real = torch.randn(3, 5, dtype=torch.float64)
     imag = torch.randn(3, 5, dtype=torch.float64)
-    original = torch.complex(real, imag)
+    original = torch.view_as_complex(torch.stack([real, imag], dim=-1))
 
     proto = TensorStateConverter.to_proto(original)
     recovered = TensorStateConverter.from_proto(proto)

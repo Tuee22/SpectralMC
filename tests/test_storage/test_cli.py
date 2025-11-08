@@ -7,7 +7,7 @@ import json
 import subprocess
 import sys
 import uuid
-from typing import Any
+from pathlib import Path
 
 import pytest
 
@@ -90,15 +90,19 @@ async def test_cli_verify_corrupted_chain(
     metadata_key = f"versions/{v1.directory_name}/metadata.json"
 
     # Get current metadata
+    assert async_store._s3_client is not None
     response = await async_store._s3_client.get_object(
         Bucket=async_store.bucket_name, Key=metadata_key
     )
-    metadata = json.loads(await response["Body"].read())
+    body = response["Body"]
+    assert hasattr(body, "read")
+    metadata = json.loads(await body.read())
 
     # Tamper with content_hash
     metadata["content_hash"] = "corrupted_hash_xxx"
 
     # Put back corrupted metadata
+    assert async_store._s3_client is not None
     await async_store._s3_client.put_object(
         Bucket=async_store.bucket_name,
         Key=metadata_key,
@@ -140,11 +144,15 @@ async def test_cli_find_corruption_detects(
 
     # Corrupt first version
     metadata_key = f"versions/{v1.directory_name}/metadata.json"
+    assert async_store._s3_client is not None
     response = await async_store._s3_client.get_object(
         Bucket=async_store.bucket_name, Key=metadata_key
     )
-    metadata = json.loads(await response["Body"].read())
+    body = response["Body"]
+    assert hasattr(body, "read")
+    metadata = json.loads(await body.read())
     metadata["content_hash"] = "corrupted"
+    assert async_store._s3_client is not None
     await async_store._s3_client.put_object(
         Bucket=async_store.bucket_name,
         Key=metadata_key,
@@ -372,7 +380,7 @@ async def test_cli_gc_run_protects_tags(async_store: AsyncBlockchainModelStore) 
 
 @pytest.mark.asyncio
 async def test_cli_tensorboard_log(
-    async_store: AsyncBlockchainModelStore, tmp_path: Any
+    async_store: AsyncBlockchainModelStore, tmp_path: Path
 ) -> None:
     """Test tensorboard-log command."""
     # Create some commits

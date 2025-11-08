@@ -28,8 +28,10 @@ import torch.nn as nn
 Tensor: TypeAlias = torch.Tensor
 """Alias for a PyTorch tensor with unconstrained dtype and shape."""
 
-NDArrayFloat: TypeAlias = NDArray[np.floating]
-"""A NumPy array of floating-point values (dtype ``np.float_``)."""
+NDArrayFloat: TypeAlias = Union[
+    NDArray[np.float64], NDArray[np.float32], NDArray[np.float16]
+]
+"""A NumPy array of floating-point values (float64, float32, or float16)."""
 
 Scalar = Union[int, float]
 """A real scalar supported by TensorBoard and PyTorch."""

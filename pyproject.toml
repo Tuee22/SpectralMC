@@ -104,11 +104,31 @@ build-backend = "poetry.core.masonry.api"
 #                       T O O L   C O N F I G U R A T I O N                   #
 # --------------------------------------------------------------------------- #
 [tool.mypy]
-mypy_path = "typings"
+mypy_path = "stubs"
 python_version = "3.12"
-strict         = true
-files          = ["src/spectralmc", "tests"]
+files = ["src/spectralmc", "tests", "examples"]
 exclude = ["src/spectralmc/proto/.*_pb2\\.py$"]
+plugins = ["pydantic.mypy"]
+
+# Core strictness (equivalent to --strict --disallow-any-explicit)
+strict = true
+disallow_any_explicit = true
+
+# Additional rigorous checks beyond --strict
+disallow_any_unimported = true       # No Any from missing import stubs
+disallow_any_decorated = true        # No Any from untyped decorators
+warn_unreachable = true              # Warn about unreachable code
+extra_checks = true                  # Enable newer experimental checks
+
+# Disable warn_unreachable for tests (runtime assertions valuable even if statically guaranteed)
+[[tool.mypy.overrides]]
+module = "tests.*"
+warn_unreachable = false
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
 
 [tool.pytest.ini_options]
 testpaths = "tests"

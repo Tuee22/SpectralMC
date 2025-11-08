@@ -120,7 +120,7 @@ class TensorBoardWriter:
                 )
 
                 # Log model statistics
-                param_count = sum(p.numel() for p in snapshot.cvnn.parameters())  # type: ignore[attr-defined]
+                param_count = sum(p.numel() for p in snapshot.cvnn.parameters())
                 self.writer.add_scalar(
                     "model/param_count", param_count, global_step=counter
                 )

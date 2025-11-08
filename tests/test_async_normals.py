@@ -3,7 +3,7 @@
 tests.test_async_normals
 ========================
 End‑to‑end tests for `spectralmc.async_normals` with **zero ignores**.
-The CuPy stub package under *typings/* provides every symbol touched,
+The CuPy stub package under *stubs/* provides every symbol touched,
 so the suite type‑checks under `mypy --strict`.
 
 Test matrix

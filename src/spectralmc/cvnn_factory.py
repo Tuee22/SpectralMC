@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, PositiveInt
 from spectralmc.models.torch import (
     TensorState,
     DType,
+    AnyDType,
     Device,
     default_dtype,
     default_device,
@@ -65,7 +66,7 @@ class WidthSpec(BaseModel):
 class PreserveWidth(WidthSpec):
     """Tag-only class indicating width should be preserved from input."""
 
-    pass
+    model_config = ConfigDict(frozen=True)
 
 
 class ExplicitWidth(WidthSpec):
@@ -73,9 +74,13 @@ class ExplicitWidth(WidthSpec):
 
     value: PositiveInt
 
+    model_config = ConfigDict(frozen=True)
+
 
 class ActivationCfg(BaseModel):
     kind: ActivationKind
+
+    model_config = ConfigDict(frozen=True)
 
 
 class LinearCfg(BaseModel):
@@ -83,6 +88,8 @@ class LinearCfg(BaseModel):
     width: WidthSpec = PreserveWidth()
     bias: bool = True
     activation: Optional[ActivationCfg] = None
+
+    model_config = ConfigDict(frozen=True)
 
 
 class NaiveBNCfg(BaseModel):
@@ -93,6 +100,8 @@ class NaiveBNCfg(BaseModel):
     track_running_stats: bool = True
     activation: Optional[ActivationCfg] = None
 
+    model_config = ConfigDict(frozen=True)
+
 
 class CovBNCfg(BaseModel):
     kind: LayerKind = LayerKind.BN_COV
@@ -101,6 +110,8 @@ class CovBNCfg(BaseModel):
     affine: bool = True
     track_running_stats: bool = True
     activation: Optional[ActivationCfg] = None
+
+    model_config = ConfigDict(frozen=True)
 
 
 LayerCfg: TypeAlias = Union[
@@ -113,6 +124,8 @@ class SequentialCfg(BaseModel):
     layers: List[LayerCfg]
     activation: Optional[ActivationCfg] = None
 
+    model_config = ConfigDict(frozen=True)
+
 
 class ResidualCfg(BaseModel):
     kind: LayerKind = LayerKind.RES
@@ -120,12 +133,16 @@ class ResidualCfg(BaseModel):
     projection: Optional[LinearCfg] = None
     activation: Optional[ActivationCfg] = None
 
+    model_config = ConfigDict(frozen=True)
+
 
 class CVNNConfig(BaseModel):
-    dtype: DType
+    dtype: AnyDType
     layers: List[LayerCfg]
     seed: PositiveInt
     final_activation: Optional[ActivationCfg] = None
+
+    model_config = ConfigDict(frozen=True)
 
 
 # ─────────────────────────── builder helpers ───────────────────────────────

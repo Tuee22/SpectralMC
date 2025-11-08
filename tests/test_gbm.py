@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 import warnings
-from typing import List, TypeAlias
+from typing import List, Literal, TypeAlias
 
 import numpy as np
 import pytest
@@ -37,7 +37,7 @@ _BS_DIMENSIONS = {
 _TIMESTEPS = 1
 _NETWORK_SIZE = 256
 _BATCHES_PER_RUN = 2**19
-_THREADS_PER_BLOCK = 256
+_THREADS_PER_BLOCK: Literal[32, 64, 128, 256, 512, 1024] = 256
 _MC_SEED = 7
 _BUFFER_SIZE = 1
 

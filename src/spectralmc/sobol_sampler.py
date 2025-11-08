@@ -35,7 +35,7 @@ from typing import Annotated, Dict, Generic, List, Type, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from scipy.stats.qmc import Sobol
 
 __all__: list[str] = ["BoundSpec", "SobolConfig", "SobolSampler"]
@@ -67,6 +67,8 @@ class SobolConfig(BaseModel):
         int, Field(ge=0, description="Number of initial points to skip")
     ] = 0
 
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
 
 class BoundSpec(BaseModel):
     """Inclusive numeric bounds for a single coordinate axis.
@@ -86,6 +88,8 @@ class BoundSpec(BaseModel):
 
     lower: float
     upper: float
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     # ------------------------------------------------------------------ #
     # Validators                                                         #

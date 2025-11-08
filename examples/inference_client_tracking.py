@@ -17,13 +17,12 @@ from spectralmc.models.numerical import Precision
 
 
 async def main() -> None:
-    print("=== InferenceClient Tracking Mode Example ===
-")
+    print("=== InferenceClient Tracking Mode Example ===\n")
 
     # 1. Connect to storage
     print("1. Connecting to blockchain storage")
     bucket_name = "opt-models"
-    
+
     async with AsyncBlockchainModelStore(bucket_name) as store:
         # 2. Check initial state
         print("\n2. Checking current versions")
@@ -32,7 +31,7 @@ async def main() -> None:
             print("   ERROR: No versions found in storage!")
             print("   Run checkpoint_training_example.py first to create versions.")
             return
-        
+
         print(f"   Current HEAD: version {head.counter}")
         print(f"   Semantic version: {head.semantic_version}")
 
@@ -77,7 +76,7 @@ async def main() -> None:
         print("\n4. Creating InferenceClient (TRACKING mode)")
         print("   Mode: Tracking (auto-updates to latest)")
         print("   Poll interval: 5 seconds")
-        
+
         client = InferenceClient(
             version_counter=None,  # None = tracking mode
             poll_interval=5.0,  # Check for updates every 5 seconds
@@ -89,7 +88,7 @@ async def main() -> None:
         # 6. Start client
         async with client:
             print("\n5. Client started")
-            
+
             # Get loaded version
             loaded_version = client.get_current_version()
             assert loaded_version is not None
@@ -108,10 +107,14 @@ async def main() -> None:
                     # Check if version changed
                     current_version = client.get_current_version()
                     assert current_version is not None
-                    
+
                     if current_version.counter != last_version:
-                        print(f"   🔄 AUTO-UPGRADED: v{last_version} → v{current_version.counter}")
-                        print(f"      New global step: {client.get_model().global_step}")
+                        print(
+                            f"   🔄 AUTO-UPGRADED: v{last_version} → v{current_version.counter}"
+                        )
+                        print(
+                            f"      New global step: {client.get_model().global_step}"
+                        )
                         last_version = current_version.counter
 
                     # Run prediction
@@ -121,10 +124,18 @@ async def main() -> None:
 
                     with torch.no_grad():
                         inputs = torch.randn(10, 5)
-                        outputs = model(inputs)  # type: ignore[call-arg]
-                        
-                    print(f"   Batch {i+1:2d} (v{current_version.counter}): "
-                          f"input={inputs.shape}, output={outputs.shape}")
+                        raw_outputs = model(inputs)  # type: ignore[call-arg]
+                        # CVNN models return tuple (real, imag), extract first element
+                        outputs = (
+                            raw_outputs[0]
+                            if isinstance(raw_outputs, tuple)
+                            else raw_outputs
+                        )
+
+                    print(
+                        f"   Batch {i+1:2d} (v{current_version.counter}): "
+                        f"input={inputs.shape}, output={outputs.shape}"
+                    )
 
                     # Wait before next batch
                     await asyncio.sleep(2.0)

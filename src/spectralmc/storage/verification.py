@@ -223,6 +223,11 @@ async def verify_version_completeness(
     Raises:
         ValueError: If any required artifact is missing
     """
+    if store._s3_client is None:
+        raise RuntimeError(
+            "S3 client not initialized. Use 'async with' context manager."
+        )
+
     version_dir = version.directory_name
     required_files = [
         f"versions/{version_dir}/checkpoint.pb",
