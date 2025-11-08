@@ -1,16 +1,23 @@
 # tests/test_integrity/test_blockchain_integrity.py
-"""Integrity tests for blockchain storage."""
+"""Integrity tests for blockchain storage (ModelVersion only)."""
 
 from __future__ import annotations
 
-import json
-import tempfile
-from pathlib import Path
-
 import pytest
 
-from spectralmc.storage.store import BlockchainModelStore
 from spectralmc.storage.chain import ModelVersion
+from spectralmc.storage import (
+    AsyncBlockchainModelStore,
+    verify_chain,
+    verify_chain_detailed,
+    find_corruption,
+    commit_snapshot,
+)
+from spectralmc.storage.errors import ChainCorruptionError
+from spectralmc.gbm_trainer import GbmCVNNPricerConfig
+from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.models.numerical import Precision
+import torch
 
 
 def test_content_hash_integrity() -> None:
@@ -87,143 +94,6 @@ def test_timestamp_integrity() -> None:
     assert version1.compute_hash() != version2.compute_hash()
 
 
-def test_chain_file_tampering_detection() -> None:
-    """Test that manual chain.json tampering is detectable."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = BlockchainModelStore(tmpdir)
-
-        # Create initial commit
-        checkpoint = b"test checkpoint"
-        version = store.commit(checkpoint, "hash123", "Initial")
-
-        # Read chain.json
-        with open(store.chain_file) as f:
-            chain_data = json.load(f)
-
-        original_hash = version.compute_hash()
-
-        # Tamper with content_hash
-        chain_data["content_hash"] = "tampered_hash"
-
-        with open(store.chain_file, "w") as f:
-            json.dump(chain_data, f)
-
-        # Read back HEAD
-        tampered_head = store.get_head()
-        assert tampered_head is not None
-
-        # Computed hash should differ, indicating tampering
-        tampered_hash = tampered_head.compute_hash()
-        assert tampered_hash != original_hash
-
-
-def test_checkpoint_corruption_detection() -> None:
-    """Test that checkpoint file corruption is detectable."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = BlockchainModelStore(tmpdir)
-
-        checkpoint_data = b"original checkpoint data"
-        content_hash = "abcd1234"
-
-        version = store.commit(checkpoint_data, content_hash)
-
-        # Corrupt checkpoint file
-        version_dir = store.versions_path / version.directory_name
-        checkpoint_file = version_dir / "checkpoint.pb"
-
-        with open(checkpoint_file, "wb") as f:
-            f.write(b"corrupted data")
-
-        # Load corrupted checkpoint
-        loaded = store.load_checkpoint(version)
-
-        # Data should be different from original
-        assert loaded != checkpoint_data
-        assert loaded == b"corrupted data"
-
-
-def test_metadata_json_integrity() -> None:
-    """Test metadata.json integrity."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = BlockchainModelStore(tmpdir)
-
-        checkpoint = b"test"
-        version = store.commit(checkpoint, "hash123")
-
-        version_dir = store.versions_path / version.directory_name
-        metadata_file = version_dir / "metadata.json"
-
-        # Read original metadata
-        with open(metadata_file) as f:
-            metadata = json.load(f)
-
-        assert metadata["counter"] == version.counter
-        assert metadata["content_hash"] == version.content_hash
-
-        # Tamper with metadata
-        metadata["counter"] = 999
-
-        with open(metadata_file, "w") as f:
-            json.dump(metadata, f)
-
-        # Retrieve version - should have tampered data
-        retrieved = store.get_version(version.version_id)
-        assert retrieved.counter == 999
-
-
-def test_semantic_version_ordering_integrity() -> None:
-    """Test semantic version ordering is maintained."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = BlockchainModelStore(tmpdir)
-
-        versions = []
-        for i in range(5):
-            checkpoint = f"checkpoint {i}".encode()
-            version = store.commit(checkpoint, f"hash{i}")
-            versions.append(version)
-
-        # Verify versions increment correctly
-        assert versions[0].semantic_version == "1.0.0"
-        assert versions[1].semantic_version == "1.0.1"
-        assert versions[2].semantic_version == "1.0.2"
-        assert versions[3].semantic_version == "1.0.3"
-        assert versions[4].semantic_version == "1.0.4"
-
-
-def test_counter_monotonicity() -> None:
-    """Test counter values are strictly increasing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = BlockchainModelStore(tmpdir)
-
-        versions = []
-        for i in range(10):
-            checkpoint = f"checkpoint {i}".encode()
-            version = store.commit(checkpoint, f"hash{i}")
-            versions.append(version)
-
-        # Counters should be strictly increasing
-        for i in range(len(versions) - 1):
-            assert versions[i + 1].counter == versions[i].counter + 1
-
-
-def test_parent_chain_integrity() -> None:
-    """Test parent hash chain is valid."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = BlockchainModelStore(tmpdir)
-
-        versions = []
-        for i in range(5):
-            checkpoint = f"checkpoint {i}".encode()
-            content_hash = f"hash{i}"
-            version = store.commit(checkpoint, content_hash)
-            versions.append(version)
-
-        # Verify parent chain
-        assert versions[0].parent_hash == ""  # Genesis
-        for i in range(1, len(versions)):
-            assert versions[i].parent_hash == versions[i - 1].content_hash
-
-
 def test_directory_name_uniqueness() -> None:
     """Test version directory names are unique."""
     versions = [
@@ -280,31 +150,310 @@ def test_hash_length_consistency() -> None:
         assert all(c in "0123456789abcdef" for c in version_hash)
 
 
-def test_empty_checkpoint_integrity() -> None:
-    """Test empty checkpoints are handled correctly."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = BlockchainModelStore(tmpdir)
-
-        empty_checkpoint = b""
-        content_hash = "empty_hash"
-
-        version = store.commit(empty_checkpoint, content_hash)
-
-        loaded = store.load_checkpoint(version)
-        assert loaded == b""
+# ============================================================================
+# Helper function for creating test configs
+# ============================================================================
 
 
-def test_large_checkpoint_integrity() -> None:
-    """Test large checkpoints maintain integrity."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = BlockchainModelStore(tmpdir)
+def make_test_config(
+    model: torch.nn.Module, global_step: int = 0
+) -> GbmCVNNPricerConfig:
+    """Factory to create test configurations."""
+    sim_params = SimulationParams(
+        timesteps=100,
+        network_size=1024,
+        batches_per_mc_run=8,
+        threads_per_block=256,
+        mc_seed=42,
+        buffer_size=10000,
+        skip=0,
+        dtype=Precision.float32,
+    )
 
-        # 10 MB checkpoint
-        large_checkpoint = b"x" * (10 * 1024 * 1024)
-        content_hash = "large_hash"
+    bs_config = BlackScholesConfig(
+        sim_params=sim_params,
+        simulate_log_return=True,
+        normalize_forwards=True,
+    )
 
-        version = store.commit(large_checkpoint, content_hash)
+    cpu_rng_state = torch.get_rng_state().numpy().tobytes()
 
-        loaded = store.load_checkpoint(version)
-        assert loaded == large_checkpoint
-        assert len(loaded) == len(large_checkpoint)
+    return GbmCVNNPricerConfig(
+        cfg=bs_config,
+        domain_bounds={},
+        cvnn=model,
+        optimizer_state=None,
+        global_step=global_step,
+        sobol_skip=0,
+        torch_cpu_rng_state=cpu_rng_state,
+        torch_cuda_rng_states=[],
+    )
+
+
+# ============================================================================
+# Chain Verification Tests
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_verify_empty_chain(async_store: AsyncBlockchainModelStore) -> None:
+    """Test verify_chain with empty store (no corruption)."""
+    # Empty chain should be valid
+    report = await verify_chain_detailed(async_store)
+    assert report.is_valid
+    assert report.corrupted_version is None
+    assert "Empty chain" in report.details
+
+
+@pytest.mark.asyncio
+async def test_verify_single_version_chain(
+    async_store: AsyncBlockchainModelStore,
+) -> None:
+    """Test verify_chain with genesis only."""
+    config = make_test_config(torch.nn.Linear(5, 5))
+    await commit_snapshot(async_store, config, "Genesis")
+
+    # Single genesis version should be valid
+    is_valid = await verify_chain(async_store)
+    assert is_valid
+
+
+@pytest.mark.asyncio
+async def test_verify_multi_version_chain(
+    async_store: AsyncBlockchainModelStore,
+) -> None:
+    """Test verify_chain with multiple valid versions."""
+    # Create 5 versions
+    for i in range(5):
+        config = make_test_config(torch.nn.Linear(5, 5), global_step=i * 100)
+        await commit_snapshot(async_store, config, f"Version {i}")
+
+    # Chain should be valid
+    is_valid = await verify_chain(async_store)
+    assert is_valid
+
+    report = await verify_chain_detailed(async_store)
+    assert report.is_valid
+    assert "5 versions intact" in report.details
+
+
+@pytest.mark.asyncio
+async def test_find_corruption_on_valid_chain(
+    async_store: AsyncBlockchainModelStore,
+) -> None:
+    """Test find_corruption returns None for valid chain."""
+    # Create valid chain
+    for i in range(3):
+        config = make_test_config(torch.nn.Linear(5, 5))
+        await commit_snapshot(async_store, config, f"V{i}")
+
+    # Should find no corruption
+    corrupted = await find_corruption(async_store)
+    assert corrupted is None
+
+
+@pytest.mark.asyncio
+async def test_detect_broken_merkle_chain(
+    async_store: AsyncBlockchainModelStore,
+) -> None:
+    """Test detection of broken Merkle chain (tampered parent_hash)."""
+    # Create 2 versions
+    for i in range(2):
+        config = make_test_config(torch.nn.Linear(5, 5))
+        await commit_snapshot(async_store, config, f"V{i}")
+
+    # Tamper with version 1's metadata.json parent_hash
+    import json
+
+    # Find v1 metadata
+    paginator = async_store._s3_client.get_paginator("list_objects_v2")
+    async for page in paginator.paginate(
+        Bucket=async_store.bucket_name, Prefix="versions/v0000000001"
+    ):
+        if "Contents" in page:
+            for obj in page["Contents"]:
+                if "metadata.json" in obj["Key"]:
+                    metadata_key = obj["Key"]
+
+                    response = await async_store._s3_client.get_object(
+                        Bucket=async_store.bucket_name, Key=metadata_key
+                    )
+                    metadata = json.loads(
+                        (await response["Body"].read()).decode("utf-8")
+                    )
+
+                    # Corrupt parent_hash (should match v0's content_hash but we change it)
+                    metadata["parent_hash"] = "tampered_parent_hash_12345"
+
+                    await async_store._s3_client.put_object(
+                        Bucket=async_store.bucket_name,
+                        Key=metadata_key,
+                        Body=json.dumps(metadata).encode("utf-8"),
+                    )
+                    break
+
+    # Should detect corruption
+    report = await verify_chain_detailed(async_store)
+    assert not report.is_valid
+    assert report.corruption_type == "broken_merkle_chain"
+    assert "parent_hash" in report.details
+
+
+@pytest.mark.asyncio
+async def test_detect_invalid_genesis_counter(
+    async_store: AsyncBlockchainModelStore,
+) -> None:
+    """Test detection of invalid genesis counter."""
+    # Create version
+    config = make_test_config(torch.nn.Linear(5, 5))
+    await commit_snapshot(async_store, config, "Genesis")
+
+    # Tamper with counter in metadata
+    import json
+
+    version_dir = "v0000000000_1.0.0_"  # Starts with this
+
+    # List objects to find exact version dir
+    paginator = async_store._s3_client.get_paginator("list_objects_v2")
+    async for page in paginator.paginate(
+        Bucket=async_store.bucket_name, Prefix="versions/"
+    ):
+        if "Contents" in page:
+            for obj in page["Contents"]:
+                if "metadata.json" in obj["Key"]:
+                    metadata_key = obj["Key"]
+
+                    # Read metadata
+                    response = await async_store._s3_client.get_object(
+                        Bucket=async_store.bucket_name, Key=metadata_key
+                    )
+                    metadata = json.loads(
+                        (await response["Body"].read()).decode("utf-8")
+                    )
+
+                    # Corrupt counter
+                    metadata["counter"] = 999
+
+                    # Write back
+                    await async_store._s3_client.put_object(
+                        Bucket=async_store.bucket_name,
+                        Key=metadata_key,
+                        Body=json.dumps(metadata).encode("utf-8"),
+                    )
+                    break
+
+    # Should detect corruption
+    report = await verify_chain_detailed(async_store)
+    assert not report.is_valid
+    assert report.corruption_type == "invalid_genesis_counter"
+
+
+@pytest.mark.asyncio
+async def test_detect_non_sequential_counters(
+    async_store: AsyncBlockchainModelStore,
+) -> None:
+    """Test detection of non-sequential counters."""
+    # Create 3 versions
+    for i in range(3):
+        config = make_test_config(torch.nn.Linear(5, 5))
+        await commit_snapshot(async_store, config, f"V{i}")
+
+    # Tamper with version 2's counter
+    import json
+
+    # Find v2 metadata
+    paginator = async_store._s3_client.get_paginator("list_objects_v2")
+    async for page in paginator.paginate(
+        Bucket=async_store.bucket_name, Prefix="versions/v0000000002"
+    ):
+        if "Contents" in page:
+            for obj in page["Contents"]:
+                if "metadata.json" in obj["Key"]:
+                    metadata_key = obj["Key"]
+
+                    response = await async_store._s3_client.get_object(
+                        Bucket=async_store.bucket_name, Key=metadata_key
+                    )
+                    metadata = json.loads(
+                        (await response["Body"].read()).decode("utf-8")
+                    )
+
+                    # Skip counter (2 → 5)
+                    metadata["counter"] = 5
+
+                    await async_store._s3_client.put_object(
+                        Bucket=async_store.bucket_name,
+                        Key=metadata_key,
+                        Body=json.dumps(metadata).encode("utf-8"),
+                    )
+                    break
+
+    # Should detect corruption (Note: will fail to fetch v3, v4 first)
+    report = await verify_chain_detailed(async_store)
+    assert not report.is_valid
+    assert (
+        "missing" in report.corruption_type.lower()
+        or "non_sequential" in report.corruption_type.lower()
+    )
+
+
+@pytest.mark.asyncio
+async def test_chain_corruption_error_raised(
+    async_store: AsyncBlockchainModelStore,
+) -> None:
+    """Test that verify_chain raises ChainCorruptionError on corruption."""
+    # Create version
+    config = make_test_config(torch.nn.Linear(5, 5))
+    await commit_snapshot(async_store, config, "Genesis")
+
+    # Corrupt genesis parent_hash
+    import json
+
+    # Find metadata
+    paginator = async_store._s3_client.get_paginator("list_objects_v2")
+    async for page in paginator.paginate(
+        Bucket=async_store.bucket_name, Prefix="versions/v0000000000"
+    ):
+        if "Contents" in page:
+            for obj in page["Contents"]:
+                if "metadata.json" in obj["Key"]:
+                    metadata_key = obj["Key"]
+
+                    response = await async_store._s3_client.get_object(
+                        Bucket=async_store.bucket_name, Key=metadata_key
+                    )
+                    metadata = json.loads(
+                        (await response["Body"].read()).decode("utf-8")
+                    )
+
+                    # Corrupt parent_hash
+                    metadata["parent_hash"] = "invalid"
+
+                    await async_store._s3_client.put_object(
+                        Bucket=async_store.bucket_name,
+                        Key=metadata_key,
+                        Body=json.dumps(metadata).encode("utf-8"),
+                    )
+                    break
+
+    # Should raise ChainCorruptionError
+    with pytest.raises(ChainCorruptionError, match="corruption detected"):
+        await verify_chain(async_store)
+
+
+@pytest.mark.asyncio
+async def test_verify_chain_with_long_history(
+    async_store: AsyncBlockchainModelStore,
+) -> None:
+    """Test verify_chain with many versions (performance test)."""
+    # Create 20 versions
+    for i in range(20):
+        config = make_test_config(torch.nn.Linear(5, 5), global_step=i)
+        await commit_snapshot(async_store, config, f"V{i}")
+
+    # Should verify successfully
+    is_valid = await verify_chain(async_store)
+    assert is_valid
+
+    report = await verify_chain_detailed(async_store)
+    assert "20 versions intact" in report.details

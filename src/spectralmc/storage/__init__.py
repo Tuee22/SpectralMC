@@ -13,6 +13,9 @@ versioning. Production implementation would include:
 
 from __future__ import annotations
 
+# IMPORTANT: Import torch façade first to set deterministic flags
+import spectralmc.models.torch  # noqa: F401
+
 from .chain import ModelVersion, bump_semantic_version, create_genesis_version
 from .errors import (
     StorageError,
@@ -24,6 +27,15 @@ from .errors import (
     ChainCorruptionError,
 )
 from .store import AsyncBlockchainModelStore, retry_on_throttle
+from .inference import InferenceClient
+from .verification import (
+    verify_chain,
+    verify_chain_detailed,
+    find_corruption,
+    CorruptionReport,
+)
+from .gc import GarbageCollector, RetentionPolicy, GCReport, run_gc
+from .tensorboard_writer import TensorBoardWriter, log_blockchain_to_tensorboard
 
 # Backward compatibility alias (deprecated - use AsyncBlockchainModelStore)
 BlockchainModelStore = AsyncBlockchainModelStore
@@ -50,6 +62,21 @@ __all__ = [
     "AsyncBlockchainModelStore",
     "BlockchainModelStore",  # Backward compat alias
     "retry_on_throttle",
+    # Inference
+    "InferenceClient",
+    # Verification
+    "verify_chain",
+    "verify_chain_detailed",
+    "find_corruption",
+    "CorruptionReport",
+    # Garbage Collection
+    "GarbageCollector",
+    "RetentionPolicy",
+    "GCReport",
+    "run_gc",
+    # TensorBoard
+    "TensorBoardWriter",
+    "log_blockchain_to_tensorboard",
     # Checkpoint utilities
     "create_checkpoint_from_snapshot",
     "commit_snapshot",

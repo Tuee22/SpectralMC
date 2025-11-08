@@ -55,7 +55,9 @@ def main() -> None:
         print("Chain structure:")
         for i, v in enumerate(versions):
             parent_info = v.parent_hash if v.parent_hash else "(genesis)"
-            print(f"  {v.version_id}: parent={parent_info[:12]}, content={v.content_hash}")
+            print(
+                f"  {v.version_id}: parent={parent_info[:12]}, content={v.content_hash}"
+            )
 
         # Verify chain integrity
         print("\n3. Chain Integrity Verification")

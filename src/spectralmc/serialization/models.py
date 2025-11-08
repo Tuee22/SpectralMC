@@ -6,8 +6,13 @@ from __future__ import annotations
 from typing import cast
 
 from spectralmc.cvnn_factory import (
-    ActivationCfg, ActivationKind, CVNNConfig, 
-    ExplicitWidth, LinearCfg, PreserveWidth, WidthSpec
+    ActivationCfg,
+    ActivationKind,
+    CVNNConfig,
+    ExplicitWidth,
+    LinearCfg,
+    PreserveWidth,
+    WidthSpec,
 )
 from spectralmc.proto import models_pb2
 from .common import DTypeConverter
@@ -15,7 +20,7 @@ from .common import DTypeConverter
 
 class WidthSpecConverter:
     """Convert WidthSpec ADT."""
-    
+
     @staticmethod
     def to_proto(width: WidthSpec) -> models_pb2.WidthSpecProto:
         """Convert to proto."""
@@ -25,7 +30,7 @@ class WidthSpecConverter:
         elif isinstance(width, ExplicitWidth):
             proto.explicit.value = width.value
         return proto
-    
+
     @staticmethod
     def from_proto(proto: models_pb2.WidthSpecProto) -> WidthSpec:
         """Convert from proto."""
@@ -39,7 +44,7 @@ class WidthSpecConverter:
 
 class ActivationCfgConverter:
     """Convert ActivationCfg."""
-    
+
     @staticmethod
     def to_proto(cfg: ActivationCfg) -> models_pb2.ActivationCfgProto:
         """Convert to proto."""
@@ -51,7 +56,7 @@ class ActivationCfgConverter:
         proto.kind = kind_mapping[cfg.kind]
         proto.bias = 0.0  # Not currently used in Pydantic model
         return proto
-    
+
     @staticmethod
     def from_proto(proto: models_pb2.ActivationCfgProto) -> ActivationCfg:
         """Convert from proto."""
@@ -64,7 +69,7 @@ class ActivationCfgConverter:
 
 class LinearCfgConverter:
     """Convert LinearCfg."""
-    
+
     @staticmethod
     def to_proto(cfg: LinearCfg) -> models_pb2.LinearCfgProto:
         """Convert to proto."""
@@ -74,7 +79,7 @@ class LinearCfgConverter:
         if cfg.activation:
             proto.activation.CopyFrom(ActivationCfgConverter.to_proto(cfg.activation))
         return proto
-    
+
     @staticmethod
     def from_proto(proto: models_pb2.LinearCfgProto) -> LinearCfg:
         """Convert from proto."""
@@ -90,7 +95,7 @@ class LinearCfgConverter:
 
 class CVNNConfigConverter:
     """Convert CVNNConfig."""
-    
+
     @staticmethod
     def to_proto(config: CVNNConfig) -> models_pb2.CVNNConfigProto:
         """Convert to proto."""
@@ -99,7 +104,7 @@ class CVNNConfigConverter:
         # Note: LayerCfg is complex (recursive), simplified for now
         proto.seed = config.seed
         return proto
-    
+
     @staticmethod
     def from_proto(proto: models_pb2.CVNNConfigProto) -> CVNNConfig:
         """Convert from proto."""

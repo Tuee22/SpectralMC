@@ -13,7 +13,7 @@ from spectralmc.proto import training_pb2
 
 class TrainingConfigConverter:
     """Convert TrainingConfig."""
-    
+
     @staticmethod
     def to_proto(config: TrainingConfig) -> training_pb2.TrainingConfigProto:
         """Convert to proto."""
@@ -22,7 +22,7 @@ class TrainingConfigConverter:
         proto.batch_size = config.batch_size
         proto.learning_rate = config.learning_rate
         return proto
-    
+
     @staticmethod
     def from_proto(proto: training_pb2.TrainingConfigProto) -> TrainingConfig:
         """Convert from proto."""

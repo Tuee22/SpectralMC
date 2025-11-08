@@ -92,16 +92,20 @@ def test_adam_optimizer_state_round_trip() -> None:
     """Test AdamOptimizerStateConverter round-trip."""
     # Create sample optimizer state
     param_states = {
-        0: AdamParamState.from_torch({
-            "step": 10,
-            "exp_avg": torch.randn(5, 5),
-            "exp_avg_sq": torch.randn(5, 5),
-        }),
-        1: AdamParamState.from_torch({
-            "step": 10,
-            "exp_avg": torch.randn(3, 3),
-            "exp_avg_sq": torch.randn(3, 3),
-        }),
+        0: AdamParamState.from_torch(
+            {
+                "step": 10,
+                "exp_avg": torch.randn(5, 5),
+                "exp_avg_sq": torch.randn(5, 5),
+            }
+        ),
+        1: AdamParamState.from_torch(
+            {
+                "step": 10,
+                "exp_avg": torch.randn(3, 3),
+                "exp_avg_sq": torch.randn(3, 3),
+            }
+        ),
     }
 
     param_groups = [
@@ -132,18 +136,20 @@ def test_adam_optimizer_state_round_trip() -> None:
             rec_state.exp_avg.to_torch(),
             orig_state.exp_avg.to_torch(),
             rtol=1e-6,
-            atol=1e-9
+            atol=1e-9,
         )
         assert torch.allclose(
             rec_state.exp_avg_sq.to_torch(),
             orig_state.exp_avg_sq.to_torch(),
             rtol=1e-6,
-            atol=1e-9
+            atol=1e-9,
         )
 
     # Verify param groups
     assert len(recovered.param_groups) == len(original.param_groups)
-    for i, (orig_group, rec_group) in enumerate(zip(original.param_groups, recovered.param_groups)):
+    for i, (orig_group, rec_group) in enumerate(
+        zip(original.param_groups, recovered.param_groups)
+    ):
         assert rec_group.lr == orig_group.lr
         assert rec_group.betas == orig_group.betas
         assert rec_group.eps == orig_group.eps
@@ -215,16 +221,20 @@ def test_model_checkpoint_round_trip() -> None:
 
     # Create optimizer state
     param_states = {
-        0: AdamParamState.from_torch({
-            "step": 100,
-            "exp_avg": torch.randn(10, 5),
-            "exp_avg_sq": torch.randn(10, 5),
-        }),
-        1: AdamParamState.from_torch({
-            "step": 100,
-            "exp_avg": torch.randn(10),
-            "exp_avg_sq": torch.randn(10),
-        }),
+        0: AdamParamState.from_torch(
+            {
+                "step": 100,
+                "exp_avg": torch.randn(10, 5),
+                "exp_avg_sq": torch.randn(10, 5),
+            }
+        ),
+        1: AdamParamState.from_torch(
+            {
+                "step": 100,
+                "exp_avg": torch.randn(10),
+                "exp_avg_sq": torch.randn(10),
+            }
+        ),
     }
 
     param_groups = [
@@ -238,7 +248,9 @@ def test_model_checkpoint_round_trip() -> None:
         )
     ]
 
-    optimizer_state = AdamOptimizerState(param_states=param_states, param_groups=param_groups)
+    optimizer_state = AdamOptimizerState(
+        param_states=param_states, param_groups=param_groups
+    )
 
     # RNG states
     cpu_rng = torch.get_rng_state().numpy().tobytes()
@@ -258,7 +270,9 @@ def test_model_checkpoint_round_trip() -> None:
     # Verify model state dict
     assert set(rec_model.keys()) == set(model_state_dict.keys())
     for name in model_state_dict:
-        assert torch.allclose(rec_model[name], model_state_dict[name], rtol=1e-6, atol=1e-9)
+        assert torch.allclose(
+            rec_model[name], model_state_dict[name], rtol=1e-6, atol=1e-9
+        )
 
     # Verify optimizer state
     assert len(rec_opt.param_states) == len(optimizer_state.param_states)

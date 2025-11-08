@@ -52,3 +52,75 @@ def cleanup_gpu() -> Generator[None, None, None]:
             )
 
     _free_cupy()
+
+
+# =========================================================================== #
+#                   ASYNC STORAGE TEST FIXTURES                               #
+# =========================================================================== #
+
+import asyncio
+import uuid
+from typing import AsyncGenerator
+
+from spectralmc.storage import AsyncBlockchainModelStore
+
+
+@pytest.fixture(scope="session")
+def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
+    """
+    Create event loop for async tests (session scope).
+
+    pytest-asyncio requires an event_loop fixture for async tests.
+    Using session scope allows reusing the loop across tests for efficiency.
+    """
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
+
+
+@pytest.fixture
+async def async_store() -> AsyncGenerator[AsyncBlockchainModelStore, None]:
+    """
+    Create AsyncBlockchainModelStore with unique test bucket.
+
+    Creates a unique bucket for each test to ensure isolation.
+    Uses MinIO from docker-compose (opt-models bucket).
+    Automatically cleans up all objects and bucket after test.
+
+    Usage:
+        @pytest.mark.asyncio
+        async def test_something(async_store: AsyncBlockchainModelStore) -> None:
+            version = await async_store.commit(data, hash, "msg")
+            assert version.counter == 0
+    """
+    # Use unique test bucket per test for isolation
+    bucket_name = f"test-{uuid.uuid4().hex[:12]}"
+
+    async with AsyncBlockchainModelStore(bucket_name) as store:
+        # Create test bucket
+        try:
+            await store._s3_client.create_bucket(Bucket=bucket_name)
+        except Exception as e:
+            # Bucket might already exist, that's ok
+            if "BucketAlreadyOwnedByYou" not in str(e):
+                raise
+
+        yield store
+
+        # Cleanup: Delete all objects in bucket, then delete bucket
+        try:
+            # List and delete all objects
+            paginator = store._s3_client.get_paginator("list_objects_v2")
+            async for page in paginator.paginate(Bucket=bucket_name):
+                if "Contents" in page:
+                    objects = [{"Key": obj["Key"]} for obj in page["Contents"]]
+                    if objects:
+                        await store._s3_client.delete_objects(
+                            Bucket=bucket_name, Delete={"Objects": objects}
+                        )
+
+            # Delete bucket
+            await store._s3_client.delete_bucket(Bucket=bucket_name)
+        except Exception:
+            # Best-effort cleanup - don't fail test if cleanup fails
+            pass

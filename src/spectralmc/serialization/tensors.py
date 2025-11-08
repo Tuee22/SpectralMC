@@ -239,9 +239,7 @@ class AdamOptimizerStateConverter:
             )
             param_groups.append(group)
 
-        return AdamOptimizerState(
-            param_states=param_states, param_groups=param_groups
-        )
+        return AdamOptimizerState(param_states=param_states, param_groups=param_groups)
 
 
 class RNGStateConverter:
@@ -316,9 +314,7 @@ class ModelCheckpointConverter:
 
         # Serialize model state dict
         for name, tensor in model_state_dict.items():
-            proto.model_state_dict[name].CopyFrom(
-                TensorStateConverter.to_proto(tensor)
-            )
+            proto.model_state_dict[name].CopyFrom(TensorStateConverter.to_proto(tensor))
 
         # Serialize optimizer state
         proto.optimizer_state.CopyFrom(

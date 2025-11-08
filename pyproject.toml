@@ -88,6 +88,7 @@ black  = ">=25.1,<26.0"
 # --------------------------------------------------------------------------- #
 #                            S C R I P T S                                    #
 # --------------------------------------------------------------------------- #
+pytest-asyncio = "^1.2.0"
 [tool.poetry.scripts]
 test-all = "spectralmc.test_runner:run_all_tests"
 
@@ -112,10 +113,14 @@ exclude = ["src/spectralmc/proto/.*_pb2\\.py$"]
 [tool.pytest.ini_options]
 testpaths = "tests"
 addopts   = "-ra -q -m 'not gpu'"
+asyncio_mode = "auto"
 markers   = [
-    "gpu: needs CUDA"
+    "gpu: needs CUDA",
+    "asyncio: async test"
 ]
 filterwarnings = [
     # Hide SWIG-generated DeprecationWarnings raised while importing QuantLib
     "ignore::DeprecationWarning:.*QuantLib.*",
+    # Hide IFFT imaginary component warnings in tests (expected for untrained models)
+    "ignore:IFFT imaginary component.*exceeds tolerance:RuntimeWarning",
 ]

@@ -36,9 +36,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 
 def retry_on_throttle(
-    max_retries: int = 5,
-    base_delay: float = 0.1,
-    max_delay: float = 5.0
+    max_retries: int = 5, base_delay: float = 0.1, max_delay: float = 5.0
 ) -> Callable[[F], F]:
     """
     Decorator to retry S3 operations on throttling errors.
@@ -53,6 +51,7 @@ def retry_on_throttle(
     Returns:
         Decorated async function with retry logic
     """
+
     def decorator(func: F) -> F:
         @wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -69,9 +68,13 @@ def retry_on_throttle(
                         raise
 
                     # Retry on throttling and transient errors
-                    if error_code in ("SlowDown", "RequestLimitExceeded", "ServiceUnavailable"):
+                    if error_code in (
+                        "SlowDown",
+                        "RequestLimitExceeded",
+                        "ServiceUnavailable",
+                    ):
                         if attempt < max_retries:
-                            delay = min(base_delay * (2 ** attempt), max_delay)
+                            delay = min(base_delay * (2**attempt), max_delay)
                             await asyncio.sleep(delay)
                             last_exception = e
                             continue
@@ -127,8 +130,12 @@ class AsyncBlockchainModelStore:
         """
         self.bucket_name = bucket_name
         self.endpoint_url = endpoint_url or os.environ.get("AWS_ENDPOINT_URL")
-        self.aws_access_key_id = aws_access_key_id or os.environ.get("AWS_ACCESS_KEY_ID")
-        self.aws_secret_access_key = aws_secret_access_key or os.environ.get("AWS_SECRET_ACCESS_KEY")
+        self.aws_access_key_id = aws_access_key_id or os.environ.get(
+            "AWS_ACCESS_KEY_ID"
+        )
+        self.aws_secret_access_key = aws_secret_access_key or os.environ.get(
+            "AWS_SECRET_ACCESS_KEY"
+        )
         self.region_name = region_name
 
         # Connection pooling configuration
@@ -299,10 +306,7 @@ class AsyncBlockchainModelStore:
             raise
 
     async def commit(
-        self,
-        checkpoint_data: bytes,
-        content_hash: str,
-        message: str = ""
+        self, checkpoint_data: bytes, content_hash: str, message: str = ""
     ) -> ModelVersion:
         """
         Commit a new model version with atomic CAS.
@@ -357,16 +361,24 @@ class AsyncBlockchainModelStore:
         # Step 4: Upload artifacts in parallel
         try:
             await asyncio.gather(
-                self._upload_bytes(f"versions/{version_dir}/checkpoint.pb", checkpoint_data),
-                self._upload_json(f"versions/{version_dir}/metadata.json", {
-                    "counter": version.counter,
-                    "semantic_version": version.semantic_version,
-                    "parent_hash": version.parent_hash,
-                    "content_hash": version.content_hash,
-                    "commit_timestamp": version.commit_timestamp,
-                    "commit_message": version.commit_message,
-                }),
-                self._upload_bytes(f"versions/{version_dir}/content_hash.txt", content_hash.encode("utf-8")),
+                self._upload_bytes(
+                    f"versions/{version_dir}/checkpoint.pb", checkpoint_data
+                ),
+                self._upload_json(
+                    f"versions/{version_dir}/metadata.json",
+                    {
+                        "counter": version.counter,
+                        "semantic_version": version.semantic_version,
+                        "parent_hash": version.parent_hash,
+                        "content_hash": version.content_hash,
+                        "commit_timestamp": version.commit_timestamp,
+                        "commit_message": version.commit_message,
+                    },
+                ),
+                self._upload_bytes(
+                    f"versions/{version_dir}/content_hash.txt",
+                    content_hash.encode("utf-8"),
+                ),
             )
         except Exception as e:
             # Rollback on upload failure
@@ -387,7 +399,10 @@ class AsyncBlockchainModelStore:
                 chain_data = json.loads(chain_data_bytes.decode("utf-8"))
 
                 # Verify fast-forward (parent hash matches current head)
-                if current_head and chain_data["content_hash"] != current_head.content_hash:
+                if (
+                    current_head
+                    and chain_data["content_hash"] != current_head.content_hash
+                ):
                     # Someone committed between our get_head() and now
                     await self._rollback_artifacts(version_dir)
                     raise ConflictError(
@@ -475,7 +490,9 @@ class AsyncBlockchainModelStore:
 
             # Find matching version directory
             for prefix_obj in response["CommonPrefixes"]:
-                prefix = prefix_obj["Prefix"]  # e.g., "versions/v0000000000_1.0.0_abc123/"
+                prefix = prefix_obj[
+                    "Prefix"
+                ]  # e.g., "versions/v0000000000_1.0.0_abc123/"
                 dir_name = prefix.rstrip("/").split("/")[-1]
 
                 if dir_name.startswith(version_id):

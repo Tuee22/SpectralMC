@@ -1,0 +1,293 @@
+# src/spectralmc/storage/gc.py
+"""Garbage collection for blockchain model storage.
+
+Removes old model versions while preserving chain integrity and recent checkpoints.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+from .store import AsyncBlockchainModelStore
+from .chain import ModelVersion
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RetentionPolicy:
+    """Garbage collection retention policy.
+
+    Attributes:
+        keep_versions: Number of most recent versions to keep (None = keep all)
+        keep_min_versions: Minimum versions to always keep (protects against accidents)
+        protect_tags: List of version counters to always protect (e.g., production releases)
+    """
+
+    keep_versions: Optional[int] = None  # None = keep all
+    keep_min_versions: int = 3  # Always keep at least this many
+    protect_tags: List[int] = field(
+        default_factory=list
+    )  # Always protect these version counters
+
+
+@dataclass(frozen=True)
+class GCReport:
+    """Garbage collection execution report.
+
+    Attributes:
+        deleted_versions: List of deleted version counters
+        protected_versions: List of protected version counters
+        bytes_freed: Approximate bytes freed (sum of checkpoint sizes)
+        dry_run: Whether this was a dry run
+    """
+
+    deleted_versions: List[int]
+    protected_versions: List[int]
+    bytes_freed: int
+    dry_run: bool
+
+
+class GarbageCollector:
+    """
+    Garbage collector for blockchain model storage.
+
+    Removes old versions according to retention policy while preserving:
+    - Genesis version (v0) - always protected
+    - Recent versions (configurable via policy)
+    - Tagged/protected versions (e.g., production releases)
+    - Chain integrity (never orphans versions)
+
+    Supports dry-run mode for safe preview of deletions.
+
+    Usage:
+        ```python
+        # Keep last 10 versions
+        policy = RetentionPolicy(keep_versions=10)
+        gc = GarbageCollector(store, policy)
+
+        # Dry run first
+        report = await gc.collect(dry_run=True)
+        print(f"Would delete: {report.deleted_versions}")
+        print(f"Would free: {report.bytes_freed} bytes")
+
+        # Actually delete
+        report = await gc.collect(dry_run=False)
+        ```
+    """
+
+    def __init__(
+        self, store: AsyncBlockchainModelStore, policy: RetentionPolicy
+    ) -> None:
+        """
+        Initialize garbage collector.
+
+        Args:
+            store: AsyncBlockchainModelStore instance
+            policy: Retention policy
+        """
+        self.store = store
+        self.policy = policy
+
+    async def collect(self, dry_run: bool = True) -> GCReport:
+        """
+        Run garbage collection.
+
+        Args:
+            dry_run: If True, only report what would be deleted without deleting
+
+        Returns:
+            GCReport with deletion summary
+
+        Raises:
+            ValueError: If policy would delete too many versions
+        """
+        # Fetch all versions
+        head = await self.store.get_head()
+        if head is None:
+            # Empty chain, nothing to collect
+            return GCReport(
+                deleted_versions=[],
+                protected_versions=[],
+                bytes_freed=0,
+                dry_run=dry_run,
+            )
+
+        # Collect all version metadata
+        versions: List[ModelVersion] = []
+        for counter in range(head.counter + 1):
+            version_id = f"v{counter:010d}"
+            version = await self.store.get_version(version_id)
+            versions.append(version)
+
+        # Determine what to delete
+        protected, to_delete = self._plan_deletion(versions)
+
+        # Safety check: ensure minimum versions retained
+        if len(protected) < self.policy.keep_min_versions:
+            raise ValueError(
+                f"Retention policy would keep only {len(protected)} versions, "
+                f"but minimum is {self.policy.keep_min_versions}"
+            )
+
+        # Calculate bytes to free
+        bytes_freed = 0
+        if not dry_run:
+            # Actually delete versions
+            for version in to_delete:
+                freed = await self._delete_version(version)
+                bytes_freed += freed
+                logger.info(f"Deleted version {version.counter} (freed {freed} bytes)")
+        else:
+            # Dry run: estimate bytes
+            for version in to_delete:
+                freed = await self._estimate_version_size(version)
+                bytes_freed += freed
+
+        return GCReport(
+            deleted_versions=[v.counter for v in to_delete],
+            protected_versions=[v.counter for v in protected],
+            bytes_freed=bytes_freed,
+            dry_run=dry_run,
+        )
+
+    def _plan_deletion(
+        self, versions: List[ModelVersion]
+    ) -> tuple[List[ModelVersion], List[ModelVersion]]:
+        """
+        Plan which versions to delete and which to protect.
+
+        Args:
+            versions: All versions in chain (sorted by counter)
+
+        Returns:
+            Tuple of (protected_versions, to_delete_versions)
+        """
+        # Genesis (v0) is always protected
+        protected = {0}
+
+        # Protect tagged versions
+        for tag in self.policy.protect_tags:
+            protected.add(tag)
+
+        # Protect recent versions
+        if self.policy.keep_versions is not None:
+            # Keep N most recent
+            total_versions = len(versions)
+            keep_from = max(0, total_versions - self.policy.keep_versions)
+            for i in range(keep_from, total_versions):
+                protected.add(versions[i].counter)
+        else:
+            # keep_versions=None means keep all
+            protected.update(v.counter for v in versions)
+
+        # Split into protected and to_delete
+        protected_list = [v for v in versions if v.counter in protected]
+        to_delete = [v for v in versions if v.counter not in protected]
+
+        return protected_list, to_delete
+
+    async def _delete_version(self, version: ModelVersion) -> int:
+        """
+        Delete a version's artifacts from S3.
+
+        Args:
+            version: Version to delete
+
+        Returns:
+            Approximate bytes freed
+        """
+        version_dir = version.directory_name
+        prefix = f"versions/{version_dir}/"
+
+        # List all objects in version directory
+        total_size = 0
+        objects_to_delete = []
+
+        paginator = self.store._s3_client.get_paginator("list_objects_v2")
+        async for page in paginator.paginate(
+            Bucket=self.store.bucket_name, Prefix=prefix
+        ):
+            if "Contents" not in page:
+                continue
+
+            for obj in page["Contents"]:
+                objects_to_delete.append({"Key": obj["Key"]})
+                total_size += obj.get("Size", 0)
+
+        # Delete objects
+        if objects_to_delete:
+            await self.store._s3_client.delete_objects(
+                Bucket=self.store.bucket_name, Delete={"Objects": objects_to_delete}
+            )
+
+        return total_size
+
+    async def _estimate_version_size(self, version: ModelVersion) -> int:
+        """
+        Estimate version size without deleting.
+
+        Args:
+            version: Version to estimate
+
+        Returns:
+            Approximate size in bytes
+        """
+        version_dir = version.directory_name
+        prefix = f"versions/{version_dir}/"
+
+        total_size = 0
+        paginator = self.store._s3_client.get_paginator("list_objects_v2")
+        async for page in paginator.paginate(
+            Bucket=self.store.bucket_name, Prefix=prefix
+        ):
+            if "Contents" not in page:
+                continue
+
+            for obj in page["Contents"]:
+                total_size += obj.get("Size", 0)
+
+        return total_size
+
+
+async def run_gc(
+    store: AsyncBlockchainModelStore,
+    keep_versions: Optional[int] = None,
+    keep_min_versions: int = 3,
+    protect_tags: Optional[List[int]] = None,
+    dry_run: bool = True,
+) -> GCReport:
+    """
+    Convenience function to run garbage collection.
+
+    Args:
+        store: AsyncBlockchainModelStore instance
+        keep_versions: Number of recent versions to keep (None = keep all)
+        keep_min_versions: Minimum versions to always keep
+        protect_tags: Version counters to always protect
+        dry_run: If True, only report what would be deleted
+
+    Returns:
+        GCReport with deletion summary
+
+    Example:
+        ```python
+        async with AsyncBlockchainModelStore("bucket") as store:
+            # Dry run: preview deletions
+            report = await run_gc(store, keep_versions=10, dry_run=True)
+            print(f"Would delete: {len(report.deleted_versions)} versions")
+
+            # Actually delete
+            report = await run_gc(store, keep_versions=10, dry_run=False)
+        ```
+    """
+    policy = RetentionPolicy(
+        keep_versions=keep_versions,
+        keep_min_versions=keep_min_versions,
+        protect_tags=list(protect_tags) if protect_tags else [],
+    )
+
+    gc = GarbageCollector(store, policy)
+    return await gc.collect(dry_run=dry_run)

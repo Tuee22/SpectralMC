@@ -20,7 +20,11 @@ import torch
 from spectralmc.gbm import BlackScholesConfig, SimulationParams
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
-from spectralmc.storage import AsyncBlockchainModelStore, commit_snapshot, load_snapshot_from_checkpoint
+from spectralmc.storage import (
+    AsyncBlockchainModelStore,
+    commit_snapshot,
+    load_snapshot_from_checkpoint,
+)
 import asyncio
 
 
@@ -45,11 +49,13 @@ async def main() -> None:
 
     # Create optimizer state (in practice, from actual Adam optimizer)
     param_states = {
-        0: AdamParamState.from_torch({
-            "step": 100,
-            "exp_avg": torch.randn(20, 10),
-            "exp_avg_sq": torch.randn(20, 10),
-        }),
+        0: AdamParamState.from_torch(
+            {
+                "step": 100,
+                "exp_avg": torch.randn(20, 10),
+                "exp_avg_sq": torch.randn(20, 10),
+            }
+        ),
     }
 
     param_groups = [
@@ -63,7 +69,9 @@ async def main() -> None:
         )
     ]
 
-    optimizer_state = AdamOptimizerState(param_states=param_states, param_groups=param_groups)
+    optimizer_state = AdamOptimizerState(
+        param_states=param_states, param_groups=param_groups
+    )
 
     # Create simulation config (required for GbmCVNNPricerConfig)
     sim_params = SimulationParams(
@@ -98,9 +106,11 @@ async def main() -> None:
         torch_cuda_rng_states=[],
     )
 
-    print("   Model created with {} parameters".format(
-        sum(p.numel() for p in model.parameters())
-    ))
+    print(
+        "   Model created with {} parameters".format(
+            sum(p.numel() for p in model.parameters())
+        )
+    )
 
     print("\n2. Committing to Blockchain Storage")
 
@@ -110,9 +120,7 @@ async def main() -> None:
 
         # Commit snapshot
         version = await commit_snapshot(
-            store,
-            snapshot,
-            message="Training checkpoint at step 100"
+            store, snapshot, message="Training checkpoint at step 100"
         )
 
         print(f"   ✓ Committed: {version.version_id}")
@@ -152,7 +160,9 @@ async def main() -> None:
             torch_cuda_rng_states=[],
         )
 
-        version2 = await commit_snapshot(store, snapshot2, "Training checkpoint at step 200")
+        version2 = await commit_snapshot(
+            store, snapshot2, "Training checkpoint at step 200"
+        )
         print(f"   ✓ Committed: {version2.version_id}")
         print(f"   Semantic version: {version2.semantic_version}")
 
@@ -181,7 +191,9 @@ async def main() -> None:
         loaded_state_dict = loaded_snapshot.cvnn.state_dict()
 
         all_match = all(
-            torch.allclose(original_state_dict[key], loaded_state_dict[key], rtol=1e-6, atol=1e-9)
+            torch.allclose(
+                original_state_dict[key], loaded_state_dict[key], rtol=1e-6, atol=1e-9
+            )
             for key in original_state_dict.keys()
         )
 
@@ -190,7 +202,9 @@ async def main() -> None:
         # Show that current model is different (modified in step 4)
         current_state_dict = model.state_dict()
         current_different = not all(
-            torch.allclose(original_state_dict[key], current_state_dict[key], rtol=1e-6, atol=1e-9)
+            torch.allclose(
+                original_state_dict[key], current_state_dict[key], rtol=1e-6, atol=1e-9
+            )
             for key in original_state_dict.keys()
         )
         print(f"   Current model differs from checkpoint: {current_different}")

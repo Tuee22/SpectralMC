@@ -22,7 +22,7 @@ def test_model_version_properties() -> None:
         commit_timestamp="2025-01-01T00:00:00Z",
         commit_message="Test commit",
     )
-    
+
     assert version.version_id == "v0000000042"
     assert version.directory_name.startswith("v0000000042_1.2.3_def456")
 
@@ -37,10 +37,10 @@ def test_compute_hash_deterministic() -> None:
         commit_timestamp="2025-01-01T00:00:00Z",
         commit_message="Genesis",
     )
-    
+
     hash1 = version.compute_hash()
     hash2 = version.compute_hash()
-    
+
     assert hash1 == hash2
     assert len(hash1) == 64  # SHA256 hex digest
 
@@ -63,7 +63,7 @@ def test_bump_semantic_version_major() -> None:
 def test_create_genesis_version() -> None:
     """Test genesis version creation."""
     genesis = create_genesis_version("abc123")
-    
+
     assert genesis.counter == 0
     assert genesis.semantic_version == "1.0.0"
     assert genesis.parent_hash == ""

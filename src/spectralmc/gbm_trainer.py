@@ -41,10 +41,13 @@ Implementation notes
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import math
 import time
 import warnings
 from typing import (
+    TYPE_CHECKING,
     Callable,
     Dict,
     Iterable,
@@ -58,6 +61,11 @@ from typing import (
     Mapping,
     runtime_checkable,
 )
+
+if TYPE_CHECKING:
+    from spectralmc.storage import AsyncBlockchainModelStore
+
+_logger = logging.getLogger(__name__)
 
 import cupy as cp
 from cupy.cuda import Stream as CuPyStream
@@ -358,6 +366,74 @@ class GbmCVNNPricer:
         return loss, grad_norm
 
     # ------------------------------------------------------------------ #
+    # Blockchain storage integration                                     #
+    # ------------------------------------------------------------------ #
+
+    def _commit_to_blockchain(
+        self,
+        blockchain_store: AsyncBlockchainModelStore,
+        adam: optim.Optimizer,
+        commit_message_template: str,
+        loss: float,
+        batch: int,
+    ) -> None:
+        """
+        Commit current trainer snapshot to blockchain storage.
+
+        Executes async commit synchronously using asyncio.run().
+        Handles errors gracefully to avoid interrupting training.
+
+        Args:
+            blockchain_store: AsyncBlockchainModelStore instance
+            adam: Current Adam optimizer (for snapshotting state)
+            commit_message_template: Template string for commit message
+            loss: Current training loss
+            batch: Current batch/step number
+        """
+        try:
+            # Snapshot optimizer state before committing
+            state_dict = adam.state_dict()
+            for param_id in state_dict["state"]:
+                for key in state_dict["state"][param_id]:
+                    val = state_dict["state"][param_id][key]
+                    if isinstance(val, torch.Tensor):
+                        state_dict["state"][param_id][key] = val.cpu()
+            self._optimizer_state = AdamOptimizerState.from_torch(state_dict)
+
+            # Create snapshot
+            snapshot = self.snapshot()
+
+            # Format commit message
+            commit_message = commit_message_template.format(
+                step=self._global_step,
+                loss=loss,
+                batch=batch,
+            )
+
+            # Execute async commit synchronously
+            async def _do_commit() -> None:
+                from spectralmc.storage import commit_snapshot
+
+                version = await commit_snapshot(
+                    blockchain_store,
+                    snapshot,
+                    commit_message,
+                )
+                _logger.info(
+                    f"Committed version {version.counter}: {version.content_hash[:8]}... "
+                    f"(step={self._global_step}, loss={loss:.6f})"
+                )
+
+            asyncio.run(_do_commit())
+
+        except Exception as e:
+            _logger.error(
+                f"Failed to commit to blockchain at step {self._global_step}: {e}",
+                exc_info=True,
+            )
+            # Don't raise - training should continue even if commit fails
+
+    # ------------------------------------------------------------------ #
     # Public API: training                                               #
     # ------------------------------------------------------------------ #
 
@@ -366,10 +442,33 @@ class GbmCVNNPricer:
         config: TrainingConfig,
         *,
         logger: Optional[StepLogger] = None,
+        blockchain_store: Optional[AsyncBlockchainModelStore] = None,
+        auto_commit: bool = False,
+        commit_interval: Optional[int] = None,
+        commit_message_template: str = "Training checkpoint at step {step}",
     ) -> None:
-        """Run **CUDA‑only** optimisation for *config.num_batches* steps."""
+        """
+        Run **CUDA‑only** optimisation for *config.num_batches* steps.
+
+        Args:
+            config: Training hyperparameters (num_batches, batch_size, learning_rate)
+            logger: Optional callback executed after each step
+            blockchain_store: Optional AsyncBlockchainModelStore for automatic commits
+            auto_commit: If True, commit snapshot after training completes (requires blockchain_store)
+            commit_interval: If set, commit every N batches during training (requires blockchain_store)
+            commit_message_template: Template for commit messages (can use {step}, {loss}, {batch})
+
+        Note:
+            Blockchain commits are executed synchronously within the training loop using asyncio.run().
+            This may add latency; for production, consider committing in a separate process/thread.
+        """
         if not self._using_cuda:
             raise RuntimeError("Trainer requires a CUDA‑capable GPU.")
+
+        if (auto_commit or commit_interval is not None) and blockchain_store is None:
+            raise ValueError(
+                "auto_commit or commit_interval requires blockchain_store to be provided"
+            )
 
         adam = optim.Adam(self._cvnn.parameters(), lr=config.learning_rate)
 
@@ -411,12 +510,13 @@ class GbmCVNNPricer:
             self._torch_stream.synchronize()
 
             # ── Logging ──────────────────────────────────────────────── #
+            current_loss = loss.item()
             if logger is not None:
                 logger(
                     StepMetrics(
                         step=self._global_step,
                         batch_time=time.perf_counter() - tic,
-                        loss=loss.item(),
+                        loss=current_loss,
                         grad_norm=grad_norm,
                         lr=float(adam.param_groups[0]["lr"]),
                         optimizer=adam,
@@ -424,6 +524,21 @@ class GbmCVNNPricer:
                     )
                 )
             self._global_step += 1
+
+            # ── Periodic blockchain commit ───────────────────────────── #
+            if (
+                blockchain_store is not None
+                and commit_interval is not None
+                and self._global_step % commit_interval == 0
+            ):
+                _logger.info(f"Periodic commit at step {self._global_step}")
+                self._commit_to_blockchain(
+                    blockchain_store,
+                    adam,
+                    commit_message_template,
+                    current_loss,
+                    batch=self._global_step,
+                )
 
         # ── Snapshot optimiser      ─────────────────────────────────── #
         state_dict = adam.state_dict()
@@ -434,6 +549,17 @@ class GbmCVNNPricer:
                 if isinstance(val, torch.Tensor):
                     state_dict["state"][param_id][key] = val.cpu()
         self._optimizer_state = AdamOptimizerState.from_torch(state_dict)
+
+        # ── Final blockchain commit ─────────────────────────────────── #
+        if blockchain_store is not None and auto_commit:
+            _logger.info(f"Final commit after training at step {self._global_step}")
+            self._commit_to_blockchain(
+                blockchain_store,
+                adam,
+                commit_message_template,
+                current_loss,
+                batch=config.num_batches,
+            )
 
     # ------------------------------------------------------------------ #
     # Public API: inference                                              #
@@ -465,6 +591,10 @@ class GbmCVNNPricer:
         for coeff, contract in zip(avg_ifft, inputs, strict=True):
             real_val = float(torch.real(coeff).item())
             imag_val = float(torch.imag(coeff).item())
+
+            # Option prices should be real-valued. Large imaginary components
+            # indicate poor CVNN training or numerical instability.
+            # Filtered in tests (pyproject.toml) but active in production.
             if abs(imag_val) > 1.0e-6:
                 warnings.warn(
                     f"IFFT imaginary component {imag_val:.3e} exceeds tolerance.",

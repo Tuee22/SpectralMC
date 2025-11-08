@@ -16,7 +16,7 @@ ThreadsPerBlock = Literal[32, 64, 128, 256, 512, 1024]
 
 class SimulationParamsConverter:
     """Convert SimulationParams."""
-    
+
     @staticmethod
     def to_proto(params: SimulationParams) -> simulation_pb2.SimulationParamsProto:
         """Convert to proto."""
@@ -30,7 +30,7 @@ class SimulationParamsConverter:
         proto.buffer_size = params.buffer_size
         proto.dtype = PrecisionConverter.to_proto(params.dtype)
         return proto
-    
+
     @staticmethod
     def from_proto(proto: simulation_pb2.SimulationParamsProto) -> SimulationParams:
         """Convert from proto."""
@@ -51,7 +51,7 @@ class SimulationParamsConverter:
 
 class BlackScholesConfigConverter:
     """Convert BlackScholesConfig."""
-    
+
     @staticmethod
     def to_proto(config: BlackScholesConfig) -> simulation_pb2.BlackScholesConfigProto:
         """Convert to proto."""
@@ -60,7 +60,7 @@ class BlackScholesConfigConverter:
         proto.simulate_log_return = config.simulate_log_return
         proto.normalize_forwards = config.normalize_forwards
         return proto
-    
+
     @staticmethod
     def from_proto(proto: simulation_pb2.BlackScholesConfigProto) -> BlackScholesConfig:
         """Convert from proto."""
@@ -73,7 +73,7 @@ class BlackScholesConfigConverter:
 
 class BoundSpecConverter:
     """Convert BoundSpec."""
-    
+
     @staticmethod
     def to_proto(bound: BoundSpec) -> simulation_pb2.BoundSpecProto:
         """Convert to proto."""
@@ -81,7 +81,7 @@ class BoundSpecConverter:
         proto.lower = bound.lower
         proto.upper = bound.upper
         return proto
-    
+
     @staticmethod
     def from_proto(proto: simulation_pb2.BoundSpecProto) -> BoundSpec:
         """Convert from proto."""

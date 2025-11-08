@@ -3,18 +3,20 @@
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
-
 import pytest
 import torch
 
-from spectralmc.storage import BlockchainModelStore, commit_snapshot, load_snapshot_from_checkpoint
+from spectralmc.storage import (
+    AsyncBlockchainModelStore,
+    commit_snapshot,
+    load_snapshot_from_checkpoint,
+)
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.torch import AdamOptimizerState, AdamParamState, AdamParamGroup
 
 
-def test_checkpoint_simple_model() -> None:
+@pytest.mark.asyncio
+async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -> None:
     """Test creating and loading a checkpoint with a simple model."""
     # Create a simple model
     model = torch.nn.Sequential(
@@ -25,11 +27,13 @@ def test_checkpoint_simple_model() -> None:
 
     # Create optimizer state
     param_states = {
-        0: AdamParamState.from_torch({
-            "step": 10,
-            "exp_avg": torch.randn(10, 5),
-            "exp_avg_sq": torch.randn(10, 5),
-        }),
+        0: AdamParamState.from_torch(
+            {
+                "step": 10,
+                "exp_avg": torch.randn(10, 5),
+                "exp_avg_sq": torch.randn(10, 5),
+            }
+        ),
     }
 
     param_groups = [
@@ -43,7 +47,9 @@ def test_checkpoint_simple_model() -> None:
         )
     ]
 
-    optimizer_state = AdamOptimizerState(param_states=param_states, param_groups=param_groups)
+    optimizer_state = AdamOptimizerState(
+        param_states=param_states, param_groups=param_groups
+    )
 
     # Create a minimal GbmCVNNPricerConfig
     # Note: This is a simplified test, real usage would have proper BlackScholes config
@@ -82,58 +88,56 @@ def test_checkpoint_simple_model() -> None:
         torch_cuda_rng_states=cuda_rng_states,
     )
 
-    # Create temporary storage
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = BlockchainModelStore(tmpdir)
+    # Commit snapshot (async)
+    version = await commit_snapshot(async_store, snapshot, "Test checkpoint")
 
-        # Commit snapshot
-        version = commit_snapshot(store, snapshot, "Test checkpoint")
+    assert version.counter == 0
+    assert version.semantic_version == "1.0.0"
+    assert version.commit_message == "Test checkpoint"
 
-        assert version.counter == 0
-        assert version.semantic_version == "1.0.0"
-        assert version.commit_message == "Test checkpoint"
+    # Verify checkpoint was stored
+    head = await async_store.get_head()
+    assert head is not None
+    assert head.counter == version.counter
 
-        # Verify checkpoint was stored
-        head = store.get_head()
-        assert head is not None
-        assert head.counter == version.counter
+    # Load checkpoint back
+    new_model = torch.nn.Sequential(
+        torch.nn.Linear(5, 10),
+        torch.nn.ReLU(),
+        torch.nn.Linear(10, 5),
+    )
 
-        # Load checkpoint back
-        new_model = torch.nn.Sequential(
-            torch.nn.Linear(5, 10),
-            torch.nn.ReLU(),
-            torch.nn.Linear(10, 5),
-        )
+    loaded_snapshot = await load_snapshot_from_checkpoint(
+        async_store, version, new_model, snapshot
+    )
 
-        loaded_snapshot = load_snapshot_from_checkpoint(
-            store, version, new_model, snapshot
-        )
+    # Verify model parameters are identical
+    original_state = model.state_dict()
+    loaded_state = loaded_snapshot.cvnn.state_dict()
 
-        # Verify model parameters are identical
-        original_state = model.state_dict()
-        loaded_state = loaded_snapshot.cvnn.state_dict()
+    assert set(original_state.keys()) == set(loaded_state.keys())
+    for key in original_state:
+        assert torch.allclose(
+            original_state[key], loaded_state[key], rtol=1e-6, atol=1e-9
+        ), f"Parameter {key} mismatch"
 
-        assert set(original_state.keys()) == set(loaded_state.keys())
-        for key in original_state:
-            assert torch.allclose(
-                original_state[key],
-                loaded_state[key],
-                rtol=1e-6,
-                atol=1e-9
-            ), f"Parameter {key} mismatch"
+    # Verify optimizer state
+    assert loaded_snapshot.optimizer_state is not None
+    assert len(loaded_snapshot.optimizer_state.param_states) == len(
+        optimizer_state.param_states
+    )
 
-        # Verify optimizer state
-        assert loaded_snapshot.optimizer_state is not None
-        assert len(loaded_snapshot.optimizer_state.param_states) == len(optimizer_state.param_states)
+    # Verify global step
+    assert loaded_snapshot.global_step == 100
 
-        # Verify global step
-        assert loaded_snapshot.global_step == 100
-
-        # Verify RNG state
-        assert loaded_snapshot.torch_cpu_rng_state == cpu_rng_state
+    # Verify RNG state
+    assert loaded_snapshot.torch_cpu_rng_state == cpu_rng_state
 
 
-def test_checkpoint_multiple_commits() -> None:
+@pytest.mark.asyncio
+async def test_checkpoint_multiple_commits(
+    async_store: AsyncBlockchainModelStore,
+) -> None:
     """Test multiple sequential commits create proper chain."""
     model = torch.nn.Linear(10, 10)
 
@@ -159,50 +163,50 @@ def test_checkpoint_multiple_commits() -> None:
 
     cpu_rng_state = torch.get_rng_state().numpy().tobytes()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = BlockchainModelStore(tmpdir)
+    versions = []
 
-        versions = []
+    # Create 5 checkpoints
+    for i in range(5):
+        # Modify model slightly
+        with torch.no_grad():
+            for param in model.parameters():
+                param.add_(0.1)
 
-        # Create 5 checkpoints
-        for i in range(5):
-            # Modify model slightly
-            with torch.no_grad():
-                for param in model.parameters():
-                    param.add_(0.1)
+        snapshot = GbmCVNNPricerConfig(
+            cfg=bs_config,
+            domain_bounds={},
+            cvnn=model,
+            optimizer_state=None,
+            global_step=i * 100,
+            sobol_skip=0,
+            torch_cpu_rng_state=cpu_rng_state,
+            torch_cuda_rng_states=[],
+        )
 
-            snapshot = GbmCVNNPricerConfig(
-                cfg=bs_config,
-                domain_bounds={},
-                cvnn=model,
-                optimizer_state=None,
-                global_step=i * 100,
-                sobol_skip=0,
-                torch_cpu_rng_state=cpu_rng_state,
-                torch_cuda_rng_states=[],
-            )
+        version = await commit_snapshot(async_store, snapshot, f"Epoch {i}")
+        versions.append(version)
 
-            version = commit_snapshot(store, snapshot, f"Epoch {i}")
-            versions.append(version)
+    # Verify chain structure
+    for i, version in enumerate(versions):
+        assert version.counter == i
+        assert version.semantic_version == f"1.0.{i}"
 
-        # Verify chain structure
-        for i, version in enumerate(versions):
-            assert version.counter == i
-            assert version.semantic_version == f"1.0.{i}"
+        if i == 0:
+            assert version.parent_hash == ""
+        else:
+            assert version.parent_hash == versions[i - 1].content_hash
 
-            if i == 0:
-                assert version.parent_hash == ""
-            else:
-                assert version.parent_hash == versions[i - 1].content_hash
-
-        # Verify HEAD
-        head = store.get_head()
-        assert head is not None
-        assert head.counter == 4
-        assert head.commit_message == "Epoch 4"
+    # Verify HEAD
+    head = await async_store.get_head()
+    assert head is not None
+    assert head.counter == 4
+    assert head.commit_message == "Epoch 4"
 
 
-def test_checkpoint_content_hash_integrity() -> None:
+@pytest.mark.asyncio
+async def test_checkpoint_content_hash_integrity(
+    async_store: AsyncBlockchainModelStore,
+) -> None:
     """Test that different checkpoints have different content hashes."""
     model1 = torch.nn.Linear(5, 5)
     model2 = torch.nn.Linear(5, 5)
@@ -236,33 +240,30 @@ def test_checkpoint_content_hash_integrity() -> None:
 
     cpu_rng_state = torch.get_rng_state().numpy().tobytes()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = BlockchainModelStore(tmpdir)
+    snapshot1 = GbmCVNNPricerConfig(
+        cfg=bs_config,
+        domain_bounds={},
+        cvnn=model1,
+        optimizer_state=None,
+        global_step=0,
+        sobol_skip=0,
+        torch_cpu_rng_state=cpu_rng_state,
+        torch_cuda_rng_states=[],
+    )
 
-        snapshot1 = GbmCVNNPricerConfig(
-            cfg=bs_config,
-            domain_bounds={},
-            cvnn=model1,
-            optimizer_state=None,
-            global_step=0,
-            sobol_skip=0,
-            torch_cpu_rng_state=cpu_rng_state,
-            torch_cuda_rng_states=[],
-        )
+    snapshot2 = GbmCVNNPricerConfig(
+        cfg=bs_config,
+        domain_bounds={},
+        cvnn=model2,
+        optimizer_state=None,
+        global_step=0,
+        sobol_skip=0,
+        torch_cpu_rng_state=cpu_rng_state,
+        torch_cuda_rng_states=[],
+    )
 
-        snapshot2 = GbmCVNNPricerConfig(
-            cfg=bs_config,
-            domain_bounds={},
-            cvnn=model2,
-            optimizer_state=None,
-            global_step=0,
-            sobol_skip=0,
-            torch_cpu_rng_state=cpu_rng_state,
-            torch_cuda_rng_states=[],
-        )
+    version1 = await commit_snapshot(async_store, snapshot1, "Model 1")
+    version2 = await commit_snapshot(async_store, snapshot2, "Model 2")
 
-        version1 = commit_snapshot(store, snapshot1, "Model 1")
-        version2 = commit_snapshot(store, snapshot2, "Model 2")
-
-        # Different models should have different content hashes
-        assert version1.content_hash != version2.content_hash
+    # Different models should have different content hashes
+    assert version1.content_hash != version2.content_hash
