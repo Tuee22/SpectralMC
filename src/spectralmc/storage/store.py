@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from typing import (
@@ -32,13 +33,19 @@ import aioboto3  # type: ignore[import-untyped]
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+from ..result import Result, Success, Failure
 from .chain import ModelVersion, create_genesis_version, bump_semantic_version
 from .errors import (
     NotFastForwardError,
     VersionNotFoundError,
     ConflictError,
     CommitError,
+    HeadNotFoundError,
+    AuditLogError,
+    S3Error,
 )
+
+_logger = logging.getLogger(__name__)
 
 # JSON type alias for nested dictionaries
 JsonValue: TypeAlias = (
@@ -419,15 +426,16 @@ class AsyncBlockchainModelStore:
     # -------------------------------------------------------------------------
 
     @retry_on_throttle(max_retries=5)
-    async def get_head(self) -> Optional[ModelVersion]:
+    async def get_head(self) -> Result[ModelVersion, HeadNotFoundError]:
         """
         Get current HEAD version.
 
         Returns:
-            Current HEAD version, or None if no commits yet
+            Success(ModelVersion) if HEAD exists
+            Failure(HeadNotFoundError) if no commits yet
 
         Raises:
-            ClientError: If S3 operation fails
+            ClientError: If S3 operation fails (non-404 errors)
         """
         try:
             data = await self._download_json("chain.json")
@@ -459,7 +467,7 @@ class AsyncBlockchainModelStore:
                     f"commit_message must be str, got {type(commit_message)}"
                 )
 
-            return ModelVersion(
+            version = ModelVersion(
                 counter=counter,
                 semantic_version=semantic_version,
                 parent_hash=parent_hash,
@@ -467,10 +475,11 @@ class AsyncBlockchainModelStore:
                 commit_timestamp=commit_timestamp,
                 commit_message=commit_message,
             )
+            return Success(version)
         except ClientError as e:
             error_code = e.response["Error"]["Code"]
             if error_code == "NoSuchKey":
-                return None
+                return Failure(HeadNotFoundError())
             raise
 
     async def commit(
@@ -504,25 +513,30 @@ class AsyncBlockchainModelStore:
             CommitError: If commit fails for other reasons
         """
         # Step 2: Fetch current HEAD
-        current_head = await self.get_head()
+        head_result = await self.get_head()
 
         # Step 3: Build ModelVersion metadata
-        if current_head is None:
-            # Genesis commit
-            version = create_genesis_version(content_hash, message or "Genesis version")
-        else:
-            # Incremental commit
-            new_counter = current_head.counter + 1
-            new_semver = bump_semantic_version(current_head.semantic_version, "patch")
+        match head_result:
+            case Failure(_):
+                # Genesis commit
+                version = create_genesis_version(
+                    content_hash, message or "Genesis version"
+                )
+            case Success(current_head):
+                # Incremental commit
+                new_counter = current_head.counter + 1
+                new_semver = bump_semantic_version(
+                    current_head.semantic_version, "patch"
+                )
 
-            version = ModelVersion(
-                counter=new_counter,
-                semantic_version=new_semver,
-                parent_hash=current_head.content_hash,
-                content_hash=content_hash,
-                commit_timestamp=datetime.now(timezone.utc).isoformat(),
-                commit_message=message,
-            )
+                version = ModelVersion(
+                    counter=new_counter,
+                    semantic_version=new_semver,
+                    parent_hash=current_head.content_hash,
+                    content_hash=content_hash,
+                    commit_timestamp=datetime.now(timezone.utc).isoformat(),
+                    commit_message=message,
+                )
 
         version_dir = version.directory_name
 
@@ -649,9 +663,15 @@ class AsyncBlockchainModelStore:
         # Step 9: Append to audit log
         try:
             await self._append_audit_log(version)
-        except Exception:
-            # Don't fail commit if audit log fails (best-effort)
-            pass
+        except ClientError as e:
+            _logger.warning(
+                f"Audit log append failed (non-fatal) for version {version.version_id}: {e}"
+            )
+        except Exception as e:
+            _logger.error(
+                f"Unexpected audit log error for version {version.version_id}: {e}",
+                exc_info=True,
+            )
 
         # Step 10: Return ModelVersion
         return version

@@ -27,7 +27,7 @@ from .errors import (
     ChainCorruptionError,
 )
 from .store import AsyncBlockchainModelStore, retry_on_throttle
-from .inference import InferenceClient
+from .inference import InferenceClient, InferenceMode, PinnedMode, TrackingMode
 from .verification import (
     verify_chain,
     verify_chain_detailed,
@@ -64,6 +64,9 @@ __all__ = [
     "retry_on_throttle",
     # Inference
     "InferenceClient",
+    "InferenceMode",
+    "PinnedMode",
+    "TrackingMode",
     # Verification
     "verify_chain",
     "verify_chain_detailed",

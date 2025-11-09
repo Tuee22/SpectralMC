@@ -15,6 +15,7 @@ import asyncio
 import tempfile
 from pathlib import Path
 
+from spectralmc.result import Success, Failure
 from spectralmc.storage import AsyncBlockchainModelStore
 
 
@@ -69,10 +70,13 @@ async def main() -> None:
 
             # Retrieve HEAD
             print("\n=== HEAD Pointer ===")
-            head = await store.get_head()
-            if head:
-                print(f"HEAD points to: {head.version_id}")
-                print(f"Commit message: {head.commit_message}")
+            head_result = await store.get_head()
+            match head_result:
+                case Success(head):
+                    print(f"HEAD points to: {head.version_id}")
+                    print(f"Commit message: {head.commit_message}")
+                case Failure(error):
+                    print(f"Error retrieving HEAD: {error}")
 
             # Retrieve specific version
             print("\n=== Retrieve Specific Version ===")

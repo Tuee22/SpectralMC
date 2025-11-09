@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from spectralmc.result import Success, Failure
 from spectralmc.storage import AsyncBlockchainModelStore
 
 
@@ -329,9 +330,12 @@ async def test_cli_gc_run_with_yes_flag(async_store: AsyncBlockchainModelStore) 
     assert "Deleted 2 versions" in result.stdout
 
     # Verify versions were actually deleted
-    head = await async_store.get_head()
-    assert head is not None
-    assert head.counter == 4  # Last version still exists
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(head):
+            assert head.counter == 4  # Last version still exists
+        case Failure(_):
+            pytest.fail("Expected HEAD to exist")
 
     # Version 0 should still exist (genesis is always protected)
     v0 = await async_store.get_version("v0000000000")

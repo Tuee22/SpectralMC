@@ -10,8 +10,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from ..result import Result, Success, Failure
 from .store import AsyncBlockchainModelStore
 from .chain import ModelVersion
+from .errors import HeadNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -105,15 +107,19 @@ class GarbageCollector:
             ValueError: If policy would delete too many versions
         """
         # Fetch all versions
-        head = await self.store.get_head()
-        if head is None:
-            # Empty chain, nothing to collect
-            return GCReport(
-                deleted_versions=[],
-                protected_versions=[],
-                bytes_freed=0,
-                dry_run=dry_run,
-            )
+        head_result = await self.store.get_head()
+
+        match head_result:
+            case Failure(_):
+                # Empty chain, nothing to collect
+                return GCReport(
+                    deleted_versions=[],
+                    protected_versions=[],
+                    bytes_freed=0,
+                    dry_run=dry_run,
+                )
+            case Success(head):
+                pass  # Continue with GC logic
 
         # Collect all version metadata
         versions: List[ModelVersion] = []

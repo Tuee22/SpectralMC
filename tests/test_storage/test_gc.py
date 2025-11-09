@@ -16,6 +16,7 @@ from spectralmc.storage import (
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.gbm import BlackScholesConfig, SimulationParams
 from spectralmc.models.numerical import Precision
+from spectralmc.result import Success, Failure
 
 
 def make_test_config(
@@ -193,9 +194,12 @@ async def test_gc_dry_run_vs_actual(async_store: AsyncBlockchainModelStore) -> N
     assert len(report_dry.deleted_versions) == 1  # v1 (v0 protected, v2-v4 recent)
 
     # Verify nothing actually deleted
-    head = await async_store.get_head()
-    assert head is not None
-    assert head.counter == 4
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(head):
+            assert head.counter == 4
+        case Failure(_):
+            pytest.fail("Expected HEAD")
 
     # All versions still exist
     for i in range(5):

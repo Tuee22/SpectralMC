@@ -14,9 +14,11 @@ from datetime import datetime
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
+from ..result import Result, Success, Failure
 from .store import AsyncBlockchainModelStore
 from .chain import ModelVersion
 from .checkpoint import load_snapshot_from_checkpoint
+from .errors import HeadNotFoundError
 from ..gbm_trainer import GbmCVNNPricerConfig
 
 logger = logging.getLogger(__name__)
@@ -153,12 +155,14 @@ class TensorBoardWriter:
             This is useful for initializing TensorBoard with historical data.
             For large chains, this may take a while.
         """
-        head = await self.store.get_head()
-        if head is None:
-            logger.info("No versions to log (empty chain)")
-            return
+        head_result = await self.store.get_head()
 
-        logger.info(f"Logging {head.counter + 1} versions to TensorBoard...")
+        match head_result:
+            case Success(head):
+                logger.info(f"Logging {head.counter + 1} versions to TensorBoard...")
+            case Failure(_):
+                logger.info("No versions to log (empty chain)")
+                return
 
         for counter in range(head.counter + 1):
             version_id = f"v{counter:010d}"
@@ -178,11 +182,13 @@ class TensorBoardWriter:
         - Total storage size estimate
         - Average versions per day
         """
-        head = await self.store.get_head()
-        if head is None:
-            return
+        head_result = await self.store.get_head()
 
-        total_versions = head.counter + 1
+        match head_result:
+            case Success(head):
+                total_versions = head.counter + 1
+            case Failure(_):
+                return
 
         # Log total versions
         self.writer.add_scalar("summary/total_versions", total_versions, global_step=0)

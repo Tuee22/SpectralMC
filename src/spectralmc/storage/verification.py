@@ -7,9 +7,10 @@ import logging
 from typing import Optional, List
 from dataclasses import dataclass
 
+from ..result import Result, Success, Failure
 from .store import AsyncBlockchainModelStore
 from .chain import ModelVersion
-from .errors import ChainCorruptionError
+from .errors import ChainCorruptionError, HeadNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -78,15 +79,19 @@ async def verify_chain_detailed(store: AsyncBlockchainModelStore) -> CorruptionR
         CorruptionReport with validation results
     """
     # Fetch HEAD
-    head = await store.get_head()
-    if head is None:
-        # Empty chain is valid (no corruption)
-        return CorruptionReport(
-            is_valid=True,
-            corrupted_version=None,
-            corruption_type=None,
-            details="Empty chain (no versions committed)",
-        )
+    head_result = await store.get_head()
+
+    match head_result:
+        case Failure(_):
+            # Empty chain is valid (no corruption)
+            return CorruptionReport(
+                is_valid=True,
+                corrupted_version=None,
+                corruption_type=None,
+                details="Empty chain (no versions committed)",
+            )
+        case Success(head):
+            pass  # Continue with verification
 
     # Fetch all versions from 0 to HEAD
     versions: List[ModelVersion] = []

@@ -8,6 +8,7 @@ import pytest
 from botocore.exceptions import ClientError
 from unittest.mock import patch
 
+from spectralmc.result import Success, Failure
 from spectralmc.storage import AsyncBlockchainModelStore
 
 
@@ -102,10 +103,13 @@ async def test_audit_log_failure_non_blocking(
         assert version.content_hash == content_hash
 
         # Verify HEAD was updated
-        head = await async_store.get_head()
-        assert head is not None
-        assert head.counter == 0
-        assert head.content_hash == content_hash
+        head_result = await async_store.get_head()
+        match head_result:
+            case Success(head):
+                assert head.counter == 0
+                assert head.content_hash == content_hash
+            case Failure(_):
+                pytest.fail("Expected HEAD to exist")
 
     # Verify no audit log entries were created (because it failed)
     assert async_store._s3_client is not None

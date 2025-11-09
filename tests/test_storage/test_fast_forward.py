@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from spectralmc.storage import AsyncBlockchainModelStore
 from spectralmc.storage.errors import ConflictError
+from spectralmc.result import Success, Failure
 
 
 @pytest.mark.asyncio
@@ -37,7 +38,7 @@ async def test_fast_forward_validation(async_store: AsyncBlockchainModelStore) -
 
     async def get_stale_head() -> object:
         """Return version1 as HEAD (stale)."""
-        return version1  # Return stale version
+        return Success(version1)  # Return stale version wrapped in Success
 
     # Prepare third checkpoint
     checkpoint3 = b"checkpoint 3"
@@ -79,7 +80,10 @@ async def test_fast_forward_validation(async_store: AsyncBlockchainModelStore) -
     assert "v0000000001_1.0.1_hash2" in version_dirs
 
     # Verify HEAD is still at version 2
-    head = await async_store.get_head()
-    assert head is not None
-    assert head.counter == 1
-    assert head.content_hash == hash2
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(head):
+            assert head.counter == 1
+            assert head.content_hash == hash2
+        case Failure(_):
+            pytest.fail("Expected HEAD")

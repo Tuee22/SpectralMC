@@ -1,19 +1,20 @@
 # examples/inference_client_pinned.py
 """
-Example: InferenceClient in pinned mode (production deployment).
+Example: InferenceClient with PinnedMode (production deployment).
 
-This demonstrates loading a specific model version and keeping it locked
-for stable, reproducible predictions. Ideal for A/B testing or production
-environments where you need version stability.
+This demonstrates loading a specific model version using PinnedMode and keeping
+it locked for stable, reproducible predictions. Ideal for A/B testing or
+production environments where you need version stability.
 """
 
 import asyncio
 import torch
 
-from spectralmc.storage import AsyncBlockchainModelStore, InferenceClient
+from spectralmc.storage import AsyncBlockchainModelStore, InferenceClient, PinnedMode
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.gbm import BlackScholesConfig, SimulationParams
 from spectralmc.models.numerical import Precision
+from spectralmc.result import Success, Failure
 
 
 async def main() -> None:
@@ -26,15 +27,17 @@ async def main() -> None:
     async with AsyncBlockchainModelStore(bucket_name) as store:
         # 2. Check available versions
         print("\n2. Fetching available versions")
-        head = await store.get_head()
-        if head is None:
-            print("   ERROR: No versions found in storage!")
-            print("   Run checkpoint_training_example.py first to create versions.")
-            return
-
-        print(f"   Latest version: {head.counter}")
-        print(f"   Semantic version: {head.semantic_version}")
-        print(f"   Content hash: {head.content_hash[:16]}...")
+        head_result = await store.get_head()
+        match head_result:
+            case Success(head):
+                print(f"   Latest version: {head.counter}")
+                print(f"   Semantic version: {head.semantic_version}")
+                print(f"   Content hash: {head.content_hash[:16]}...")
+            case Failure(error):
+                print(f"   ERROR: Failed to load model versions")
+                print(f"   Details: {error}")
+                print(f"   Please ensure blockchain storage is initialized.")
+                return
 
         # 3. Create model template for loading
         print("\n3. Creating model template")
@@ -81,7 +84,7 @@ async def main() -> None:
         print(f"   Mode: Pinned (never auto-updates)")
 
         client = InferenceClient(
-            version_counter=pinned_version,  # Pin to specific version
+            mode=PinnedMode(counter=pinned_version),  # Pin to specific version
             poll_interval=60.0,  # Ignored in pinned mode
             store=store,
             model_template=model_template,
@@ -140,8 +143,8 @@ async def main() -> None:
             await asyncio.sleep(1.0)
 
     print("\n✓ Example complete!")
-    print("\nKey points about pinned mode:")
-    print("  - Model version is locked at initialization")
+    print("\nKey points about PinnedMode:")
+    print("  - Model version is locked at initialization using PinnedMode(counter=N)")
     print("  - Never auto-updates, even if new versions available")
     print("  - Ideal for production stability and A/B testing")
     print("  - Reproducible predictions for same input")

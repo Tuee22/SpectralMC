@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 from spectralmc.storage import AsyncBlockchainModelStore
 from spectralmc.storage.errors import ConflictError
 from spectralmc.storage.store import _S3ResponseProtocol
+from spectralmc.result import Success, Failure
 
 
 @pytest.mark.asyncio
@@ -66,23 +67,26 @@ async def test_retry_on_throttling(async_store: AsyncBlockchainModelStore) -> No
         start_time = asyncio.get_event_loop().time()
 
         # get_head() uses get_object under the hood
-        head = await async_store.get_head()
+        head_result = await async_store.get_head()
 
         elapsed_time = asyncio.get_event_loop().time() - start_time
 
         # Verify it succeeded
-        assert head is not None
-        assert head.content_hash == content_hash
+        match head_result:
+            case Success(head):
+                assert head.content_hash == content_hash
 
-        # Verify it retried 3 times (call_count should be 4)
-        assert (
-            call_count == 4
-        ), f"Expected 4 calls (3 retries + 1 success), got {call_count}"
+                # Verify it retried 3 times (call_count should be 4)
+                assert (
+                    call_count == 4
+                ), f"Expected 4 calls (3 retries + 1 success), got {call_count}"
 
-        # Verify exponential backoff occurred (0.1 + 0.2 + 0.4 = 0.7s minimum)
-        assert (
-            elapsed_time >= 0.7
-        ), f"Expected at least 0.7s for 3 retries, got {elapsed_time:.3f}s"
+                # Verify exponential backoff occurred (0.1 + 0.2 + 0.4 = 0.7s minimum)
+                assert (
+                    elapsed_time >= 0.7
+                ), f"Expected at least 0.7s for 3 retries, got {elapsed_time:.3f}s"
+            case Failure(_):
+                pytest.fail("Expected HEAD")
 
 
 @pytest.mark.asyncio

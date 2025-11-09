@@ -47,11 +47,12 @@ import argparse
 import json
 from typing import NoReturn
 
+from ..result import Result, Success, Failure
 from .store import AsyncBlockchainModelStore
 from .verification import verify_chain, verify_chain_detailed, find_corruption
 from .gc import run_gc
 from .tensorboard_writer import log_blockchain_to_tensorboard
-from .errors import ChainCorruptionError
+from .errors import ChainCorruptionError, VersionNotFoundError, HeadNotFoundError
 
 
 async def cmd_verify(bucket_name: str, detailed: bool = False) -> int:
@@ -151,17 +152,18 @@ async def cmd_list_versions(bucket_name: str) -> int:
     """
     try:
         async with AsyncBlockchainModelStore(bucket_name) as store:
-            head = await store.get_head()
+            head_result = await store.get_head()
 
-            if head is None:
-                print(f"✓ No versions in bucket: {bucket_name}")
-                return 0
-
-            print(f"Versions in bucket '{bucket_name}':")
-            print(
-                f"{'Counter':<10} {'Version ID':<15} {'SemVer':<10} {'Content Hash':<16} {'Timestamp':<25}"
-            )
-            print("-" * 90)
+            match head_result:
+                case Failure(_):
+                    print(f"✓ No versions in bucket: {bucket_name}")
+                    return 0
+                case Success(head):
+                    print(f"Versions in bucket '{bucket_name}':")
+                    print(
+                        f"{'Counter':<10} {'Version ID':<15} {'SemVer':<10} {'Content Hash':<16} {'Timestamp':<25}"
+                    )
+                    print("-" * 90)
 
             for counter in range(head.counter + 1):
                 version_id = f"v{counter:010d}"

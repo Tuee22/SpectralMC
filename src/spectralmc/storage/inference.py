@@ -10,12 +10,46 @@ from dataclasses import dataclass
 
 import torch
 
+from ..result import Result, Success, Failure
 from .store import AsyncBlockchainModelStore
 from .chain import ModelVersion
 from .checkpoint import load_snapshot_from_checkpoint
+from .errors import HeadNotFoundError
 from ..gbm_trainer import GbmCVNNPricerConfig
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# InferenceMode ADT
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class PinnedMode:
+    """Pin to a specific version counter.
+
+    Attributes:
+        counter: Version counter to pin to (must be >= 0)
+    """
+
+    counter: int
+
+    def __post_init__(self) -> None:
+        """Validate counter is non-negative."""
+        if self.counter < 0:
+            raise ValueError(f"Version counter must be >= 0, got {self.counter}")
+
+
+@dataclass(frozen=True)
+class TrackingMode:
+    """Track latest version automatically with hot-swapping."""
+
+    pass
+
+
+# Union type for inference modes
+InferenceMode = PinnedMode | TrackingMode
 
 
 @dataclass(frozen=True)
@@ -23,12 +57,12 @@ class InferenceConfig:
     """Configuration for inference client.
 
     Attributes:
-        version_counter: Specific version to pin to (None = tracking mode)
+        mode: Inference mode (PinnedMode or TrackingMode)
         poll_interval: Seconds between polls in tracking mode
         store: Blockchain model store
     """
 
-    version_counter: Optional[int]
+    mode: InferenceMode
     poll_interval: float
     store: AsyncBlockchainModelStore
 
@@ -37,12 +71,12 @@ class InferenceClient:
     """
     Inference client with pinned or tracking mode.
 
-    **Pinned Mode** (version_counter is set):
+    **Pinned Mode** (PinnedMode):
     - Loads specific version on start
     - Never updates automatically
     - Use for production stability, A/B testing, reproducibility
 
-    **Tracking Mode** (version_counter is None):
+    **Tracking Mode** (TrackingMode):
     - Loads latest version on start
     - Polls for updates every poll_interval seconds
     - Hot-swaps model atomically when new version available
@@ -55,9 +89,11 @@ class InferenceClient:
 
     Usage:
         ```python
+        from spectralmc.storage import InferenceClient, PinnedMode, TrackingMode
+
         # Pinned mode (production)
         client = InferenceClient(
-            version_counter=42,
+            mode=PinnedMode(counter=42),
             poll_interval=60.0,
             store=store,
             model_template=model,
@@ -65,11 +101,12 @@ class InferenceClient:
         )
 
         async with client:
-            predictions = await client.predict(inputs)
+            model = client.get_model()
+            # Run inference...
 
         # Tracking mode (development)
         client = InferenceClient(
-            version_counter=None,  # Auto-track latest
+            mode=TrackingMode(),
             poll_interval=30.0,
             store=store,
             model_template=model,
@@ -78,44 +115,56 @@ class InferenceClient:
 
         async with client:
             # Model auto-updates every 30 seconds
-            predictions = await client.predict(inputs)
+            model = client.get_model()
+            # Run inference...
         ```
     """
 
     def __init__(
         self,
-        version_counter: Optional[int],
+        mode: InferenceMode,
         poll_interval: float,
         store: AsyncBlockchainModelStore,
         model_template: torch.nn.Module,
         config_template: GbmCVNNPricerConfig,
+        max_consecutive_failures: int = 5,
     ) -> None:
         """
         Initialize inference client.
 
         Args:
-            version_counter: Specific version to load (None = tracking mode)
+            mode: InferenceMode (PinnedMode or TrackingMode)
             poll_interval: Seconds between version polls (tracking mode only)
             store: AsyncBlockchainModelStore instance
             model_template: Empty model for loading weights into
             config_template: Config template for snapshot loading
+            max_consecutive_failures: Stop polling after this many failures (default: 5)
         """
-        self.version_counter = version_counter
+        self.mode = mode
         self.poll_interval = poll_interval
         self.store = store
         self.model_template = model_template
         self.config_template = config_template
+        self.max_consecutive_failures = max_consecutive_failures
 
         # Runtime state
         self._current_version: Optional[ModelVersion] = None
         self._current_snapshot: Optional[GbmCVNNPricerConfig] = None
         self._polling_task: Optional[asyncio.Task[None]] = None
         self._shutdown_event = asyncio.Event()
+        self._consecutive_failures: int = 0
 
-        logger.info(
-            f"InferenceClient initialized: mode={'pinned' if version_counter is not None else 'tracking'}, "
-            f"version={version_counter}, poll_interval={poll_interval}s"
-        )
+        match mode:
+            case PinnedMode(counter):
+                logger.info(
+                    f"InferenceClient initialized: mode=pinned, "
+                    f"version={counter}, poll_interval={poll_interval}s"
+                )
+            case TrackingMode():
+                logger.info(
+                    f"InferenceClient initialized: mode=tracking, "
+                    f"poll_interval={poll_interval}s"
+                )
 
     async def __aenter__(self) -> InferenceClient:
         """Enter async context manager, start client."""
@@ -140,26 +189,36 @@ class InferenceClient:
         """
         logger.info("Starting InferenceClient...")
 
-        # Load initial model
-        if self.version_counter is not None:
-            # Pinned mode: load specific version
-            version = await self._fetch_version_by_counter(self.version_counter)
-            logger.info(f"Pinned mode: loading version {self.version_counter}")
-        else:
-            # Tracking mode: load latest
-            head = await self.store.get_head()
-            if head is None:
-                raise ValueError("Cannot start tracking mode: no versions in store")
-            version = head
-            logger.info(f"Tracking mode: loading latest version {version.counter}")
+        # Load initial model based on mode
+        match self.mode:
+            case PinnedMode(counter):
+                # Pinned mode: load specific version
+                version = await self._fetch_version_by_counter(counter)
+                logger.info(f"Pinned mode: loading version {counter}")
+
+            case TrackingMode():
+                # Tracking mode: load latest
+                head_result = await self.store.get_head()
+                match head_result:
+                    case Success(version):
+                        logger.info(
+                            f"Tracking mode: loading latest version {version.counter}"
+                        )
+                    case Failure(error):
+                        raise ValueError(
+                            f"Cannot start tracking mode: no versions in store ({error})"
+                        )
 
         await self._load_version(version)
 
         # Start polling task in tracking mode
-        if self.version_counter is None:
-            self._shutdown_event.clear()
-            self._polling_task = asyncio.create_task(self._poll_loop())
-            logger.info(f"Started polling task (interval={self.poll_interval}s)")
+        match self.mode:
+            case TrackingMode():
+                self._shutdown_event.clear()
+                self._polling_task = asyncio.create_task(self._poll_loop())
+                logger.info(f"Started polling task (interval={self.poll_interval}s)")
+            case PinnedMode(_):
+                pass  # No polling in pinned mode
 
         logger.info(f"InferenceClient started with version {version.counter}")
 
@@ -237,26 +296,51 @@ class InferenceClient:
                     pass
 
                 # Fetch latest version
-                head = await self.store.get_head()
-                if head is None:
-                    logger.warning("No HEAD version found during poll")
-                    continue
+                head_result = await self.store.get_head()
 
-                # Check if newer version available
-                if self._current_version is None:
-                    continue
+                match head_result:
+                    case Success(head):
+                        # Reset failure counter on success
+                        self._consecutive_failures = 0
 
-                if head.counter > self._current_version.counter:
-                    logger.info(
-                        f"New version detected: {head.counter} "
-                        f"(current: {self._current_version.counter})"
-                    )
-                    await self._load_version(head)
-                    logger.info(f"Hot-swapped to version {head.counter}")
+                        # Check if newer version available
+                        if self._current_version is None:
+                            continue
+
+                        if head.counter > self._current_version.counter:
+                            logger.info(
+                                f"New version detected: {head.counter} "
+                                f"(current: {self._current_version.counter})"
+                            )
+                            await self._load_version(head)
+                            logger.info(f"Hot-swapped to version {head.counter}")
+
+                    case Failure(error):
+                        self._consecutive_failures += 1
+                        logger.warning(
+                            f"Failed to fetch HEAD during poll (attempt {self._consecutive_failures}/{self.max_consecutive_failures}): {error}"
+                        )
+
+                        if self._consecutive_failures >= self.max_consecutive_failures:
+                            logger.error(
+                                f"Circuit breaker triggered: {self._consecutive_failures} consecutive failures. "
+                                "Stopping polling loop."
+                            )
+                            break
 
             except Exception as e:
-                logger.error(f"Error in polling loop: {e}", exc_info=True)
-                # Continue polling despite errors
+                self._consecutive_failures += 1
+                logger.error(
+                    f"Unexpected error in polling loop (attempt {self._consecutive_failures}/{self.max_consecutive_failures}): {e}",
+                    exc_info=True,
+                )
+
+                if self._consecutive_failures >= self.max_consecutive_failures:
+                    logger.error(
+                        f"Circuit breaker triggered: {self._consecutive_failures} consecutive failures. "
+                        "Stopping polling loop."
+                    )
+                    break
 
         logger.info("Polling loop stopped")
 
@@ -300,13 +384,17 @@ class InferenceClient:
             ValueError: If version not found
         """
         # Get HEAD to find version ID
-        head = await self.store.get_head()
-        if head is None:
-            raise ValueError(f"Version {counter} not found: store is empty")
+        head_result = await self.store.get_head()
 
-        # If requesting HEAD, return it
-        if counter == head.counter:
-            return head
+        match head_result:
+            case Success(head):
+                # If requesting HEAD, return it
+                if counter == head.counter:
+                    return head
+            case Failure(error):
+                raise ValueError(
+                    f"Version {counter} not found: store is empty ({error})"
+                )
 
         # Otherwise, fetch by version ID
         # Version ID format: v{counter:010d}

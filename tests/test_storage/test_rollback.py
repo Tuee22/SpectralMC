@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 from spectralmc.storage import AsyncBlockchainModelStore
 from spectralmc.storage.errors import ConflictError, CommitError
 from spectralmc.storage.store import _S3ResponseProtocol, JsonDict
+from spectralmc.result import Success, Failure
 
 
 @pytest.mark.asyncio
@@ -64,8 +65,11 @@ async def test_rollback_on_cas_failure(async_store: AsyncBlockchainModelStore) -
         result = await original_get_object(*args, **kwargs)
         if kwargs.get("Key") == "chain.json":
             # Return the old ETag to force conflict - we need to mutate the response
-            # This is safe because we control the mock
-            result["ETag"] = f'"{etag1}"'  # type: ignore[index]
+            # This is safe because we control the mock, cast allows mutation
+            from typing import cast as typing_cast
+
+            mutable_result = typing_cast(dict[str, object], result)
+            mutable_result["ETag"] = f'"{etag1}"'
         return result
 
     # Patch get_object to return stale ETag
@@ -91,10 +95,13 @@ async def test_rollback_on_cas_failure(async_store: AsyncBlockchainModelStore) -
     assert exc_info.value.response["Error"]["Code"] == "404"
 
     # Verify chain.json is still at version 2 (not corrupted)
-    head = await async_store.get_head()
-    assert head is not None
-    assert head.counter == 1
-    assert head.content_hash == hash2
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(value=head):
+            assert head.counter == 1
+            assert head.content_hash == hash2
+        case Failure(error=_):
+            pytest.fail("Expected get_head() to return Success")
 
 
 @pytest.mark.asyncio

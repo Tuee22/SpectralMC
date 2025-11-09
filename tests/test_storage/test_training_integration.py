@@ -26,6 +26,7 @@ from spectralmc.gbm_trainer import (
 )
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import DType as TorchDTypeEnum
+from spectralmc.result import Success, Failure
 from spectralmc.sobol_sampler import BoundSpec
 from spectralmc.storage import AsyncBlockchainModelStore, commit_snapshot
 
@@ -185,8 +186,12 @@ async def test_training_without_storage_backward_compat(
     pricer.train(training_config)
 
     # Verify no commits were created
-    head = await async_store.get_head()
-    assert head is None  # No versions in store
+    head_result = await async_store.get_head()
+    match head_result:
+        case Failure(_):
+            pass  # Expected - no versions in store
+        case Success(_):
+            pytest.fail("Expected no HEAD since we didn't commit to store")
 
 
 @pytest.mark.gpu

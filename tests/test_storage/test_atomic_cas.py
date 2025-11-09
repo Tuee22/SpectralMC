@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 from botocore.exceptions import ClientError
 
+from spectralmc.result import Success, Failure
 from spectralmc.storage import AsyncBlockchainModelStore
 
 
@@ -151,8 +152,12 @@ async def test_genesis_commit_no_etag(async_store: AsyncBlockchainModelStore) ->
     an ETag for the CAS operation.
     """
     # Verify bucket is empty
-    head = await async_store.get_head()
-    assert head is None, "Bucket should start empty"
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(_):
+            pytest.fail("Bucket should start empty")
+        case Failure(_):
+            pass  # Expected - no HEAD yet
 
     # Genesis commit should succeed without ETag
     checkpoint = b"genesis checkpoint"
@@ -166,7 +171,10 @@ async def test_genesis_commit_no_etag(async_store: AsyncBlockchainModelStore) ->
     assert version.commit_message == "Genesis"
 
     # Verify HEAD was set
-    head = await async_store.get_head()
-    assert head is not None
-    assert head.counter == 0
-    assert head.content_hash == content_hash
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(head):
+            assert head.counter == 0
+            assert head.content_hash == content_hash
+        case Failure(_):
+            pytest.fail("Expected HEAD to exist")

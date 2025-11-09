@@ -16,12 +16,15 @@ import torch
 from spectralmc.gbm import BlackScholesConfig, SimulationParams
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
+from spectralmc.result import Success, Failure
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     commit_snapshot,
     load_snapshot_from_checkpoint,
     verify_chain,
     InferenceClient,
+    PinnedMode,
+    TrackingMode,
 )
 from spectralmc.storage.gc import run_gc
 from spectralmc.storage.errors import ChainCorruptionError, VersionNotFoundError
@@ -139,9 +142,12 @@ async def test_e2e_concurrent_commits(async_store: AsyncBlockchainModelStore) ->
     await asyncio.gather(*tasks)
 
     # Verify all commits succeeded
-    head = await async_store.get_head()
-    assert head is not None
-    assert head.counter == 4  # 5 commits = counters 0-4
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(head):
+            assert head.counter == 4  # 5 commits = counters 0-4
+        case Failure(_):
+            pytest.fail("Expected HEAD to exist")
 
     # Verify chain integrity
     await verify_chain(async_store)
@@ -172,7 +178,7 @@ async def test_e2e_inference_client_hot_swap(
 
     # Start InferenceClient in tracking mode (poll_interval = 0.5s)
     async with InferenceClient(
-        version_counter=None,  # Track HEAD
+        mode=TrackingMode(),  # Track HEAD
         poll_interval=0.5,
         store=async_store,
         model_template=model_template,
@@ -220,7 +226,7 @@ async def test_e2e_pinned_inference_client(
 
     # Pin to version 2
     async with InferenceClient(
-        version_counter=2,  # Pin to v2
+        mode=PinnedMode(counter=2),  # Pin to v2
         poll_interval=0.5,
         store=async_store,
         model_template=model_template,
@@ -335,8 +341,12 @@ async def test_e2e_version_history_traversal(
         versions.append(version.content_hash)
 
     # Traverse backward from HEAD to genesis
-    current = await async_store.get_head()
-    assert current is not None
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(current):
+            pass
+        case Failure(_):
+            pytest.fail("Expected HEAD to exist")
 
     traversed = []
     while current is not None:
@@ -437,9 +447,12 @@ async def test_e2e_concurrent_gc_and_commits(
     # Just verify operations completed without crashes
 
     # Verify we have commits from both workers
-    head = await async_store.get_head()
-    assert head is not None
-    assert head.counter >= 10  # At least initial 10 + some new commits
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(head):
+            assert head.counter >= 10  # At least initial 10 + some new commits
+        case Failure(_):
+            pytest.fail("Expected HEAD to exist")
 
 
 @pytest.mark.asyncio
@@ -452,8 +465,8 @@ async def test_e2e_empty_chain_operations(
     await verify_chain(async_store)
 
     # Get HEAD of empty chain
-    head = await async_store.get_head()
-    assert head is None
+    head_result = await async_store.get_head()
+    assert head_result.is_failure()
 
     # GC on empty chain
     report = await run_gc(async_store, keep_versions=10, dry_run=True)
@@ -543,9 +556,12 @@ async def test_e2e_audit_log_integrity(async_store: AsyncBlockchainModelStore) -
 
     # Audit log should exist (actual validation would require reading log files)
     # For now, just verify operations completed without error
-    head = await async_store.get_head()
-    assert head is not None
-    assert head.counter >= 7
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(head):
+            assert head.counter >= 7
+        case Failure(_):
+            pytest.fail("Expected HEAD to exist")
 
 
 @pytest.mark.asyncio

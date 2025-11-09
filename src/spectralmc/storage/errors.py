@@ -59,6 +59,38 @@ class ChainCorruptionError(StorageError):
     pass
 
 
+class HeadNotFoundError(StorageError):
+    """HEAD pointer not found in storage."""
+
+    def __init__(self) -> None:
+        super().__init__("HEAD pointer not found. Chain may be uninitialized.")
+
+
+class AuditLogError(StorageError):
+    """Failed to append to audit log (non-fatal)."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(f"Audit log error: {message}")
+
+
+class S3Error(StorageError):
+    """S3 operation failed (retriable)."""
+
+    def __init__(self, operation: str, message: str) -> None:
+        self.operation = operation
+        self.message = message
+        super().__init__(f"S3 {operation} failed: {message}")
+
+
+class DataCorruptionError(StorageError):
+    """Data corruption detected (fatal, non-retriable)."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(f"Data corruption: {message}")
+
+
 __all__ = [
     "StorageError",
     "CommitError",
@@ -67,4 +99,8 @@ __all__ = [
     "ChecksumError",
     "VersionNotFoundError",
     "ChainCorruptionError",
+    "HeadNotFoundError",
+    "AuditLogError",
+    "S3Error",
+    "DataCorruptionError",
 ]

@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 import torch
 
+from spectralmc.result import Success, Failure
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     commit_snapshot,
@@ -96,9 +97,12 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
     assert version.commit_message == "Test checkpoint"
 
     # Verify checkpoint was stored
-    head = await async_store.get_head()
-    assert head is not None
-    assert head.counter == version.counter
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(head):
+            assert head.counter == version.counter
+        case Failure(_):
+            pytest.fail("Expected HEAD to exist")
 
     # Load checkpoint back
     new_model = torch.nn.Sequential(
@@ -197,10 +201,13 @@ async def test_checkpoint_multiple_commits(
             assert version.parent_hash == versions[i - 1].content_hash
 
     # Verify HEAD
-    head = await async_store.get_head()
-    assert head is not None
-    assert head.counter == 4
-    assert head.commit_message == "Epoch 4"
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(head):
+            assert head.counter == 4
+            assert head.commit_message == "Epoch 4"
+        case Failure(_):
+            pytest.fail("Expected HEAD to exist")
 
 
 @pytest.mark.asyncio
