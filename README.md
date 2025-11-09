@@ -155,6 +155,74 @@ tensorboard --logdir=runs/
 
 For complete documentation, see [CLAUDE.md](CLAUDE.md).
 
+## Testing
+
+SpectralMC enforces poetry-based test execution to ensure consistency across environments. All tests must run via poetry commands inside the Docker container.
+
+### Running Tests
+
+**All commands must run inside the Docker container:**
+
+```bash
+# Start the container
+cd docker && docker compose up -d
+
+# Run all tests (CPU + GPU)
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
+
+# Run with verbose output
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all -v
+
+# Run only CPU tests (excludes @pytest.mark.gpu)
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all -m 'not gpu'
+
+# Run only GPU tests
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all -m gpu
+
+# Run specific test file
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_gbm.py
+
+# Run specific test function
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_gbm.py::test_gbm_simulation
+
+# Run tests matching keyword
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all -k "sobol"
+
+# Run with coverage report
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all --cov=spectralmc --cov-report=term-missing
+
+# Stop on first failure
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all -x
+```
+
+### Important Testing Rules
+
+**REQUIRED by CLAUDE.md:**
+- ❌ **NEVER** run `pytest` directly (blocked by Dockerfile)
+- ❌ **NEVER** use timeout commands with tests (blocked by Dockerfile)
+- ✅ **ALWAYS** use `poetry run test-all` (with or without arguments)
+- ✅ **ALWAYS** redirect test output to files for complete analysis:
+  ```bash
+  docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all > /tmp/test-output.txt 2>&1
+  ```
+
+### Test Organization
+
+- **Test directory**: `tests/`
+- **Default behavior**: Excludes GPU tests (`-m 'not gpu'` in `pyproject.toml`)
+- **GPU tests**: Marked with `@pytest.mark.gpu` decorator
+- **Fixtures**: Global GPU memory cleanup in `tests/conftest.py`
+
+### Type Checking
+
+Run mypy from repository root (no path arguments):
+
+```bash
+docker compose -f docker/docker-compose.yml exec spectralmc mypy
+```
+
+This checks all configured paths (`src/spectralmc`, `tests`, `examples`) per `pyproject.toml`.
+
 ## Contribution
 
 We welcome contributions to SpectralMC. A few steps: 

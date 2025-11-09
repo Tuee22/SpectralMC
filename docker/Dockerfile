@@ -73,6 +73,23 @@ RUN poetry install --with dev --no-interaction
 # validate code with mypy
 #RUN mypy /spectralmc/src/spectralmc /spectralmc/tests --strict --no-incremental && rm -rf .mypy_cache
 
+# 11.5) Enforce CLAUDE.md testing policies: Block direct pytest and timeout commands
+# Block direct pytest command (python -m pytest still works for Poetry scripts)
+# Poetry installs to /usr/local/bin, so we override that location
+RUN if [ -f /usr/local/bin/pytest ]; then mv /usr/local/bin/pytest /usr/local/bin/pytest.real; fi && \
+    echo '#!/bin/sh\necho "❌ ERROR: Direct pytest forbidden per CLAUDE.md"\necho "✅ USE: poetry run test-all [pytest-args]"\necho "📖 Examples:"\necho "  poetry run test-all              # Run all tests"\necho "  poetry run test-all -v           # Verbose output"\necho "  poetry run test-all -m gpu       # GPU tests only"\necho "📖 Reference: CLAUDE.md testing policies"\nexit 1' > /usr/local/bin/pytest && \
+    chmod +x /usr/local/bin/pytest
+
+# Also block /usr/bin/pytest in case it exists
+RUN if [ -f /usr/bin/pytest ]; then mv /usr/bin/pytest /usr/bin/pytest.real; fi && \
+    echo '#!/bin/sh\necho "❌ ERROR: Direct pytest forbidden per CLAUDE.md"\necho "✅ USE: poetry run test-all [pytest-args]"\necho "📖 Reference: CLAUDE.md testing policies"\nexit 1' > /usr/bin/pytest && \
+    chmod +x /usr/bin/pytest
+
+# Block timeout usage with test commands but allow other timeout usage
+RUN if [ -f /usr/bin/timeout ]; then mv /usr/bin/timeout /usr/bin/timeout.real; fi && \
+    echo '#!/bin/sh\nif echo "$*" | grep -qE "(pytest|test-|test_)"; then\n  echo "❌ ERROR: Timeout commands with tests forbidden per CLAUDE.md"\n  echo "✅ USE: poetry run test-all [pytest-args]"\n  echo "📖 Tests complete when they complete - patience required"\n  exit 1\nfi\nexec /usr/bin/timeout.real "$@"' > /usr/bin/timeout && \
+    chmod +x /usr/bin/timeout
+
 # 12) Expose port 6006 & 8888
 EXPOSE 6006 8888
 

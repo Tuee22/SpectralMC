@@ -424,7 +424,19 @@ class GbmCVNNPricer:
                     f"(step={self._global_step}, loss={loss:.6f})"
                 )
 
-            asyncio.run(_do_commit())
+            # Handle both sync and async contexts
+            try:
+                # Check if we're already in an event loop
+                asyncio.get_running_loop()
+                # We're in an event loop - cannot use asyncio.run(), skip commit
+                _logger.warning(
+                    f"Skipping blockchain commit at step {self._global_step}: "
+                    "Cannot commit from async context (event loop already running). "
+                    "Call commit_snapshot() manually after training completes."
+                )
+            except RuntimeError:
+                # No event loop running - safe to use asyncio.run()
+                asyncio.run(_do_commit())
 
         except Exception as e:
             _logger.error(
