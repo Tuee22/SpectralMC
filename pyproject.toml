@@ -158,4 +158,7 @@ filterwarnings = [
     # See: https://github.com/boto/botocore/issues/3201
     "ignore::DeprecationWarning:botocore.*",
     "ignore::DeprecationWarning:aiobotocore.*",
+    # Suppress Numba grid size warnings in tests (expected for small test datasets)
+    # Production code uses large grids (524K blocks) without occupancy issues
+    "ignore:Grid size.*will likely result in GPU under-utilization::numba.cuda.dispatcher",
 ]
