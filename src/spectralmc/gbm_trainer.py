@@ -578,8 +578,10 @@ class GbmCVNNPricer:
 
             # ── CVNN step (Torch) ────────────────────────────────────── #
             with torch.cuda.stream(self._context.torch_stream):
+                # torch.from_dlpack() exists in PyTorch 2.7.0 but type stubs are incomplete
+                # This is the modern, non-deprecated API (replaces torch.utils.dlpack.from_dlpack)
                 targets = (
-                    torch.utils.dlpack.from_dlpack(fft_buf.toDlpack())
+                    torch.from_dlpack(fft_buf)  # type: ignore[attr-defined]
                     .to(self._torch_cdtype)
                     .detach()
                 )

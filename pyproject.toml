@@ -149,7 +149,13 @@ markers   = [
 ]
 filterwarnings = [
     # Hide SWIG-generated DeprecationWarnings raised while importing QuantLib
-    "ignore::DeprecationWarning:.*QuantLib.*",
+    # Pattern matches SWIG type definition warnings from <frozen importlib._bootstrap>
+    # Module pattern restricts to importlib only (prevents accidentally hiding SpectralMC warnings)
+    "ignore:builtin type .* has no __module__ attribute:DeprecationWarning:.*importlib.*",
     # Hide IFFT imaginary component warnings in tests (expected for untrained models)
     "ignore:IFFT imaginary component.*exceeds tolerance:RuntimeWarning",
+    # Hide botocore datetime.utcnow() DeprecationWarnings (AWS SDK internal code, waiting for upstream fix)
+    # See: https://github.com/boto/botocore/issues/3201
+    "ignore::DeprecationWarning:botocore.*",
+    "ignore::DeprecationWarning:aiobotocore.*",
 ]
