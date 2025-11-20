@@ -52,10 +52,11 @@ scipy            = ">=1.13,<2.0"
 scikit-learn     = ">=1.6,<2.0"
 
 # --- PyTorch 2.7.0 compiled for CUDA 12.8 (sm_120) ------------------------- #
-torch            = { version = "2.7.0+cu128", source = "pytorch-cu128" }
+# GPU dependencies marked as optional - installed conditionally based on compute capability
+torch            = { version = "2.7.0+cu128", source = "pytorch-cu128", optional = true }
 safetensors      = ">=0.5.3,<1.0"
 stable_baselines3 = ">=2.6,<3.0"
-cupy-cuda12x     = ">=13.4,<14.0"
+cupy-cuda12x     = { version = ">=13.4,<14.0", optional = true }
 numba            = ">=0.61,<1.0"
 pystan           = ">=3.10,<4.0"
 pymc             = ">=5.22,<6.0"
@@ -73,6 +74,13 @@ tensorboard = ">=2.19.0,<3.0"
 pydantic           = { version = ">=2.9,<3.0", extras = ["mypy"] }
 pydantic_settings  = ">=2.7,<3.0"
 
+# --------------------------------------------------------------------------- #
+#                            E X T R A S                                      #
+# --------------------------------------------------------------------------- #
+[tool.poetry.extras]
+# GPU binary packages (installed for modern GPUs with compute capability >= 6.0)
+# Older GPUs (< 6.0) build these from source instead
+binary-gpu = ["torch", "cupy-cuda12x"]
 
 # --------------------------------------------------------------------------- #
 #                       D E V   &   T E S T   D E P S                         #

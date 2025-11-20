@@ -61,19 +61,27 @@ RUN curl -sSL https://install.python-poetry.org | python3.12 -
 # Configure Poetry to not use virtual environments
 RUN poetry config virtualenvs.create false
     
-# 9) Copy repo contents
-COPY ./ /spectralmc
-
-# 10) Work in /spectralmc
+# 9) Work in /spectralmc
 WORKDIR /spectralmc
 
-# 11) install dependencies system-wide
-RUN poetry install --with dev --no-interaction
+# 10) Copy dependency files first (for better caching)
+COPY pyproject.toml ./
+
+# 11) Copy GPU detection and build script
+COPY docker/detect_gpu_and_build.sh /tmp/detect_gpu_and_build.sh
+RUN chmod +x /tmp/detect_gpu_and_build.sh
+
+# 12) Run adaptive GPU detection and build
+# Note: No cache mounts because we need DOCKER_BUILDKIT=0 for GPU access
+RUN bash /tmp/detect_gpu_and_build.sh
+
+# 13) Copy rest of repo contents
+COPY ./ /spectralmc
 
 # validate code with mypy
 #RUN mypy /spectralmc/src/spectralmc /spectralmc/tests --strict --no-incremental && rm -rf .mypy_cache
 
-# 11.5) Enforce CLAUDE.md testing policies: Block direct pytest and timeout commands
+# 14) Enforce CLAUDE.md testing policies: Block direct pytest and timeout commands
 # Block direct pytest command (python -m pytest still works for Poetry scripts)
 # Poetry installs to /usr/local/bin, so we override that location
 RUN if [ -f /usr/local/bin/pytest ]; then mv /usr/local/bin/pytest /usr/local/bin/pytest.real; fi && \
@@ -90,9 +98,9 @@ RUN if [ -f /usr/bin/timeout ]; then mv /usr/bin/timeout /usr/bin/timeout.real; 
     echo '#!/bin/sh\nif echo "$*" | grep -qE "(pytest|test-|test_)"; then\n  echo "❌ ERROR: Timeout commands with tests forbidden per CLAUDE.md"\n  echo "✅ USE: poetry run test-all [pytest-args]"\n  echo "📖 Tests complete when they complete - patience required"\n  exit 1\nfi\nexec /usr/bin/timeout.real "$@"' > /usr/bin/timeout && \
     chmod +x /usr/bin/timeout
 
-# 12) Expose port 6006 & 8888
+# 15) Expose port 6006 & 8888
 EXPOSE 6006 8888
 
-# 13) Default command to run Jupyter
+# 16) Default command to run Jupyter
 CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", \
      "--NotebookApp.token=", "--NotebookApp.password=", "--notebook-dir=/spectralmc"]

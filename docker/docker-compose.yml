@@ -1,6 +1,24 @@
 # docker/docker-compose.yml
 #
 # Build once, re-use everywhere; no remote pulls.
+#
+# IMPORTANT: GPU Detection During Build
+# --------------------------------------
+# The Dockerfile detects GPU compute capability during build via nvidia-smi.
+# This requires GPU access in the build environment.
+#
+# To build with GPU detection:
+#   DOCKER_BUILDKIT=0 docker compose build spectralmc
+#
+# Why DOCKER_BUILDKIT=0?
+# - Legacy builder supports --gpus flag via Docker daemon GPU access
+# - BuildKit doesn't support GPU during build (nvidia-smi won't work)
+#
+# If GPU isn't available during build:
+# - Build will default to CPU-only mode
+# - To rebuild with GPU: stop containers, rebuild with DOCKER_BUILDKIT=0
+#
+# See docs/GPU_BUILD_TROUBLESHOOTING.md for details
 
 services:
 # --------------------------------------------------------------------------- #
@@ -53,6 +71,8 @@ services:
     build:
       context: ..                          # repo root
       dockerfile: docker/Dockerfile
+      # Note: GPU detection happens during build (see header comments)
+      # Use: DOCKER_BUILDKIT=0 docker compose build spectralmc
     image: spectralmc:local
     pull_policy: "never"                   # never reach out to a registry
     depends_on:
