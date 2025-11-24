@@ -438,73 +438,31 @@ docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc 
 - ✅ Review ALL stdout/stderr output before drawing conclusions
 - ✅ Let tests complete naturally, read full results
 
-## 🎮 GPU Compute Capability Support
+## 🎮 GPU Support
 
-SpectralMC automatically detects GPU compute capability during Docker build and adapts installation:
+SpectralMC uses pre-compiled GPU packages by default, with an option to build from source for legacy GPUs.
 
-### Automatic Detection
-- **Compute Capability ≥ 6.0** (Pascal/Turing/Ampere/Ada): Pre-compiled binaries (~5-10 min build)
-- **Compute Capability 5.x** (Maxwell GTX 970/980): Source compilation (~2-4 hours first build)
-- **Compute Capability < 5.0** or **No GPU**: CPU-only mode
-
-### Supported Hardware
-| GPU Family | Examples | Compute Cap | Install Method | Build Time |
-|------------|----------|-------------|----------------|------------|
-| Ada Lovelace | RTX 4090/4080 | 8.9 | Binary | 5-10 min |
-| Ampere | RTX 3090/3080/3070, A100 | 8.0/8.6 | Binary | 5-10 min |
-| Turing | RTX 2080 Ti, GTX 1660 | 7.5 | Binary | 5-10 min |
-| Pascal | GTX 1080 Ti/1070/1060 | 6.1 | Binary | 5-10 min |
-| **Maxwell** | **GTX 970/980** | **5.2** | **Source** | **2-4 hours** |
-| Kepler | GTX 780 Ti | 3.5 | Source | 2-4 hours |
-
-### Build Process
+### Usage
 ```bash
-# Build with GPU detection (IMPORTANT: use legacy builder for GPU access)
-cd docker
-DOCKER_BUILDKIT=0 docker compose build spectralmc
+# Standard build (pre-compiled binaries, works for most GPUs)
+docker compose -f docker/docker-compose.yml up --build -d
 
-# Output example (GTX 970):
-# ✓ Detected GPU: NVIDIA GeForce GTX 970
-# ✓ Compute capability: 5.2 (sm_52)
-# >>> Building PyTorch and CuPy from source for legacy GPU (sm_52)
-# [2-4 hour compilation - run overnight]
-# ✓ PyTorch built successfully for sm_52
-# ✓ CuPy built successfully for sm_52
-
-# Start services
-docker compose up -d
-
-# Verify GPU operations work
-docker compose exec spectralmc bash scripts/verify_gpu_build.sh
-
-# Expected output:
-# GPU: NVIDIA GeForce GTX 970
-# Compute Capability: 5.2
-# ✓ PyTorch GPU matmul: (1000, 1000)
-# ✓ CuPy GPU dot product: (1000, 1000)
-# === All GPU operations successful ===
+# Build from source (for legacy GPUs like GTX 970 with compute capability < 6.0)
+BUILD_FROM_SOURCE=true docker compose -f docker/docker-compose.yml up --build -d
 ```
 
-### Why DOCKER_BUILDKIT=0?
-- **Legacy builder** allows GPU access during build (nvidia-smi detection)
-- **BuildKit** doesn't support `--gpus` flag during build
-- Without GPU access, build defaults to CPU-only mode
+### When to Build from Source
+Use `BUILD_FROM_SOURCE=true` if you have a legacy GPU with compute capability < 6.0:
+- **Maxwell GPUs**: GTX 970, GTX 980 (compute capability 5.2)
+- **Kepler GPUs**: GTX 780 Ti (compute capability 3.5)
 
-### Rebuild Triggers
-Docker will rebuild from source when:
-- GPU hardware changes (different compute capability detected)
-- PyTorch/CuPy version updates in `pyproject.toml`
-- CUDA toolkit version changes in Dockerfile base image
-
-Subsequent builds use Docker layer cache, so code changes rebuild in ~1-2 minutes (not 2-4 hours).
+Source builds take 2-4 hours but only need to run once (cached in Docker layers).
 
 ### GPU Memory Configuration
 Tests are configured for **4GB VRAM minimum**:
 - `test_gbm.py` uses 131,072 batches (~1.3GB GPU RAM)
 - Larger GPUs can increase `_BATCHES_PER_RUN` for faster convergence
 - Smaller GPUs (<4GB) should reduce batch size further
-
-See `docs/GPU_BUILD_TROUBLESHOOTING.md` for common issues and solutions.
 
 ## 🔍 Type Safety
 

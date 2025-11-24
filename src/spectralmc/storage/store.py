@@ -516,14 +516,16 @@ class AsyncBlockchainModelStore:
         head_result = await self.get_head()
 
         # Step 3: Build ModelVersion metadata
+        current_head: Optional[ModelVersion] = None
         match head_result:
             case Failure(_):
                 # Genesis commit
                 version = create_genesis_version(
                     content_hash, message or "Genesis version"
                 )
-            case Success(current_head):
+            case Success(head):
                 # Incremental commit
+                current_head = head
                 new_counter = current_head.counter + 1
                 new_semver = bump_semantic_version(
                     current_head.semantic_version, "patch"

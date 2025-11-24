@@ -1,24 +1,13 @@
 # docker/docker-compose.yml
 #
-# Build once, re-use everywhere; no remote pulls.
+# SpectralMC Docker Compose - GTX 970 Source Build
 #
-# IMPORTANT: GPU Detection During Build
-# --------------------------------------
-# The Dockerfile detects GPU compute capability during build via nvidia-smi.
-# This requires GPU access in the build environment.
+# Builds PyTorch and CuPy from source with sm_52 support for Maxwell GPUs
 #
-# To build with GPU detection:
-#   DOCKER_BUILDKIT=0 docker compose build spectralmc
+# Build and start:
+#   docker compose up --build -d
 #
-# Why DOCKER_BUILDKIT=0?
-# - Legacy builder supports --gpus flag via Docker daemon GPU access
-# - BuildKit doesn't support GPU during build (nvidia-smi won't work)
-#
-# If GPU isn't available during build:
-# - Build will default to CPU-only mode
-# - To rebuild with GPU: stop containers, rebuild with DOCKER_BUILDKIT=0
-#
-# See docs/GPU_BUILD_TROUBLESHOOTING.md for details
+# Note: First build takes 2-4 hours (PyTorch + CuPy compilation)
 
 name: spectralmc
 
@@ -32,7 +21,7 @@ services:
     restart: unless-stopped
     command: server /data --console-address ":9001"
     volumes:
-      - ../.miniodata/minio:/data                # persistent host path
+      - minio-data:/data                         # persistent docker volume
     environment:
       MINIO_ROOT_USER:     minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -73,8 +62,8 @@ services:
     build:
       context: ..                          # repo root
       dockerfile: docker/Dockerfile
-      # Note: GPU detection happens during build (see header comments)
-      # Use: DOCKER_BUILDKIT=0 docker compose build spectralmc
+      args:
+        BUILDKIT_INLINE_CACHE: "1"
     image: spectralmc:local
     pull_policy: "never"                   # never reach out to a registry
     depends_on:
@@ -84,6 +73,8 @@ services:
     platform: linux/amd64
     volumes:
       - ..:/spectralmc                     # live code sync
+      - pip-cache:/root/.cache/pip         # persist pip cache for fast restarts
+      - poetry-cache:/root/.cache/pypoetry # persist poetry cache
     ports:
       - "8888:8888"                        # JupyterLab
     environment:
@@ -109,15 +100,12 @@ services:
 # --------------------------------------------------------------------------- #
   tensorboard:
     container_name: spectralmc-tensorboard
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
     image: spectralmc:local
     pull_policy: "never"
     depends_on:
       - minio
       - createbuckets
-      - spectralmc                        # ensures image exists before run
+      - spectralmc                        # ensures image is built first
     restart: unless-stopped
     command: >
       tensorboard --bind_all
@@ -144,3 +132,11 @@ networks:
   spectralmc-net:
     name: spectralmc-net
     driver: bridge
+
+# --------------------------------------------------------------------------- #
+# Volumes - persist cache for fast subsequent startups                        #
+# --------------------------------------------------------------------------- #
+volumes:
+  pip-cache:
+  poetry-cache:
+  minio-data:
