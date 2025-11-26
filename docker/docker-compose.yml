@@ -64,6 +64,7 @@ services:
       dockerfile: docker/Dockerfile
       args:
         BUILDKIT_INLINE_CACHE: "1"
+        BUILD_FROM_SOURCE: "${BUILD_FROM_SOURCE:-false}"
     image: spectralmc:local
     pull_policy: "never"                   # never reach out to a registry
     depends_on:

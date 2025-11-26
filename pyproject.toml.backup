@@ -9,20 +9,19 @@ packages = [
 ]
 
 # --------------------------------------------------------------------------- #
+#        P Y T O R C H   C U D A   1 1 . 8   W H E E L   S O U R C E          #
+# --------------------------------------------------------------------------- #
+[[tool.poetry.source]]
+name     = "pytorch-cu118"
+url      = "https://download.pytorch.org/whl/cu118"
+priority = "explicit"   # only used when a dependency asks for it
+
+
+# --------------------------------------------------------------------------- #
 #                       R U N T I M E   D E P E N D E N C I E S               #
 # --------------------------------------------------------------------------- #
 [tool.poetry.dependencies]
 python = ">=3.12,<3.13"
-
-# ============================================================================
-# PYTORCH SOURCE BUILD DEPENDENCIES
-# These must be installed BEFORE building PyTorch from source
-# ============================================================================
-pyyaml            = ">=6.0,<7.0"
-typing-extensions = ">=4.0,<5.0"
-fastrlock         = ">=0.8,<1.0"
-setuptools        = ">=68.0,<69.0"
-wheel             = ">=0.41,<1.0"
 
 # core
 numpy          = ">=2.0,<3.0"
@@ -53,11 +52,11 @@ scipy            = ">=1.13,<2.0"
 scikit-learn     = ">=1.6,<2.0"
 
 # --- PyTorch 2.1.2 with CUDA 11.8 (sm_52 support for GTX 970) -------------- #
-# Building PyTorch from source instead of using binary wheels (GTX 970 sm_52 support)
-# torch            = { version = "2.1.2+cu118", source = "pytorch-cu118", optional = true }
+# GPU dependencies marked as optional - installed conditionally based on compute capability
+torch            = { version = "2.1.2+cu118", source = "pytorch-cu118", optional = true }
 safetensors      = ">=0.5.3,<1.0"
 stable_baselines3 = ">=2.6,<3.0"
-cupy-cuda11x     = ">=13.0,<14.0"
+cupy-cuda11x     = { version = "12.3.0", optional = true }
 numba            = ">=0.61,<1.0"
 pystan           = ">=3.10,<4.0"
 pymc             = ">=5.22,<6.0"
@@ -75,17 +74,30 @@ tensorboard = ">=2.19.0,<3.0"
 pydantic           = { version = ">=2.9,<3.0", extras = ["mypy"] }
 pydantic_settings  = ">=2.7,<3.0"
 
-# testing & development
-pytest           = ">=8.2,<9.0"
-pytest-cov       = ">=5.0,<6.0"
-pytest-asyncio   = ">=1.2.0,<2.0"
-hypothesis       = ">=6.102,<7.0"
-mypy             = ">=1.15,<2.0"
-black            = ">=25.1,<26.0"
+# --------------------------------------------------------------------------- #
+#                            E X T R A S                                      #
+# --------------------------------------------------------------------------- #
+[tool.poetry.extras]
+# GPU binary packages for GTX 970 (compute capability 5.2)
+# PyTorch 2.1.2 + CUDA 11.8 with sm_52 support
+binary-gpu = ["torch", "cupy-cuda11x"]
+
+# --------------------------------------------------------------------------- #
+#                       D E V   &   T E S T   D E P S                         #
+# --------------------------------------------------------------------------- #
+[tool.poetry.group.dev.dependencies]
+pytest        = ">=8.2,<9.0"
+pytest-cov    = ">=5.0,<6.0"
+hypothesis    = ">=6.102,<7.0"
+
+# static analysis / formatting
+mypy   = ">=1.15,<2.0"
+black  = ">=25.1,<26.0"
 
 # --------------------------------------------------------------------------- #
 #                            S C R I P T S                                    #
 # --------------------------------------------------------------------------- #
+pytest-asyncio = "^1.2.0"
 [tool.poetry.scripts]
 # REQUIRED: All tests must run via poetry per CLAUDE.md
 # Usage:

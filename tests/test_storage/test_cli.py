@@ -31,6 +31,7 @@ def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         timeout=30,  # Prevent hanging
+        encoding="utf-8",  # Handle Unicode characters (checkmarks) in CLI output
     )
 
 

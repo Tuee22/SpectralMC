@@ -1,25 +1,16 @@
 # syntax=docker/dockerfile:1.4
-# SpectralMC Dockerfile - GTX 970 Compatible (Source or Binary Build)
-#
-# Build modes:
-#   Standard (PyTorch binary, most GPUs):    docker compose up --build -d
-#   Source build (GTX 970 sm_52):            BUILD_FROM_SOURCE=true docker compose up --build -d
+# SpectralMC Dockerfile - GTX 970 Binary Build (Fast 5-10 min builds)
+# Uses PyTorch 2.1.2 + CUDA 11.8 binary wheels with sm_52 support for Maxwell GPUs
 #
 # Layer Strategy:
 # - Early layers: System dependencies (changes rarely, cached aggressively)
-# - Middle layers: PyTorch installation (binary: fast, source: 2-4 hours)
+# - Middle layers: Binary wheel installations (fast, cached)
 # - Late layers: Application code (changes frequently, rebuilds fast)
-
-ARG BUILD_FROM_SOURCE=false
 
 FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
-ARG BUILD_FROM_SOURCE
 ARG DEBIAN_FRONTEND=noninteractive
 ENV PATH="/root/.local/bin:/usr/local/bin:$PATH"
-# Set UTF-8 locale for proper Unicode handling in CLI output
-ENV LANG=C.UTF-8
-ENV LC_ALL=C.UTF-8
 
 # CuPy JIT compilation settings (for runtime optimization)
 ENV CUPY_COMPILE_WITH_PTX=1
@@ -52,11 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ccache \
     libjpeg-dev \
     libpng-dev \
-    locales \
-    libopenblas-dev \
-    liblapack-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && locale-gen en_US.UTF-8
+    && rm -rf /var/lib/apt/lists/*
 
 # ============================================================================
 # LAYER 2: Python 3.12 Installation (changes: rarely)
@@ -95,138 +82,91 @@ RUN pip install --no-cache-dir setuptools wheel pyyaml typing_extensions numpy f
 # ============================================================================
 
 RUN echo "=== [0/3] Pre-Build Validation ===" && \
-    echo "BUILD_FROM_SOURCE=${BUILD_FROM_SOURCE}" && \
     echo "Checking CUDA toolkit..." && \
     nvcc --version || (echo "FATAL: nvcc not found" && exit 1) && \
     echo "Checking Python version..." && \
     python --version | grep "3.12" || (echo "FATAL: Python 3.12 not found" && exit 1) && \
     echo "TARGET: GTX 970 Maxwell (sm_52) with CUDA 11.8" && \
-    echo "✓ Pre-build validation passed"
-
-# ============================================================================
-# LAYER 6: ccache Configuration (for source builds)
-# ============================================================================
-
-ENV CCACHE_DIR=/root/.ccache
-ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache
-ENV CMAKE_CUDA_COMPILER_LAUNCHER=ccache
-RUN ccache --max-size=20G && ccache --zero-stats
+    echo "✓ Pre-build validation passed - proceeding with binary wheel installation"
 
 WORKDIR /spectralmc
 
 # ============================================================================
-# LAYER 7: Copy Dependency Manifests ONLY (changes: occasionally)
+# LAYER 6: Copy Dependency Manifests ONLY (changes: occasionally)
 # ============================================================================
 
+# Copy only dependency files - source code comes LATER
 COPY pyproject.toml poetry.lock* ./
 
 # ============================================================================
-# LAYER 8: Install SpectralMC Dependencies FIRST (before PyTorch source build)
+# LAYER 7: Install PyTorch 2.1.2 + CUDA 11.8 (Binary Wheel - FAST)
 # ============================================================================
-# Poetry install may pull in torch as a transitive dependency.
-# We run it first, then build PyTorch from source to override.
 
-RUN echo "=== [1/3] Installing SpectralMC dependencies (Poetry) ===" && \
-    poetry install --no-interaction --no-root && \
+RUN echo "=== [1/3] Installing PyTorch 2.1.2+cu118 (binary wheel) ===" && \
+    pip install torch==2.1.2+cu118 torchvision torchaudio \
+        --index-url https://download.pytorch.org/whl/cu118 && \
+    python -c "import torch; print(f'PyTorch {torch.__version__} installed')" && \
+    python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'" && \
+    python -c "import torch; print(f'CUDA version: {torch.version.cuda}')" && \
+    python -c "import torch; print(f'Supported architectures: {torch.cuda.get_arch_list()}')" && \
+    echo "✓ PyTorch 2.1.2+cu118 installed successfully"
+
+# ============================================================================
+# LAYER 8: Install CuPy 12.3.0 + CUDA 11.x (Binary Wheel - FAST)
+# ============================================================================
+
+RUN echo "=== [2/3] Installing CuPy 12.3.0+cu11x (binary wheel) ===" && \
+    pip install cupy-cuda11x==12.3.0 && \
+    python -c "import cupy; print(f'CuPy {cupy.__version__} installed')" && \
+    python -c "import cupy; print(f'CUDA runtime: {cupy.cuda.runtime.runtimeGetVersion()}')" && \
+    echo "✓ CuPy 12.3.0+cu11x installed successfully"
+
+# ============================================================================
+# LAYER 9: Install SpectralMC Dependencies (changes: occasionally)
+# ============================================================================
+
+# Poetry install needs pyproject.toml but NOT source code yet
+RUN echo "=== [3/3] Installing SpectralMC dependencies ===" && \
+    poetry install --with dev --no-interaction --no-root && \
     echo "✓ Dependencies installed"
 
 # ============================================================================
-# LAYER 9: Install PyTorch - Binary OR Source Build (AFTER poetry)
-# ============================================================================
-
-# For SOURCE BUILD: Clone and build PyTorch 2.4.1 with sm_52 support
-# PyTorch 2.4.1 chosen for:
-# - NumPy 2.0 support (confirmed)
-# - CUDA 11.8 support (maintained)
-# - Pre-dates Maxwell (sm_52) removal (happened in 2.8)
-#
-# IMPORTANT: This runs AFTER poetry install to override any torch pulled as
-# a transitive dependency with our sm_52-compiled version.
-
-# Set PyTorch source build environment variables
-ENV TORCH_CUDA_ARCH_LIST="5.2"
-ENV USE_CUDA=1
-ENV USE_CUDNN=1
-ENV USE_NCCL=0
-ENV MAX_JOBS=4
-ENV CUDA_HOME=/usr/local/cuda-11.8
-ENV LD_LIBRARY_PATH=/usr/local/cuda-11.8/lib64:$LD_LIBRARY_PATH
-# Enable LAPACK/BLAS for torch.linalg operations on CPU
-ENV BLAS=OpenBLAS
-ENV USE_LAPACK=1
-
-RUN if [ "$BUILD_FROM_SOURCE" = "true" ]; then \
-        echo "=== [2/3] Building PyTorch 2.4.1 from source (sm_52 + NumPy 2.0) ===" && \
-        echo "This will take 2-4 hours. Patience required." && \
-        echo "Note: This overrides any torch installed by poetry" && \
-        cd /tmp && \
-        git clone --branch v2.4.1 --recursive --depth 1 https://github.com/pytorch/pytorch.git && \
-        cd /tmp/pytorch && \
-        python setup.py bdist_wheel 2>&1 | tee /tmp/pytorch-build.log && \
-        mkdir -p /opt/pytorch-wheel && \
-        cp dist/*.whl /opt/pytorch-wheel/ && \
-        pip install --force-reinstall /opt/pytorch-wheel/*.whl && \
-        cd /spectralmc && \
-        rm -rf /tmp/pytorch && \
-        python -c "import torch; print(f'✓ PyTorch {torch.__version__} built from source')" && \
-        python -c "import torch; print(f'  CUDA version: {torch.version.cuda}')" && \
-        echo "BUILD_TYPE=pytorch_source_sm52" > /spectralmc/.build-marker && \
-        echo "NOTE: sm_52 validation requires GPU access - will be tested at runtime"; \
-    else \
-        echo "=== [2/3] Installing PyTorch 2.1.2+cu118 (binary wheel) ===" && \
-        pip install torch==2.1.2+cu118 torchvision torchaudio \
-            --index-url https://download.pytorch.org/whl/cu118 && \
-        python -c "import torch; print(f'✓ PyTorch {torch.__version__} installed from binary')" && \
-        echo "BUILD_TYPE=pytorch_binary" > /spectralmc/.build-marker; \
-    fi
-
-# ============================================================================
-# LAYER 10: Install CuPy - Version depends on build type
-# ============================================================================
-
-RUN if [ "$BUILD_FROM_SOURCE" = "true" ]; then \
-        echo "=== [3/3] Installing CuPy 13.x (NumPy 2.0 compatible) ===" && \
-        pip install cupy-cuda11x && \
-        python -c "import cupy; print(f'✓ CuPy {cupy.__version__} installed')"; \
-    else \
-        echo "=== [3/3] Installing CuPy 12.3.0+cu11x (binary wheel) ===" && \
-        pip install cupy-cuda11x==12.3.0 && \
-        python -c "import cupy; print(f'✓ CuPy {cupy.__version__} installed')"; \
-    fi
-
-# ============================================================================
-# LAYER 11: Validate CUDA Build
+# LAYER 10: Validate CUDA Build
 # ============================================================================
 
 RUN echo "=== Validating CUDA build ===" && \
-    python -c "import torch; cuda_ver = torch.version.cuda; print(f'PyTorch CUDA version: {cuda_ver}'); assert cuda_ver is not None and cuda_ver.startswith('11'), 'Expected CUDA 11.x'" && \
-    python -c "import cupy; print(f'CuPy version: {cupy.__version__}')" && \
+    python -c "import torch; \
+        cuda_ver = torch.version.cuda; \
+        print(f'PyTorch CUDA version: {cuda_ver}'); \
+        assert cuda_ver is not None and cuda_ver.startswith('11'), 'Expected CUDA 11.x'" && \
+    python -c "import cupy; print(f'CuPy CUDA: {cupy.cuda.runtime.runtimeGetVersion()}')" && \
+    python -c "import torch; \
+        device_cap = torch.cuda.get_device_capability(0); \
+        print(f'GPU Compute Capability: {device_cap[0]}.{device_cap[1]}'); \
+        assert device_cap == (5, 2), f'Expected CC 5.2 for GTX 970, got {device_cap}'" && \
+    echo "GTX970_BINARY_BUILD=true" > /spectralmc/.build-marker && \
     python -c "import torch; print(f'TORCH_VERSION={torch.__version__}')" >> /spectralmc/.build-marker && \
     python -c "import torch; print(f'TORCH_CUDA={torch.version.cuda}')" >> /spectralmc/.build-marker && \
     date >> /spectralmc/.build-marker && \
-    echo "✓ Build validation passed"
+    echo "✓ Build validation passed - GTX 970 ready"
 
 # ============================================================================
-# LAYER 12: Copy Application Source Code (changes: FREQUENTLY)
+# LAYER 11: Copy Application Source Code (changes: FREQUENTLY)
+# THIS IS THE LAST LAYER THAT COPIES CODE - earlier layers are now CACHED
 # ============================================================================
 
 COPY ./ /spectralmc/
 
 # ============================================================================
-# LAYER 13: Install SpectralMC Package (changes: frequently)
+# LAYER 12: Install SpectralMC Package (changes: frequently)
 # ============================================================================
 
 RUN echo "=== Installing SpectralMC package ===" && \
-    poetry install --no-interaction && \
-    if [ -f /spectralmc/.build-marker ] && grep -q "pytorch_source_sm52" /spectralmc/.build-marker; then \
-        echo "=== Restoring source-built PyTorch (poetry overwrote it) ===" && \
-        pip install --force-reinstall --no-deps /opt/pytorch-wheel/*.whl && \
-        python -c "import torch; print(f'Restored PyTorch {torch.__version__} CUDA {torch.version.cuda}')"; \
-    fi && \
+    poetry install --with dev --no-interaction && \
     echo "✓ SpectralMC installed"
 
 # ============================================================================
-# LAYER 14: Enforce CLAUDE.md Testing Policies
+# LAYER 13: Enforce CLAUDE.md Testing Policies
 # ============================================================================
 
 RUN if [ -f /usr/local/bin/pytest ]; then mv /usr/local/bin/pytest /usr/local/bin/pytest.real; fi && \
@@ -242,7 +182,7 @@ RUN if [ -f /usr/bin/timeout ]; then mv /usr/bin/timeout /usr/bin/timeout.real; 
     chmod +x /usr/bin/timeout
 
 # ============================================================================
-# LAYER 15: Final Configuration
+# LAYER 14: Final Configuration
 # ============================================================================
 
 EXPOSE 6006 8888
