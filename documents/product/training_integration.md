@@ -655,7 +655,7 @@ async with AsyncBlockchainModelStore("my-models") as store:
 
 ## See Also
 
-- [DEPLOYMENT.md](DEPLOYMENT.md): Production deployment guide
-- [CLAUDE.md](../CLAUDE.md): Complete development guide
-- [examples/training_with_blockchain_storage.py](../examples/training_with_blockchain_storage.py): Full working example
-- [tests/test_storage/test_training_integration.py](../tests/test_storage/test_training_integration.py): Integration tests
+- [deployment.md](deployment.md): Production deployment guide
+- [CLAUDE.md](../../CLAUDE.md): Complete development guide
+- [examples/training_with_blockchain_storage.py](../../examples/training_with_blockchain_storage.py): Full working example
+- [tests/test_storage/test_training_integration.py](../../tests/test_storage/test_training_integration.py): Integration tests

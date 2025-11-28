@@ -81,7 +81,7 @@ RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 && \
 # LAYER 3: Poetry Installation (changes: rarely)
 # ============================================================================
 
-RUN curl -sSL https://install.python-poetry.org | python3.12 - && \
+RUN python -m pip install --upgrade pip setuptools wheel poetry && \
     poetry config virtualenvs.create false
 
 # ============================================================================
@@ -118,7 +118,7 @@ WORKDIR /spectralmc
 # LAYER 7: Copy Dependency Manifests ONLY (changes: occasionally)
 # ============================================================================
 
-COPY pyproject.toml poetry.lock* ./
+COPY pyproject.toml ./
 
 # ============================================================================
 # LAYER 8: Install SpectralMC Dependencies FIRST (before PyTorch source build)

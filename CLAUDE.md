@@ -1142,9 +1142,22 @@ When updating major dependencies (PyTorch, NumPy, CuPy):
 - ⏳ `botocore 1.36.1`: Waiting for `datetime.utcnow()` fix (tracked: boto/botocore#3201)
 - ⏸️ `QuantLib 1.37`: SWIG deprecations unfixable (accepted as permanent exception)
 
-## Style Guide
+## Engineering Standards
 
-See `STYLE_GUIDE.md` for code style conventions.
+See `documents/engineering/index.md` for comprehensive engineering standards including:
+
+- **Code Quality**: Black formatting, mypy strict mode, custom type stubs
+- **Development Patterns**: Pydantic models, PyTorch facade, project-specific patterns
+- **Testing**: Requirements, GPU testing, CPU/GPU compute policy
+- **Infrastructure**: Docker build philosophy (binary vs source builds, Poetry management)
+
+All code must pass `mypy --strict`, `black --check`, and `poetry run test-all` before committing.
+
+## Documentation
+
+- **[Engineering Standards](documents/engineering/index.md)** - Development practices and code quality
+- **[Product Documentation](documents/product/index.md)** - Deployment and operations guides
+- **[Domain Knowledge](documents/domain/index.md)** - Scientific theory and research papers
 
 ## Contact
 
