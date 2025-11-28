@@ -11,14 +11,16 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
-import torch
-from torch.utils.tensorboard import SummaryWriter
+# CRITICAL: Import facade BEFORE torch for deterministic algorithms
+import spectralmc.models.torch as sm_torch  # noqa: E402
+import torch  # noqa: E402
+from torch.utils.tensorboard import SummaryWriter  # noqa: E402
 
-from ..result import Result, Success, Failure
+from ..result import Result, Success, Failure  # noqa: E402
 from .store import AsyncBlockchainModelStore
 from .chain import ModelVersion
 from .checkpoint import load_snapshot_from_checkpoint
-from .errors import HeadNotFoundError
+from .errors import HeadNotFoundError, VersionNotFoundError, StorageError
 from ..gbm_trainer import GbmCVNNPricerConfig
 
 logger = logging.getLogger(__name__)
@@ -134,7 +136,7 @@ class TensorBoardWriter:
 
                 logger.info(f"Logged version {counter} with checkpoint metrics")
 
-            except Exception as e:
+            except (VersionNotFoundError, StorageError, RuntimeError, IOError, OSError) as e:
                 logger.warning(f"Failed to load checkpoint for version {counter}: {e}")
         else:
             logger.info(f"Logged version {counter} metadata only")

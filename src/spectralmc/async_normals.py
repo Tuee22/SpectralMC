@@ -98,7 +98,7 @@ class BufferConfig(BaseModel):
 
     size: Annotated[int, Field(gt=0, description="Number of concurrent worker streams")]
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     @classmethod
     def create(cls, size: int, matrix_rows: int, matrix_cols: int) -> "BufferConfig":
@@ -158,7 +158,7 @@ class ConcurrentNormGeneratorConfig(BaseModel):
     dtype: Precision
     skips: int = Field(0, ge=0)
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 # --------------------------------------------------------------------------- #

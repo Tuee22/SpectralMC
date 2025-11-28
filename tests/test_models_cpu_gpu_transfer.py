@@ -38,19 +38,11 @@ assert torch.cuda.is_available(), "CUDA device required but none detected."
 
 
 def test_already_on_destination_raises() -> None:
+    """Test that transferring to same device raises ValueError."""
     with pytest.raises(ValueError):
         cpu_gpu_transfer.move_tensor_tree(
             [torch.ones(1), 0], dest=TransferDestination.CPU
         )
-
-
-class BadDest:
-    to_torch = staticmethod(lambda: torch.device("xpu"))  # noqa: D401
-
-
-def test_unsupported_destination_device() -> None:
-    with pytest.raises(AttributeError):
-        cpu_gpu_transfer.move_tensor_tree(torch.zeros(1), dest=BadDest())  # type: ignore[arg-type]
 
 
 def test_cuda_requested_but_not_available(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -26,7 +26,7 @@ Usage:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Generic, TypeVar, cast, NoReturn
+from typing import Callable, Generic, TypeVar, NoReturn
 
 T = TypeVar("T")
 E = TypeVar("E")
@@ -66,7 +66,9 @@ class Success(Generic[T]):
 
     def map_error(self, f: Callable[[E], F]) -> Result[T, F]:
         """Map the error value through function f. No-op on Success."""
-        return cast("Result[T, F]", self)
+        # Explicit type annotation eliminates need for cast
+        result: Result[T, F] = Success(self.value)
+        return result
 
     def flat_map(self, f: Callable[[T], Result[U, E]]) -> Result[U, E]:
         """Monadic bind: chain operations that return Result."""
@@ -110,7 +112,9 @@ class Failure(Generic[E]):
 
     def map(self, f: Callable[[T], U]) -> Result[U, E]:
         """Map the success value through function f. No-op on Failure."""
-        return cast("Result[U, E]", self)
+        # Explicit type annotation eliminates need for cast
+        result: Result[U, E] = Failure(self.error)
+        return result
 
     def map_error(self, f: Callable[[E], F]) -> Result[T, F]:
         """Map the error value through function f."""
@@ -118,7 +122,9 @@ class Failure(Generic[E]):
 
     def flat_map(self, f: Callable[[T], Result[U, E]]) -> Result[U, E]:
         """Monadic bind. No-op on Failure."""
-        return cast("Result[U, E]", self)
+        # Explicit type annotation eliminates need for cast
+        result: Result[U, E] = Failure(self.error)
+        return result
 
     def and_then(self, f: Callable[[T], Result[U, E]]) -> Result[U, E]:
         """Alias for flat_map. No-op on Failure."""

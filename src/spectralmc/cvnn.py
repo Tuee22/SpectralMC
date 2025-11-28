@@ -46,8 +46,10 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
-import torch
-import torch.nn as nn
+# CRITICAL: Import facade BEFORE torch for deterministic algorithms
+import spectralmc.models.torch as sm_torch  # noqa: E402
+import torch  # noqa: E402
+import torch.nn as nn  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Type aliases

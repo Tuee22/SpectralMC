@@ -33,6 +33,38 @@ SpectralMC's `GbmCVNNPricer.train()` method integrates seamlessly with blockchai
 
 ## Quick Start
 
+### Auto-Commit Training Flow
+
+How automatic commits integrate with the training loop:
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant Trainer as GbmCVNNPricer
+  participant Store as BlockchainStore
+
+  User->>Trainer: train - auto_commit=True, commit_interval=100 -
+  loop Every Batch
+    Trainer->>Trainer: Generate batch with SobolSampler
+    Trainer->>Trainer: Run Monte Carlo simulation on GPU
+    Trainer->>Trainer: Compute FFT and CVNN loss
+    Trainer->>Trainer: Backprop and update optimizer
+    alt Batch modulo commit_interval == 0
+      Trainer->>Store: Commit checkpoint
+      Store-->>Trainer: Version committed
+    end
+  end
+  Trainer->>Store: Final commit after training completes
+  Store-->>Trainer: Final version committed
+  Trainer-->>User: Training complete with all checkpoints saved
+```
+
+**Key Features**:
+- Commits are non-blocking (training continues immediately)
+- Commit failures logged but don't crash training
+- Optimizer state preserved in each checkpoint
+- Template variables: `{step}`, `{loss}`, `{batch}`
+
 ### Basic Auto-Commit
 
 Train a model and automatically commit the final checkpoint:
@@ -126,6 +158,42 @@ pricer.train(
 ```
 
 ## Training Modes
+
+### Decision Tree: Which Training Mode?
+
+Use this flowchart to select the right training mode for your use case:
+
+```mermaid
+flowchart TB
+  Start{Need Version Control?}
+  Duration{Training Duration?}
+  Resume{Need Resume Capability?}
+
+  NoStore[Mode 1 - No Blockchain Storage]
+  FinalOnly[Mode 2 - Final Checkpoint Only]
+  Periodic[Mode 3 - Periodic Checkpoints]
+  Manual[Mode 4 - Manual Commits]
+
+  Start -->|No - Quick experiments| NoStore
+  Start -->|Yes| Duration
+  Duration -->|Less than 1 hour| FinalOnly
+  Duration -->|More than 1 hour| Resume
+  Resume -->|Yes - Long runs| Periodic
+  Resume -->|No - Custom logic| Manual
+
+  NoStore --> ConfigNoStore[pricer.train - training_config -]
+  FinalOnly --> ConfigFinal[auto_commit=True - no commit_interval]
+  Periodic --> ChooseInterval{Total Batch Count?}
+  Manual --> ConfigManual[No auto_commit - Use commit_snapshot manually]
+
+  ChooseInterval -->|Less than 1000| Interval100[commit_interval=100]
+  ChooseInterval -->|1000 to 10000| Interval500[commit_interval=500]
+  ChooseInterval -->|More than 10000| Interval1000[commit_interval=1000]
+```
+
+**See detailed mode descriptions below.**
+
+---
 
 ### Mode 1: No Blockchain Storage (Default)
 
@@ -431,6 +499,38 @@ asyncio.run(experiment_tracking())
 ```
 
 ### Example 3: Training Resume
+
+**Training Resume Workflow**:
+
+```mermaid
+flowchart TB
+  Start[Start Resume Training]
+  CheckHead{HEAD exists?}
+  NoHead[Create fresh model - Initial config]
+  HasHead[Load checkpoint from HEAD]
+  RestoreState[Restore model weights and optimizer state]
+  ContinueTraining[Continue training from global_step]
+  NewCheckpoints[Commit new checkpoints]
+  Complete[Training complete]
+
+  Start --> CheckHead
+  CheckHead -->|No previous checkpoint| NoHead
+  CheckHead -->|Has checkpoint| HasHead
+  HasHead --> RestoreState
+  RestoreState --> ContinueTraining
+  NoHead --> ContinueTraining
+  ContinueTraining --> NewCheckpoints
+  NewCheckpoints --> Complete
+```
+
+**State Preservation**:
+- Model weights fully restored
+- Optimizer state (Adam momentum) preserved
+- `global_step` continues from checkpoint
+- Sobol skip offset ensures no duplicate samples
+- RNG state restored for reproducibility
+
+**Code Example**:
 
 ```python
 async def resume_training():

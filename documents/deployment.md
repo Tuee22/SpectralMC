@@ -20,18 +20,16 @@ This guide covers production deployment of SpectralMC's blockchain model storage
 
 SpectralMC blockchain storage uses S3-compatible object storage for model versioning:
 
-```
-┌─────────────────┐         ┌──────────────────────┐
-│  Training Node  │────────>│  S3 / MinIO Bucket   │
-│  (GPU Server)   │  Commit │  (Model Versions)    │
-└─────────────────┘         └──────────────────────┘
-                                       │
-                                       │ Load
-                                       ▼
-┌─────────────────┐         ┌──────────────────────┐
-│ Inference Node  │<────────│  Inference Client    │
-│  (CPU/GPU)      │  Serve  │  (Pinned/Tracking)   │
-└─────────────────┘         └──────────────────────┘
+```mermaid
+flowchart TB
+  TrainingNode[Training Node - GPU Server]
+  S3Bucket[S3 / MinIO Bucket - Model Versions]
+  InferenceClient[Inference Client - Pinned/Tracking Modes]
+  InferenceNode[Inference Node - CPU/GPU]
+
+  TrainingNode -->|Commit Checkpoint| S3Bucket
+  S3Bucket -->|Load Version| InferenceClient
+  InferenceClient -->|Serve Predictions| InferenceNode
 ```
 
 **Key Components**:
@@ -106,6 +104,49 @@ aws s3api put-bucket-encryption \
 ---
 
 ## IAM Policies & Security
+
+### IAM Policy Selection
+
+Choose the right IAM policy for each component:
+
+```mermaid
+flowchart TB
+  Start{Component Type?}
+
+  Training[Training Node]
+  Inference[Inference Node]
+  GC[Garbage Collection Job]
+  Admin[Admin or CI/CD]
+
+  TrainingPolicy[Training Policy - Read/Write]
+  InferencePolicy[Inference Policy - Read Only]
+  GCPolicy[GC Policy - Read/Delete]
+  AdminPolicy[Admin Policy - Full Access]
+
+  Start -->|Runs training jobs| Training
+  Start -->|Serves predictions| Inference
+  Start -->|Cleanup old versions| GC
+  Start -->|Management tasks| Admin
+
+  Training --> TrainingPolicy
+  Inference --> InferencePolicy
+  GC --> GCPolicy
+  Admin --> AdminPolicy
+
+  TrainingPolicy --> TrainingPerms[ListBucket - GetObject - PutObject - DeleteObject]
+  InferencePolicy --> InferencePerms[ListBucket - GetObject only]
+  GCPolicy --> GCPerms[ListBucket - GetObject - DeleteObject]
+  AdminPolicy --> AdminPerms[Full S3 permissions]
+```
+
+**Policy Summary**:
+
+| Component | Permissions | Rationale |
+|-----------|------------|-----------|
+| **Training Node** | Read/Write/Delete | Commits checkpoints, updates chain.json |
+| **Inference Node** | Read only | Loads models, never modifies storage |
+| **GC Job** | Read/Delete | Removes old versions, no write needed |
+| **Admin/CI** | Full access | Bucket setup, disaster recovery |
 
 ### Least-Privilege IAM Policies
 
@@ -213,6 +254,52 @@ os.environ['AWS_SECRET_ACCESS_KEY'] = credentials['AWS_SECRET_ACCESS_KEY']
 ---
 
 ## Multi-Environment Strategy
+
+### Storage Backend Selection
+
+Choose the right storage backend for your deployment:
+
+```mermaid
+flowchart TB
+  Start{Deployment Type?}
+  Cloud[Cloud Deployment]
+  OnPrem[On-Premise or Private Cloud]
+
+  CloudProvider{Cloud Provider?}
+  AWS[AWS Infrastructure]
+  OtherCloud[GCP, Azure, or Other]
+
+  UseS3[Use AWS S3]
+  UseMinIO[Use MinIO S3-Compatible]
+
+  Start -->|Cloud-based| Cloud
+  Start -->|On-premise or air-gapped| OnPrem
+
+  Cloud --> CloudProvider
+  CloudProvider -->|AWS| AWS
+  CloudProvider -->|Non-AWS| OtherCloud
+
+  AWS --> UseS3
+  OtherCloud --> UseMinIO
+  OnPrem --> UseMinIO
+
+  UseS3 --> S3Config[endpoint_url=null - Use AWS SDK default]
+  UseMinIO --> MinIOConfig[endpoint_url=http://minio:9000]
+```
+
+**AWS S3 Advantages**:
+- Fully managed service (no infrastructure maintenance)
+- 99.999999999% durability guarantee
+- Automatic scaling and global availability
+- Native IAM integration
+- Lower operational overhead
+
+**MinIO Advantages**:
+- On-premise deployment (data sovereignty)
+- No egress costs for internal traffic
+- Air-gapped environment support
+- Same S3 API (drop-in replacement)
+- Full control over infrastructure
 
 ### Bucket Naming Convention
 
@@ -455,6 +542,40 @@ python -m spectralmc.storage export spectralmc-models-prod \
 
 ### Disaster Recovery Runbook
 
+**Disaster Recovery Workflow** (S3 Bucket Deletion):
+
+```mermaid
+flowchart TB
+  Incident[Incident Detected - Bucket Missing]
+  Assess{Backup Available?}
+  NoBackup[CRITICAL - No backup - Data loss]
+  HasBackup[Cross-region replica exists]
+
+  Restore[1. Restore from DR bucket]
+  Verify[2. Verify chain integrity]
+  CheckIntegrity{Chain Valid?}
+  Corrupted[3a. Identify corruption point]
+  Valid[3b. Chain verified OK]
+  UpdateClients[4. Update inference clients]
+  Monitor[5. Monitor for 24 hours]
+  Complete[Recovery Complete]
+
+  Incident --> Assess
+  Assess -->|No backup| NoBackup
+  Assess -->|Replica available| HasBackup
+  HasBackup --> Restore
+  Restore --> Verify
+  Verify --> CheckIntegrity
+  CheckIntegrity -->|Corruption found| Corrupted
+  CheckIntegrity -->|All valid| Valid
+  Corrupted --> UpdateClients
+  Valid --> UpdateClients
+  UpdateClients --> Monitor
+  Monitor --> Complete
+```
+
+**Recovery Steps**:
+
 **Scenario: S3 Bucket Accidentally Deleted**
 
 1. **Restore from cross-region replica**:
@@ -469,7 +590,7 @@ python -m spectralmc.storage verify spectralmc-models-prod --detailed
 
 3. **Update inference clients** to point to restored bucket
 
-**RTO**: < 1 hour  
+**RTO**: < 1 hour
 **RPO**: < 15 minutes (replication lag)
 
 ---
@@ -489,6 +610,47 @@ python -m spectralmc.storage verify spectralmc-models-prod --detailed
 - GLACIER: $0.004/GB = $4/month (savings: 83%)
 
 ### Garbage Collection Policy
+
+Choose GC policy based on cost vs safety tradeoffs:
+
+```mermaid
+flowchart TB
+  Start{Storage Cost Priority?}
+  LowCost[Low cost priority]
+  Balance[Balanced approach]
+  HighSafety[High safety priority]
+
+  CheckExpType{Experiment Type?}
+  Production[Production models only]
+  Research[Research and experiments]
+
+  Aggressive[Aggressive GC - keep_versions=5]
+  Moderate[Moderate GC - keep_versions=20]
+  Conservative[Conservative GC - keep_versions=50]
+
+  Start -->|Minimize storage cost| LowCost
+  Start -->|Balance cost and safety| Balance
+  Start -->|Maximize version history| HighSafety
+
+  LowCost --> CheckExpType
+  CheckExpType -->|Production only| Aggressive
+  CheckExpType -->|Mix of both| Moderate
+
+  Balance --> Moderate
+  HighSafety --> Conservative
+
+  Aggressive --> AggressiveConfig[keep_min=3 - protect_tags=prod only]
+  Moderate --> ModerateConfig[keep_min=5 - protect_tags=releases]
+  Conservative --> ConservativeConfig[keep_min=10 - protect_tags=all]
+```
+
+**Policy Comparison**:
+
+| Policy | keep_versions | keep_min | Storage Cost | Risk | Use Case |
+|--------|--------------|----------|--------------|------|----------|
+| **Aggressive** | 5 | 3 | Low | High | Production only, tight budget |
+| **Moderate** | 20 | 5 | Medium | Medium | Mixed workloads, standard |
+| **Conservative** | 50 | 10 | High | Low | Research, experiment tracking |
 
 **Aggressive** (low storage cost, higher risk):
 ```yaml

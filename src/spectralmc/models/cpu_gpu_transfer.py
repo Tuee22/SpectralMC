@@ -18,8 +18,10 @@ from collections.abc import Hashable, Mapping
 from enum import Enum
 from typing import List, Optional, Tuple, Union, NoReturn
 
-import torch
-from spectralmc.models.torch import Device, AnyDType
+# CRITICAL: Import facade BEFORE torch for deterministic algorithms
+import spectralmc.models.torch as sm_torch  # noqa: E402
+import torch  # noqa: E402
+from spectralmc.models.torch import Device, AnyDType  # noqa: E402
 
 __all__ = [
     "TransferDestination",

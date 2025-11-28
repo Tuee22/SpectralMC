@@ -4,11 +4,14 @@ from __future__ import annotations
 from enum import Enum
 from typing import Dict, List, Optional, Tuple, TypeAlias, Union
 
-import torch
-import torch.nn as nn
 from pydantic import BaseModel, ConfigDict, PositiveInt
 
-from spectralmc.models.torch import (
+# CRITICAL: Import facade BEFORE torch for deterministic algorithms
+import spectralmc.models.torch as sm_torch  # noqa: E402
+import torch  # noqa: E402
+import torch.nn as nn  # noqa: E402
+
+from spectralmc.models.torch import (  # noqa: E402
     TensorState,
     DType,
     AnyDType,
@@ -60,13 +63,13 @@ class LayerKind(str, Enum):
 class WidthSpec(BaseModel):
     """Base class for width specification."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class PreserveWidth(WidthSpec):
     """Tag-only class indicating width should be preserved from input."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class ExplicitWidth(WidthSpec):
@@ -74,13 +77,13 @@ class ExplicitWidth(WidthSpec):
 
     value: PositiveInt
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class ActivationCfg(BaseModel):
     kind: ActivationKind
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class LinearCfg(BaseModel):
@@ -89,7 +92,7 @@ class LinearCfg(BaseModel):
     bias: bool = True
     activation: Optional[ActivationCfg] = None
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class NaiveBNCfg(BaseModel):
@@ -100,7 +103,7 @@ class NaiveBNCfg(BaseModel):
     track_running_stats: bool = True
     activation: Optional[ActivationCfg] = None
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class CovBNCfg(BaseModel):
@@ -111,7 +114,7 @@ class CovBNCfg(BaseModel):
     track_running_stats: bool = True
     activation: Optional[ActivationCfg] = None
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 LayerCfg: TypeAlias = Union[
@@ -124,7 +127,7 @@ class SequentialCfg(BaseModel):
     layers: List[LayerCfg]
     activation: Optional[ActivationCfg] = None
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class ResidualCfg(BaseModel):
@@ -133,7 +136,7 @@ class ResidualCfg(BaseModel):
     projection: Optional[LinearCfg] = None
     activation: Optional[ActivationCfg] = None
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class CVNNConfig(BaseModel):
@@ -142,7 +145,7 @@ class CVNNConfig(BaseModel):
     seed: PositiveInt
     final_activation: Optional[ActivationCfg] = None
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 # ─────────────────────────── builder helpers ───────────────────────────────

@@ -76,20 +76,82 @@ SpectralMC uses a blockchain-based approach for model versioning with S3 storage
 - Conflict detection and fast-forward enforcement
 - Automatic retry with exponential backoff
 
+**Atomic Commit Protocol** (10-step CAS):
+
+```mermaid
+sequenceDiagram
+  participant Client
+  participant S3
+  participant HEAD as chain.json
+
+  Client->>S3: 1. Read chain.json
+  S3-->>Client: current_head with ETag
+  Client->>Client: 2. Create new version metadata
+  Client->>Client: 3. Compute SHA256 content_hash
+  Client->>Client: 4. Link parent_hash to previous version
+  Client->>S3: 5. Upload checkpoint.pb
+  S3-->>Client: 200 OK
+  Client->>S3: 6. Upload metadata.json
+  S3-->>Client: 200 OK
+  Client->>S3: 7. Upload content_hash.txt
+  S3-->>Client: 200 OK
+  Client->>S3: 8. CAS update chain.json with If-Match ETag
+  alt Success
+    S3-->>Client: 200 OK - Commit successful
+    Client->>Client: 9. Success - Version committed
+  else Conflict - Concurrent commit detected
+    S3-->>Client: 412 Precondition Failed
+    Client->>S3: 10a. Delete uploaded files - Rollback
+    Client->>Client: 10b. Retry from step 1 with backoff
+  end
+```
+
+**CAS Guarantees**:
+- **Atomicity**: Either all files committed or none (rollback on conflict)
+- **Consistency**: chain.json always points to valid version
+- **Isolation**: Concurrent commits detected via ETag mismatch
+- **Durability**: S3 provides 99.999999999% durability
+
 **S3 Storage Structure**:
+
+```mermaid
+flowchart TB
+  S3Bucket[S3 Bucket - my-model-bucket]
+  ChainJSON[chain.json - HEAD pointer with ETag]
+  VersionsDir[versions/ directory]
+
+  Version0[v0000000000_1.0.0_abcd1234/]
+  V0Checkpoint[checkpoint.pb - Serialized model]
+  V0Metadata[metadata.json - Version info]
+  V0Hash[content_hash.txt - SHA256]
+
+  Version1[v0000000001_1.0.1_ef567890/]
+  V1Checkpoint[checkpoint.pb]
+  V1Metadata[metadata.json]
+  V1Hash[content_hash.txt]
+
+  S3Bucket --> ChainJSON
+  S3Bucket --> VersionsDir
+  VersionsDir --> Version0
+  VersionsDir --> Version1
+
+  Version0 --> V0Checkpoint
+  Version0 --> V0Metadata
+  Version0 --> V0Hash
+
+  Version1 --> V1Checkpoint
+  Version1 --> V1Metadata
+  Version1 --> V1Hash
+
+  ChainJSON -.->|Points to| Version1
 ```
-s3://bucket-name/
-├── chain.json                      # Current HEAD pointer (atomic via CAS)
-└── versions/
-    ├── v0000000000_1.0.0_abcd1234/
-    │   ├── checkpoint.pb           # Serialized model
-    │   ├── metadata.json           # Version metadata
-    │   └── content_hash.txt        # SHA256 checksum
-    └── v0000000001_1.0.1_ef567890/
-        ├── checkpoint.pb
-        ├── metadata.json
-        └── content_hash.txt
-```
+
+**Key Features**:
+- `chain.json`: Atomic HEAD pointer updated via CAS (ETag-based)
+- `versions/`: Immutable version directories (never modified after creation)
+- `checkpoint.pb`: Protocol Buffer serialized model state
+- `metadata.json`: Version metadata (counter, semver, parent_hash, timestamp)
+- `content_hash.txt`: SHA256 checksum for integrity verification
 
 #### Core Usage
 
@@ -135,7 +197,39 @@ async with AsyncBlockchainModelStore("my-model-bucket") as store:
 
 #### InferenceClient
 
-Production model serving with version control integration:
+Production model serving with version control integration.
+
+**Mode Selection Decision Tree**:
+
+```mermaid
+flowchart TB
+  Start{Deployment Environment?}
+  Production[Production Environment]
+  Development[Development Environment]
+
+  StabilityNeeded{Stability Critical?}
+  ABTest{A/B Testing?}
+
+  Pinned[Pinned Mode - Lock to Specific Version]
+  MultiPinned[Multiple Pinned Clients - Different Versions]
+  Tracking[Tracking Mode - Auto-Update to Latest]
+
+  Start -->|Production| Production
+  Start -->|Development or Staging| Development
+
+  Production --> StabilityNeeded
+  StabilityNeeded -->|Yes| ABTest
+  StabilityNeeded -->|No - Can tolerate updates| Tracking
+
+  ABTest -->|No| Pinned
+  ABTest -->|Yes - Test multiple versions| MultiPinned
+
+  Development --> Tracking
+
+  Pinned --> PinnedConfig[version_counter=42 - Never updates]
+  MultiPinned --> MultiConfig[Client A: v42 - Client B: v43]
+  Tracking --> TrackingConfig[version_counter=None - Polls every 30s]
+```
 
 **Pinned Mode** (production):
 ```python
@@ -171,7 +265,48 @@ async with InferenceClient(
 
 #### Chain Verification
 
-Detect tampering and corruption:
+Detect tampering and corruption with automated verification.
+
+**Chain Verification Algorithm**:
+
+```mermaid
+flowchart TB
+  Start[Start Verification]
+  LoadVersions[Load all versions from S3]
+  CheckGenesis{Genesis valid?}
+  GenesisOK[counter=0 - parent_hash empty - semver=1.0.0]
+  GenesisFail[FAIL - Invalid genesis block]
+
+  IterateVersions[Iterate through versions]
+  CheckParentHash{parent_hash == prev.content_hash?}
+  CheckCounter{counter == prev.counter + 1?}
+  CheckSemver{semver progression valid?}
+
+  ParentHashOK[Merkle chain intact]
+  CounterOK[Counter monotonic]
+  SemverOK[Semantic version valid]
+
+  AllValid[All checks passed]
+  CorruptionFound[CORRUPTION DETECTED]
+
+  Start --> LoadVersions
+  LoadVersions --> CheckGenesis
+  CheckGenesis -->|Valid| GenesisOK
+  CheckGenesis -->|Invalid| GenesisFail
+  GenesisOK --> IterateVersions
+  IterateVersions --> CheckParentHash
+  CheckParentHash -->|Match| ParentHashOK
+  CheckParentHash -->|Mismatch| CorruptionFound
+  ParentHashOK --> CheckCounter
+  CheckCounter -->|Sequential| CounterOK
+  CheckCounter -->|Gap or duplicate| CorruptionFound
+  CounterOK --> CheckSemver
+  CheckSemver -->|Valid| SemverOK
+  CheckSemver -->|Invalid| CorruptionFound
+  SemverOK --> AllValid
+```
+
+**Code Usage**:
 
 ```python
 from spectralmc.storage import verify_chain, verify_chain_detailed
@@ -179,7 +314,7 @@ from spectralmc.storage import verify_chain, verify_chain_detailed
 async with AsyncBlockchainModelStore("my-model-bucket") as store:
     # Simple verification (raises ChainCorruptionError if invalid)
     await verify_chain(store)
-    
+
     # Detailed report
     report = await verify_chain_detailed(store)
     if not report.is_valid:
@@ -391,6 +526,28 @@ docker compose -f docker/docker-compose.yml down
 
 The Bash tool truncates output at 30,000 characters. Test suites may produce large output that WILL BE TRUNCATED, making it impossible to properly analyze failures.
 
+#### Required Test Execution Workflow
+
+Follow this workflow for all test execution to ensure complete output capture:
+
+```mermaid
+flowchart TB
+  Start[Start Test Execution]
+  RunTest[Run docker compose exec with output redirect]
+  WaitComplete[Wait for test completion - No timeout]
+  ReadOutput[Read complete output from /tmp file]
+  AnalyzeAll[Analyze ALL failures in output]
+
+  Start --> RunTest
+  RunTest --> WaitComplete
+  WaitComplete --> ReadOutput
+  ReadOutput --> AnalyzeAll
+
+  RunTest -.->|WRONG - Truncates| DirectBash[Direct Bash without redirect]
+  RunTest -.->|WRONG - Kills tests| WithTimeout[Using timeout parameter]
+  RunTest -.->|WRONG - Cant see output| Background[run_in_background=True]
+```
+
 **REQUIRED Pattern for Test Analysis**:
 
 Always redirect test output to files in /tmp/, then read the complete output:
@@ -463,6 +620,31 @@ Tests are configured for **4GB VRAM minimum**:
 - `test_gbm.py` uses 131,072 batches (~1.3GB GPU RAM)
 - Larger GPUs can increase `_BATCHES_PER_RUN` for faster convergence
 - Smaller GPUs (<4GB) should reduce batch size further
+
+### GTX 970 Validation Status
+
+**Status**: ✅ PRODUCTION READY (validated 2025-11-26)
+
+The NVIDIA GeForce GTX 970 (compute capability 5.2, sm_52) is fully validated and production-ready for all SpectralMC GPU workloads:
+
+**Configuration**:
+- PyTorch 2.4.0a0 (source build with sm_52 support)
+- CUDA 11.8
+- CuPy 13.6.0
+- NumPy 2.3.5
+
+**Test Results**: 224/228 passing (98.2%)
+- ✅ All GPU-accelerated workloads (GBM simulation, CVNN training, Monte Carlo sampling)
+- ✅ All GPU-specific tests pass
+- ✅ CuPy interoperability via DLPack works correctly
+- ⚠️ 4 CPU-only tests fail due to missing LAPACK (eigendecomposition in `CovarianceComplexBatchNorm`)
+
+**Known Limitation**:
+- `CovarianceComplexBatchNorm` requires GPU for eigendecomposition when built without LAPACK
+- This is not a practical limitation (GPU batch norm is faster than CPU anyway)
+- To enable CPU batch norm: rebuild Docker with LAPACK (adds 2-4 hours to build time)
+
+See `GTX_970_COMPATIBILITY_INVESTIGATION.md` for complete validation details.
 
 ## 🔍 Type Safety
 

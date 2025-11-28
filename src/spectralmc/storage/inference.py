@@ -8,13 +8,15 @@ import logging
 from typing import Optional, Callable, Any
 from dataclasses import dataclass
 
-import torch
+# CRITICAL: Import facade BEFORE torch for deterministic algorithms
+import spectralmc.models.torch as sm_torch  # noqa: E402
+import torch  # noqa: E402
 
-from ..result import Result, Success, Failure
+from ..result import Result, Success, Failure  # noqa: E402
 from .store import AsyncBlockchainModelStore
 from .chain import ModelVersion
 from .checkpoint import load_snapshot_from_checkpoint
-from .errors import HeadNotFoundError
+from .errors import HeadNotFoundError, VersionNotFoundError, StorageError
 from ..gbm_trainer import GbmCVNNPricerConfig
 
 logger = logging.getLogger(__name__)
@@ -328,7 +330,7 @@ class InferenceClient:
                             )
                             break
 
-            except Exception as e:
+            except (VersionNotFoundError, StorageError, OSError, IOError) as e:
                 self._consecutive_failures += 1
                 logger.error(
                     f"Unexpected error in polling loop (attempt {self._consecutive_failures}/{self.max_consecutive_failures}): {e}",

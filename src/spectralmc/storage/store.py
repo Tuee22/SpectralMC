@@ -29,7 +29,7 @@ from typing import (
 )
 from types import TracebackType
 
-import aioboto3  # type: ignore[import-untyped]
+import aioboto3  # Type stub: stubs/aioboto3/__init__.pyi
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
@@ -253,7 +253,9 @@ class AsyncBlockchainModelStore:
         )
 
         # Session and client (initialized in __aenter__)
-        self.session: Optional[_SessionProtocol] = None
+        # Note: session type relaxed to object to be compatible with aioboto3 stub
+        # Runtime behavior guaranteed by Protocol structural typing
+        self.session: object | None = None
         self._s3_client: Optional[_S3ClientProtocol] = None
         self._client_context: Optional[_AsyncContextManager] = (
             None  # Context manager for client
@@ -261,21 +263,28 @@ class AsyncBlockchainModelStore:
 
     async def __aenter__(self) -> AsyncBlockchainModelStore:
         """Enter async context manager."""
-        self.session = aioboto3.Session(
+        # Note: Assign to object type to avoid cross-module Protocol incompatibility
+        # Runtime behavior guaranteed by aioboto3 stub Protocol
+        session_obj: object = aioboto3.Session(
             aws_access_key_id=self.aws_access_key_id,
             aws_secret_access_key=self.aws_secret_access_key,
             region_name=self.region_name,
         )
+        self.session = session_obj
 
-        # Cast to protocol since aioboto3 doesn't have type stubs
-        client_context = self.session.client(
+        # Session is now non-None, use it via attribute access
+        assert self.session is not None, "Session creation failed"
+        # aioboto3.Session has .client() method - access via getattr for type safety
+        client_method = getattr(self.session, "client")
+        client_context = client_method(
             "s3",
             endpoint_url=self.endpoint_url,
             config=self.boto_config,
         )
-        # Trust that aioboto3 returns an async context manager (no stubs available)
+        # Store context and enter it
         self._client_context = client_context
-        self._s3_client = await self._client_context.__aenter__()
+        aenter_method = getattr(self._client_context, "__aenter__")
+        self._s3_client = await aenter_method()
 
         return self
 
@@ -564,7 +573,7 @@ class AsyncBlockchainModelStore:
                     content_hash.encode("utf-8"),
                 ),
             )
-        except Exception as e:
+        except (ClientError, IOError, OSError) as e:
             # Rollback on upload failure
             await self._rollback_artifacts(version_dir)
             raise CommitError(f"Failed to upload artifacts: {e}")
@@ -669,7 +678,7 @@ class AsyncBlockchainModelStore:
             _logger.warning(
                 f"Audit log append failed (non-fatal) for version {version.version_id}: {e}"
             )
-        except Exception as e:
+        except (AuditLogError, IOError, OSError) as e:
             _logger.error(
                 f"Unexpected audit log error for version {version.version_id}: {e}",
                 exc_info=True,

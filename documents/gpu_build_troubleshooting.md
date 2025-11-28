@@ -3,12 +3,66 @@
 This guide covers common issues when building SpectralMC with GPU support, especially for legacy GPUs (Maxwell/Kepler architecture).
 
 ## Table of Contents
+- [Quick Troubleshooting Flowchart](#quick-troubleshooting-flowchart)
 - [Build Fails: nvidia-smi not found](#build-fails-nvidia-smi-not-found)
 - [Build Fails: Out of Memory During Compilation](#build-fails-out-of-memory-during-compilation)
 - [Tests Fail: CUDA out of memory](#tests-fail-cuda-out-of-memory)
 - [GPU Operations Fail: no kernel image available](#gpu-operations-fail-no-kernel-image-available)
 - [Build Defaults to CPU-only Mode](#build-defaults-to-cpu-only-mode)
 - [Verify Build Configuration](#verify-build-configuration)
+
+---
+
+## Quick Troubleshooting Flowchart
+
+Use this flowchart to quickly identify and resolve GPU build issues:
+
+```mermaid
+flowchart TB
+  Start{Docker Build Status?}
+  NoGPU[Issue 1 - nvidia-smi not found]
+  OOM[Issue 2 - Out of Memory]
+  TestOOM[Issue 3 - CUDA OOM in tests]
+  NoKernel[Issue 4 - No kernel image]
+  CPUOnly[Issue 5 - Defaults to CPU-only]
+
+  Start -->|GPU not detected| NoGPU
+  Start -->|Build crashes| OOM
+  Start -->|Tests fail| TestOOM
+  Start -->|Runtime error| NoKernel
+  Start -->|Quick build no CUDA| CPUOnly
+
+  NoGPU --> DockerBuildKit{Using BuildKit?}
+  DockerBuildKit -->|Yes| DisableBuildKit[Set DOCKER_BUILDKIT=0]
+  DockerBuildKit -->|No| CheckNvidiaDocker[Install nvidia-docker2]
+  DisableBuildKit --> RebuildAfterBuildKit[Rebuild with docker compose build]
+  CheckNvidiaDocker --> RebuildAfterDocker[Rebuild after nvidia-docker2 install]
+
+  OOM --> CheckRAM{System RAM?}
+  CheckRAM -->|Less than 16GB| ReduceJobs[Edit detect_gpu script - Set MAX_JOBS=2]
+  CheckRAM -->|16GB or more| AddSwap[Add 16GB swap file]
+  ReduceJobs --> RebuildAfterRAM[Rebuild with --no-cache]
+  AddSwap --> RebuildAfterSwap[Rebuild with --no-cache]
+
+  TestOOM --> CheckVRAM{GPU VRAM?}
+  CheckVRAM -->|2GB| ReduceBatch2GB[Edit test_gbm.py - Set BATCHES=2^16]
+  CheckVRAM -->|4GB| KeepDefault[Keep default 2^17 - Should work]
+  CheckVRAM -->|8GB or more| IncreaseBatch[Optional: Increase to 2^18]
+  ReduceBatch2GB --> RerunTests[Rerun tests]
+  KeepDefault --> CheckOtherIssues[Check for other GPU memory issues]
+  IncreaseBatch --> RerunTestsFaster[Rerun tests - Faster convergence]
+
+  NoKernel --> CheckBuild{Source build ran?}
+  CheckBuild -->|No| RebuildSource[Set BUILD_FROM_SOURCE=true and rebuild]
+  CheckBuild -->|Yes| CheckArch[Verify TORCH_CUDA_ARCH_LIST matches GPU capability]
+  CheckArch --> ManualSourceBuild[Manual source build if mismatch]
+
+  CPUOnly --> ForceBuild[Set BUILD_FROM_SOURCE=true]
+  ForceBuild --> UseNoBuildKit[Use DOCKER_BUILDKIT=0]
+  UseNoBuildKit --> RebuildFromSource[Rebuild - 2-4 hours for source build]
+```
+
+**See detailed solutions below for each issue.**
 
 ---
 

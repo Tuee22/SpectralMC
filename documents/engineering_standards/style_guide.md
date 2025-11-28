@@ -424,13 +424,13 @@ class ComplexLinear(nn.Module):
 
 ### Technical Documentation
 
-Maintain the `docs/` folder with technical papers and implementation details:
+Maintain the `documents/whitepapers/` folder with technical papers and implementation details:
 
-- `docs/whitepaper.md` - Core mathematical foundations
-- `docs/characteristic_function_for_stochastic_processes.md` - Theory background
-- `docs/deep_complex_valued_set_encoders.md` - Architecture details
-- `docs/variable_length_cvnn_inputs.md` - Input handling
-- `docs/imaginary_numbers_unified_intuition.md` - Mathematical intuition
+- `documents/whitepapers/spectralmc_whitepaper.md` - Core mathematical foundations
+- `documents/whitepapers/characteristic_function_for_stochastic_processes.md` - Theory background
+- `documents/whitepapers/deep_complex_valued_set_encoders.md` - Architecture details
+- `documents/whitepapers/variable_length_cvnn_inputs.md` - Input handling
+- `documents/whitepapers/imaginary_numbers_unified_intuition.md` - Mathematical intuition
 
 ---
 
@@ -737,16 +737,274 @@ def test_deterministic_generation() -> None:
 
 ---
 
+## CPU/GPU Compute Policy
+
+### Architecture: Deterministic CPU Initialization → GPU Compute
+
+SpectralMC uses a **two-phase architecture** to balance deterministic reproducibility with GPU performance:
+
+1. **Phase 1 - CPU Initialization**: Models built on CPU with deterministic Sobol-based weight initialization
+2. **Phase 2 - GPU Compute**: Models transferred to GPU for all training and inference operations
+
+This pattern is **intentional and required** for bit-exact reproducibility.
+
+---
+
+### Reproducibility: Why CPU Initialization is Required
+
+**Problem**: GPU weight initialization is non-deterministic across different GPU architectures.
+
+**Solution**: Initialize all model parameters on CPU using deterministic Sobol sequences.
+
+**Example**:
+```python
+# In cvnn_factory.py - CORRECT PATTERN
+cpu_dev = Device.cpu.to_torch()
+with default_device(cpu_dev), default_dtype(torch_dtype):
+    # All parameters created on CPU with deterministic Sobol init
+    cvnn = ComplexSequential(*layers)
+
+# Caller transfers to GPU
+model = build_model(config, torch.float32)
+model = model.to(torch.device("cuda:0"))  # Transfer for compute
+```
+
+**Impact**:
+- ✅ Bit-exact reproducibility across different GPUs (GTX 970, RTX 4090, A100)
+- ✅ Same trained model weights across different environments
+- ✅ Verifiable scientific results
+
+**Cost**: One-time CPU→GPU transfer overhead (negligible compared to training time).
+
+---
+
+### Acceptable CPU Usage
+
+CPU compute is **acceptable** for these non-computational operations:
+
+#### 1. Model Initialization (Required for Determinism)
+- **Where**: `cvnn_factory.build_model()`
+- **Why**: Ensures deterministic Sobol-based weight initialization
+- **Pattern**: Build on CPU, transfer to GPU via `.to(device)`
+
+#### 2. Checkpoint Serialization (I/O-Bound)
+- **Where**: `gbm_trainer.py`, `serialization/tensors.py`
+- **Why**: Platform-independent checkpoint format
+- **Pattern**: `.cpu()` before serialization, `.to(device)` after loading
+
+#### 3. RNG State Management (PyTorch Limitation)
+- **Where**: `gbm_trainer.py` (RNG state capture/restore)
+- **Why**: PyTorch RNG state is CPU-only
+- **Impact**: Minimal (small state tensors)
+
+#### 4. Optimizer State Snapshots (Checkpoint Consistency)
+- **Where**: `gbm_trainer.py` (optimizer state serialization)
+- **Why**: Consistent checkpoint format
+- **Impact**: Infrequent operation
+
+**Key Principle**: CPU usage is acceptable if it's **I/O-bound** or **required for determinism**, not compute-bound.
+
+---
+
+### GPU Compute Requirements
+
+All **computational** operations must run on GPU:
+
+#### 1. Training Loops (Enforced)
+- **Where**: `GbmCVNNPricer.train()`
+- **Enforcement**: Raises `RuntimeError` if model not on CUDA device
+- **Pattern**:
+  ```python
+  if self._device != Device.cuda:
+      raise RuntimeError("GbmCVNNPricer requires CUDA.")
+  ```
+
+#### 2. Forward Passes (All Inference)
+- **Where**: All CVNN module `forward()` methods
+- **Validation**: Debug-mode warnings if CPU tensors detected
+- **Pattern**:
+  ```python
+  def forward(self, real: Tensor, imag: Tensor) -> tuple[Tensor, Tensor]:
+      if __debug__:
+          _validate_device(real, "ComplexLinear input (real)")
+          _validate_device(imag, "ComplexLinear input (imag)")
+      # ... GPU compute
+  ```
+
+#### 3. Monte Carlo Simulations (CuPy)
+- **Where**: `gbm.py`, `async_normals.py`, `sobol_sampler.py` outputs
+- **Enforcement**: CuPy arrays are GPU-only by design
+- **Pattern**: All simulations return CuPy arrays (GPU tensors)
+
+---
+
+### Test Guidelines
+
+#### Default to GPU
+Tests must use GPU by default and fail explicitly if CUDA unavailable.
+
+**Test Helper Pattern**:
+```python
+# tests/test_cvnn.py - CORRECT
+GPU_DEV: torch.device = _dev.cuda.to_torch()  # Default to GPU
+
+def _rand(*shape: int, dev: torch.device = GPU_DEV, ...) -> Tensor:
+    # Creates tensors on GPU by default
+    ...
+```
+
+**Module-Level GPU Requirement**:
+```python
+# At top of test file - CORRECT
+import pytest
+import torch
+
+if not torch.cuda.is_available():
+    pytest.skip("CUDA required for GPU compute tests", allow_module_level=True)
+```
+
+**Avoid**: Conditional device fallback (silent CPU execution)
+```python
+# WRONG - Silent CPU fallback
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# CORRECT - Explicit GPU requirement
+device = torch.device("cuda:0")  # Fails if CUDA unavailable
+```
+
+#### Explicit Device Selection
+When CPU testing is intentional, explicitly specify device:
+
+```python
+# Intentional CPU test - CORRECT
+cpu_tensor = _rand(10, 5, dev=torch.device("cpu"))
+
+# Accidental CPU usage - WRONG
+tensor = _rand(10, 5)  # Silently uses default (was CPU, now GPU)
+```
+
+---
+
+### Debugging Silent CPU Fallback
+
+If you suspect unintended CPU compute:
+
+#### 1. Check Test Device Defaults
+```python
+# Look for CPU_DEV in test files
+grep "CPU_DEV" tests/*.py
+
+# Should be GPU_DEV instead
+GPU_DEV: torch.device = _dev.cuda.to_torch()
+```
+
+#### 2. Enable Debug Mode Validation
+```bash
+# Run without -O flag (enables __debug__ checks)
+python -m pytest tests/test_cvnn.py -v
+
+# Look for device validation warnings
+UserWarning: ComplexLinear input (real) is on cpu but expected cuda.
+```
+
+#### 3. Verify Model Device After Factory
+```python
+model = build_model(config, torch.float32)
+print(f"Model device after build: {next(model.parameters()).device}")  # cpu
+
+model = model.to(torch.device("cuda:0"))
+print(f"Model device after transfer: {next(model.parameters()).device}")  # cuda:0
+```
+
+#### 4. Check for Conditional Fallbacks
+```bash
+# Search for conditional device logic
+grep -r 'if torch.cuda.is_available()' src/ tests/
+
+# Look for fallback patterns (avoid these)
+grep -r 'else.*cpu' src/ tests/
+```
+
+---
+
+### Runtime Device Validation
+
+Use `__debug__` guards for zero-overhead production validation:
+
+```python
+# In forward() methods - CORRECT PATTERN
+def forward(self, real: Tensor, imag: Tensor) -> tuple[Tensor, Tensor]:
+    if __debug__:
+        _validate_device(real, "ComplexLinear input (real)")
+        _validate_device(imag, "ComplexLinear input (imag)")
+
+    # GPU compute guaranteed here
+    ...
+```
+
+**Production**: Validation removed with `python -O` (zero overhead)
+**Development**: Warnings appear if CPU tensors detected
+
+---
+
+### Summary: CPU vs GPU Decision Tree
+
+Use this flowchart to determine the correct device for each operation:
+
+```mermaid
+flowchart TB
+  Start{Operation Type?}
+
+  ModelInit[Model Initialization]
+  CheckpointIO[Checkpoint I/O]
+  RNGState[RNG State Management]
+  Computational[Computational Operations]
+
+  CPUInit[CPU - Deterministic Sobol init]
+  CPUCheckpoint[CPU - Serialization format]
+  CPURNG[CPU - PyTorch limitation]
+  GPUCompute[GPU - Training, Inference, Simulations]
+
+  Start -->|Model creation| ModelInit
+  Start -->|Save/Load checkpoints| CheckpointIO
+  Start -->|Get/Set RNG state| RNGState
+  Start -->|Training or Inference| Computational
+
+  ModelInit --> CPUInit
+  CheckpointIO --> CPUCheckpoint
+  RNGState --> CPURNG
+  Computational --> GPUCompute
+
+  CPUInit -.->|Then transfer| GPUCompute
+```
+
+**Key Principle**: Use CPU for **determinism** and **I/O**, GPU for **compute**.
+
+---
+
+### Enforcement Mechanisms
+
+1. **Factory Pattern**: Models built on CPU (deterministic), transferred to GPU (explicit `.to()` call)
+2. **Training Validation**: `GbmCVNNPricer` raises `RuntimeError` if device != CUDA
+3. **Test Suite**: Defaults to GPU, module-level skip if CUDA unavailable
+4. **Debug Warnings**: `__debug__` validation catches CPU tensors in forward passes
+5. **Documentation**: This section + docstrings explain patterns
+
+**Goal**: Prevent silent CPU fallback while preserving deterministic initialization.
+
+---
+
 ## Summary
 
 This style guide ensures that SpectralMC maintains:
 
 - **Strict type safety** with zero tolerance for `Any`, `cast`, or `type: ignore`
-- **Reproducible execution** through the PyTorch facade pattern
+- **Reproducible execution** through the PyTorch facade pattern and CPU initialization
+- **GPU-centric compute** with deterministic CPU initialization for reproducibility
 - **Comprehensive documentation** for all modules and functions
 - **Consistent formatting** with Black
-- **Robust testing** with full type coverage
+- **Robust testing** with full type coverage and GPU-first design
 
-All code must pass `mypy --strict` and `black --check` before being committed. The custom type stubs in `stubs/` ensure complete type coverage for all dependencies, while the PyTorch facade guarantees reproducible, deterministic execution across environments.
+All code must pass `mypy --strict` and `black --check` before being committed. The custom type stubs in `stubs/` ensure complete type coverage for all dependencies, while the CPU/GPU compute policy guarantees reproducible, deterministic execution with GPU performance.
 
-Following these guidelines ensures that SpectralMC remains a high-quality, maintainable, and reliable codebase for GPU-accelerated Monte Carlo learning.
+Following these guidelines ensures that SpectralMC remains a high-quality, maintainable, and reliable codebase for GPU-accelerated Monte Carlo learning with bit-exact reproducibility across platforms.

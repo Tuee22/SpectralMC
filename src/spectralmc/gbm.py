@@ -70,7 +70,7 @@ class SimulationParams(BaseModel):
     skip: int = Field(0, ge=0)
     dtype: Precision
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     @model_validator(mode="after")
     def validate_gpu_memory(self) -> "SimulationParams":
@@ -132,7 +132,7 @@ class BlackScholesConfig(BaseModel):
     simulate_log_return: bool = True
     normalize_forwards: bool = True
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 # ─────────────────────────────── CUDA path kernel ───────────────────────────
@@ -186,15 +186,17 @@ class BlackScholes:
         d: float
         v: NonNegFloat
 
+        model_config = ConfigDict(frozen=True, extra="forbid")
+
     class SimResults(BaseModel):
-        model_config = ConfigDict(arbitrary_types_allowed=True)
+        model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
         times: cp.ndarray
         sims: cp.ndarray
         forwards: cp.ndarray
         df: cp.ndarray
 
     class PricingResults(BaseModel):
-        model_config = ConfigDict(arbitrary_types_allowed=True)
+        model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
         put_price_intrinsic: cp.ndarray
         call_price_intrinsic: cp.ndarray
         underlying: cp.ndarray
@@ -212,7 +214,7 @@ class BlackScholes:
         put_price: float
         call_price: float
 
-        model_config = ConfigDict(frozen=True)
+        model_config = ConfigDict(frozen=True, extra="forbid")
 
     # ....................................... construction ...................
     def __init__(self, cfg: BlackScholesConfig) -> None:

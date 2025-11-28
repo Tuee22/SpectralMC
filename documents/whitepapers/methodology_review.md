@@ -110,7 +110,7 @@ def test_cvnn_pricing_accuracy():
 
 **No Published Peer Review**
 - Methodology appears novel with no journal publication
-- `docs/whitepaper.md` is ChatGPT-generated, not rigorous
+- `documents/whitepapers/spectralmc_whitepaper.md` is ChatGPT-generated, not rigorous
 - No industry validation or benchmark studies
 
 ### 📚 Theoretical References
@@ -786,7 +786,7 @@ def optimize_hyperparameters():
 **Priority 11: Extend to Stochastic Volatility**
 - Heston model: dv_t = κ(θ - v_t)dt + ξ√v_t dW_t
 - SABR model for interest rate derivatives
-- Requires 2D time-frequency grids (see `docs/characteristic_function_for_stochastic_processes.md`)
+- Requires 2D time-frequency grids (see `documents/whitepapers/characteristic_function_for_stochastic_processes.md`)
 
 ---
 

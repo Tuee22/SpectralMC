@@ -131,7 +131,10 @@ async def test_tracking_mode_auto_update(
     )
 
     async with client:
-        assert client.get_current_version().counter == 0  # type: ignore[union-attr]
+        # Add explicit None check for type narrowing
+        version = client.get_current_version()
+        assert version is not None, "Expected version to be loaded"
+        assert version.counter == 0
 
         # Create new version
         config2 = make_test_config(torch.nn.Linear(5, 5), global_step=100)

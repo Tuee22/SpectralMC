@@ -125,9 +125,10 @@ def test_version_immutability() -> None:
         commit_message="Test",
     )
 
-    # Should raise FrozenInstanceError
+    # Should raise FrozenInstanceError when attempting to mutate frozen field
+    # Use object.__setattr__ to bypass type checking for testing immutability
     with pytest.raises(Exception):
-        version.counter = 999  # type: ignore[misc]
+        object.__setattr__(version, "counter", 999)
 
 
 def test_hash_length_consistency() -> None:

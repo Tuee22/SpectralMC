@@ -66,19 +66,29 @@ from typing import (
 if TYPE_CHECKING:
     from spectralmc.storage import AsyncBlockchainModelStore
 
+from spectralmc.storage.errors import (
+    CommitError,
+    ConflictError,
+    NotFastForwardError,
+    StorageError,
+)
+
 _logger = logging.getLogger(__name__)
 
 import cupy as cp
 from cupy.cuda import Stream as CuPyStream
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
-from torch.utils.tensorboard import SummaryWriter
 
-from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
-from spectralmc.models.torch import (
+# CRITICAL: Import facade BEFORE torch for deterministic algorithms
+import spectralmc.models.torch as sm_torch  # noqa: E402
+import torch  # noqa: E402
+import torch.nn as nn  # noqa: E402
+import torch.optim as optim  # noqa: E402
+from torch.utils.tensorboard import SummaryWriter  # noqa: E402
+
+from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams  # noqa: E402
+from spectralmc.models.torch import (  # noqa: E402
     AdamOptimizerState,
     AnyDType,
     DType,
@@ -141,7 +151,7 @@ class TrainingConfig(BaseModel):
     batch_size: PositiveInt
     learning_rate: float = Field(gt=0.0, lt=1.0)
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class GbmCVNNPricerConfig(BaseModel):
@@ -156,7 +166,7 @@ class GbmCVNNPricerConfig(BaseModel):
     torch_cpu_rng_state: Optional[bytes] = None
     torch_cuda_rng_states: Optional[List[bytes]] = None
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra="forbid")
 
 
 class StepMetrics(BaseModel):
@@ -170,7 +180,7 @@ class StepMetrics(BaseModel):
     optimizer: optim.Adam
     model: ComplexValuedModel
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra="forbid")
 
 
 class TrainingResult(BaseModel):
@@ -186,7 +196,7 @@ class TrainingResult(BaseModel):
     total_batches: int
     final_grad_norm: float
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra="forbid")
 
 
 # =============================================================================
@@ -501,7 +511,7 @@ class GbmCVNNPricer:
                 # No event loop running - safe to use asyncio.run()
                 asyncio.run(_do_commit())
 
-        except Exception as e:
+        except (CommitError, NotFastForwardError, ConflictError, StorageError) as e:
             _logger.error(
                 f"Failed to commit to blockchain at step {self._global_step}: {e}",
                 exc_info=True,
@@ -578,10 +588,10 @@ class GbmCVNNPricer:
 
             # ── CVNN step (Torch) ────────────────────────────────────── #
             with torch.cuda.stream(self._context.torch_stream):
-                # torch.from_dlpack() exists in PyTorch 2.7.0 but type stubs are incomplete
-                # This is the modern, non-deprecated API (replaces torch.utils.dlpack.from_dlpack)
+                # torch.from_dlpack() is the modern, non-deprecated API (replaces torch.utils.dlpack.from_dlpack)
+                # Type stub added in stubs/torch/__init__.pyi
                 targets = (
-                    torch.from_dlpack(fft_buf)  # type: ignore[attr-defined]
+                    torch.from_dlpack(fft_buf)
                     .to(self._torch_cdtype)
                     .detach()
                 )

@@ -7,10 +7,12 @@ import logging
 from typing import Optional, List
 from dataclasses import dataclass
 
+from botocore.exceptions import ClientError
+
 from ..result import Result, Success, Failure
 from .store import AsyncBlockchainModelStore
 from .chain import ModelVersion
-from .errors import ChainCorruptionError, HeadNotFoundError
+from .errors import ChainCorruptionError, HeadNotFoundError, VersionNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +102,7 @@ async def verify_chain_detailed(store: AsyncBlockchainModelStore) -> CorruptionR
         try:
             version = await store.get_version(version_id)
             versions.append(version)
-        except Exception as e:
+        except VersionNotFoundError as e:
             # Missing version in sequence
             return CorruptionReport(
                 is_valid=False,
@@ -243,7 +245,7 @@ async def verify_version_completeness(
     for key in required_files:
         try:
             await store._s3_client.head_object(Bucket=store.bucket_name, Key=key)
-        except Exception as e:
+        except ClientError as e:
             raise ValueError(f"Version {version.counter} missing artifact: {key} - {e}")
 
     return True

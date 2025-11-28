@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import cast, Literal
+from typing import Literal
 
 from spectralmc.gbm import BlackScholesConfig, SimulationParams
 from spectralmc.sobol_sampler import BoundSpec
@@ -35,8 +35,22 @@ class SimulationParamsConverter:
     def from_proto(proto: simulation_pb2.SimulationParamsProto) -> SimulationParams:
         """Convert from proto."""
         precision = PrecisionConverter.from_proto(proto.dtype)
-        # Cast threads_per_block to satisfy Literal type
-        threads: ThreadsPerBlock = cast(ThreadsPerBlock, proto.threads_per_block)
+        # Validate and map threads_per_block to Literal type
+        # mypy can't narrow int to Literal, so we use explicit mapping
+        threads_mapping: dict[int, ThreadsPerBlock] = {
+            32: 32,
+            64: 64,
+            128: 128,
+            256: 256,
+            512: 512,
+            1024: 1024,
+        }
+        threads = threads_mapping.get(proto.threads_per_block)
+        if threads is None:
+            raise ValueError(
+                f"Invalid threads_per_block: {proto.threads_per_block}. "
+                f"Must be one of {list(threads_mapping.keys())}"
+            )
         return SimulationParams(
             skip=proto.skip,
             timesteps=proto.timesteps,

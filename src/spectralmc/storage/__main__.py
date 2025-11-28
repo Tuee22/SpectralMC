@@ -52,7 +52,7 @@ from .store import AsyncBlockchainModelStore
 from .verification import verify_chain, verify_chain_detailed, find_corruption
 from .gc import run_gc
 from .tensorboard_writer import log_blockchain_to_tensorboard
-from .errors import ChainCorruptionError, VersionNotFoundError, HeadNotFoundError
+from .errors import ChainCorruptionError, VersionNotFoundError, HeadNotFoundError, StorageError
 
 
 async def cmd_verify(bucket_name: str, detailed: bool = False) -> int:
@@ -97,7 +97,7 @@ async def cmd_verify(bucket_name: str, detailed: bool = False) -> int:
     except ChainCorruptionError as e:
         print(f"✗ Chain corruption detected: {e}", file=sys.stderr)
         return 1
-    except Exception as e:
+    except (VersionNotFoundError, StorageError, HeadNotFoundError) as e:
         print(f"✗ Error during verification: {e}", file=sys.stderr)
         return 2
 
@@ -135,7 +135,7 @@ async def cmd_find_corruption(bucket_name: str) -> int:
                 )
                 return 1
 
-    except Exception as e:
+    except (ChainCorruptionError, VersionNotFoundError, StorageError, HeadNotFoundError) as e:
         print(f"✗ Error finding corruption: {e}", file=sys.stderr)
         return 2
 
@@ -180,7 +180,7 @@ async def cmd_list_versions(bucket_name: str) -> int:
             print(f"\nTotal: {head.counter + 1} versions")
             return 0
 
-    except Exception as e:
+    except (VersionNotFoundError, StorageError, HeadNotFoundError) as e:
         print(f"✗ Error listing versions: {e}", file=sys.stderr)
         return 2
 
@@ -218,7 +218,7 @@ async def cmd_inspect(bucket_name: str, version_id: str) -> int:
 
             return 0
 
-    except Exception as e:
+    except (VersionNotFoundError, StorageError) as e:
         print(f"✗ Error inspecting version: {e}", file=sys.stderr)
         return 2
 
@@ -264,7 +264,7 @@ async def cmd_gc_preview(
 
             return 0
 
-    except Exception as e:
+    except (VersionNotFoundError, StorageError, HeadNotFoundError) as e:
         print(f"✗ Error during GC preview: {e}", file=sys.stderr)
         return 2
 
@@ -323,7 +323,7 @@ async def cmd_gc_run(
 
             return 0
 
-    except Exception as e:
+    except (VersionNotFoundError, StorageError, HeadNotFoundError) as e:
         print(f"✗ Error during GC: {e}", file=sys.stderr)
         return 2
 
@@ -352,7 +352,7 @@ async def cmd_tensorboard_log(
 
             return 0
 
-    except Exception as e:
+    except (VersionNotFoundError, StorageError, HeadNotFoundError, IOError, OSError) as e:
         print(f"✗ Error logging to TensorBoard: {e}", file=sys.stderr)
         return 2
 

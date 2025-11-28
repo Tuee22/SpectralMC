@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
-from typing import Optional, cast
+from typing import Optional
 
-import torch
+# CRITICAL: Import facade BEFORE torch for deterministic algorithms
+import spectralmc.models.torch as sm_torch  # noqa: E402
+import torch  # noqa: E402
 
-from spectralmc.gbm_trainer import GbmCVNNPricerConfig, ComplexValuedModel
+from spectralmc.gbm_trainer import GbmCVNNPricerConfig, ComplexValuedModel  # noqa: E402
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.serialization.tensors import ModelCheckpointConverter
 from spectralmc.serialization import compute_sha256
@@ -124,11 +126,19 @@ async def load_snapshot_from_checkpoint(
     # Load model state dict into CVNN
     cvnn_template.load_state_dict(model_state_dict)
 
+    # Validate that cvnn_template implements ComplexValuedModel protocol
+    if not isinstance(cvnn_template, ComplexValuedModel):
+        raise TypeError(
+            f"cvnn_template must implement ComplexValuedModel protocol, "
+            f"got {type(cvnn_template).__name__}"
+        )
+    cvnn: ComplexValuedModel = cvnn_template
+
     # Create GbmCVNNPricerConfig
     return GbmCVNNPricerConfig(
         cfg=cfg.cfg,  # Use existing BlackScholes config
         domain_bounds=cfg.domain_bounds,  # Use existing domain bounds
-        cvnn=cast(ComplexValuedModel, cvnn_template),
+        cvnn=cvnn,
         optimizer_state=optimizer_state if optimizer_state.param_states else None,
         global_step=global_step,
         sobol_skip=cfg.sobol_skip,  # Use existing sobol skip
