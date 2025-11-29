@@ -111,7 +111,7 @@ RUN if [ -f /usr/bin/timeout ]; then mv /usr/bin/timeout /usr/bin/timeout.real; 
 EXPOSE 6006 8888
 
 # 13) Default command to run Jupyter
-pENTRYPOINT ["/usr/bin/tini", "--"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
 
 CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", \
      "--NotebookApp.token=", "--NotebookApp.password=", "--notebook-dir=/spectralmc"]
