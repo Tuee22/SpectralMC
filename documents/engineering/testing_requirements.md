@@ -349,6 +349,249 @@ def test_random_generation() -> None:
 
 ---
 
+---
+
+## Test Output Handling
+
+### CRITICAL - Output Truncation Issue
+
+The Bash tool truncates output at 30,000 characters. Test suites may produce large output that WILL BE TRUNCATED, making it impossible to properly analyze failures.
+
+### Required Test Execution Workflow
+
+**ALWAYS** redirect test output to files in /tmp/, then read the complete output:
+
+```bash
+# Step 1: Run tests with output redirection
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all > /tmp/test-output.txt 2>&1
+
+# Step 2: Read complete output using Read tool
+# Read /tmp/test-output.txt
+
+# Step 3: Analyze ALL failures, not just visible ones
+```
+
+### For Specific Test Categories
+
+```bash
+# CPU tests only
+docker compose -f docker/docker-compose.yml exec spectralmc pytest tests -m 'not gpu' > /tmp/test-cpu.txt 2>&1
+
+# GPU tests only
+docker compose -f docker/docker-compose.yml exec spectralmc pytest tests -m gpu > /tmp/test-gpu.txt 2>&1
+
+# Type checking
+docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc --strict > /tmp/mypy-output.txt 2>&1
+```
+
+### Why This Matters
+
+- Bash tool output truncation at 30K chars is HARD LIMIT
+- Test suites can produce 100KB+ of output
+- Truncated output hides most failures, making diagnosis impossible
+- File-based approach ensures complete output is always available
+- Read tool has no size limits for files
+
+### Test Execution Requirements
+
+**Forbidden**:
+- ❌ `Bash(command="...test...", timeout=60000)` - Truncates output, kills tests mid-run
+- ❌ `Bash(command="...test...", run_in_background=True)` - Can't see failures in real-time
+- ❌ Reading only partial output with `head -n 100` or similar truncation
+- ❌ Checking test status before completion (polling BashOutput prematurely)
+
+**Required**:
+- ✅ No timeout parameter on test commands
+- ✅ Wait for complete test execution (GPU tests can take several minutes)
+- ✅ Review ALL stdout/stderr output before drawing conclusions
+- ✅ Let tests complete naturally, read full results
+
+---
+
+## Testing Anti-Patterns
+
+### 1. Tests Pass When Features Are Broken
+
+**Problem**: Test validates that code runs, not that it produces correct results
+
+- ❌ `assert result is not None` - accepts any output
+- ❌ `assert len(simulations) > 0` - passes even with wrong values
+- ✅ `assert torch.allclose(result, expected, rtol=1e-5)` - validates numerical accuracy
+- ✅ `assert torch.isfinite(result).all()` - ensures no NaN/Inf values
+
+**Impact**: Broken numerical computations go undetected, corrupting downstream calculations
+
+### 2. Accepting NotImplementedError as Success
+
+**Problem**: Treating placeholder implementations as working features
+
+- ❌ Accepting `NotImplementedError` or returning `None` in convergence checks
+- ❌ Methods that return empty tensors when they should compute values
+- ✅ All methods must have complete implementations before merging
+- ✅ Use abstract base classes to enforce interface contracts
+
+**Example**: A pricer method that returns `torch.zeros()` instead of computing actual prices
+
+### 3. Using pytest.skip()
+
+**Problem**: Hides test failures instead of fixing them
+
+- ❌ `pytest.skip("TODO: fix later")` - technical debt grows unbounded
+- ❌ `pytest.skip("flaky test")` - masks real bugs
+- ✅ Fix the test or remove it entirely
+- ✅ Use `@pytest.mark.gpu` for hardware requirements, not skip
+
+**Impact**: Critical bugs remain hidden, test suite provides false confidence
+
+### 4. Testing Actions Without Validating Results
+
+**Problem**: Running simulations without verifying convergence or correctness
+
+- ❌ Run Monte Carlo simulation, only check that it completes
+- ❌ Train model, only verify training loop finishes
+- ✅ Validate convergence metrics (loss, variance reduction)
+- ✅ Check statistical properties of outputs (mean, std, distribution shape)
+- ✅ Compare against analytical solutions when available
+
+**Example**: Test runs 10,000 simulations but never checks if the estimated mean converges to expected value
+
+### 5. Hardcoded Success Tests
+
+**Problem**: Tests that always pass regardless of implementation
+
+- ❌ `assert True` - meaningless validation
+- ❌ `assert result or not result` - tautology
+- ❌ `assert gradient is not None` - doesn't validate gradient correctness
+- ✅ `assert torch.autograd.gradcheck(func, inputs)` - validates gradient computation
+- ✅ Use property-based testing with hypothesis for numerical properties
+
+### 6. Overly Permissive Convergence Criteria
+
+**Problem**: Accepting numerical instability or divergence as "success"
+
+- ❌ Not checking for NaN/Inf in outputs
+- ❌ Accepting any loss decrease as "converged"
+- ❌ `assert results.shape == expected_shape` - shape correct but values wrong
+- ✅ `assert torch.isfinite(results).all()` - reject NaN/Inf
+- ✅ `assert loss < threshold and variance < max_variance` - validate convergence quality
+- ✅ Check condition numbers for numerical stability
+
+**Impact**: Silently propagates numerical instability through pipelines
+
+### 7. Lowered Standards for Flaky Tests
+
+**Problem**: Weakening assertions to make tests pass instead of fixing root cause
+
+- ❌ Changing `rtol=1e-5` to `rtol=1e-1` to make test pass
+- ❌ Using `assert len(results) > 0` instead of validating statistical properties
+- ❌ Adding broad exception handlers to suppress errors
+- ✅ Investigate why tolerance needs to be so loose
+- ✅ Use statistical tests (e.g., Kolmogorov-Smirnov) for distribution validation
+- ✅ Set random seeds for reproducibility, investigate variance sources
+
+### 8. Test Timeouts for Long Simulations
+
+**Problem**: Artificially limiting execution time instead of optimizing or validating correctly
+
+- ❌ Adding `pytest.timeout(10)` to skip slow tests
+- ❌ Reducing simulation count to avoid timeout
+- ✅ Optimize the algorithm if it's too slow
+- ✅ Use @pytest.mark.slow for long-running tests, run in CI
+- ✅ Profile to identify bottlenecks before adding timeouts
+
+**Note**: Some Monte Carlo methods are inherently expensive - validate, don't skip
+
+### 9. Masking Root Causes with Increased Iterations
+
+**Problem**: Increasing iteration limits or simulation counts to hide convergence issues
+
+- ❌ Increasing max_iter from 1000 to 100000 to make test pass
+- ❌ Doubling sample size instead of investigating why convergence is slow
+- ✅ Investigate why convergence is slow (bad initialization, poor hyperparameters)
+- ✅ Fix the algorithm, not the iteration count
+- ✅ Set realistic iteration limits and validate convergence criteria
+
+**Example**: GBM trainer takes 10x more iterations than expected - investigate learning rate, loss function, not max_iter
+
+### 10. Trial-and-Error Debugging
+
+**Problem**: Randomly changing code without understanding the root cause
+
+- ❌ Changing learning rates, batch sizes, or model architecture randomly
+- ❌ Adding `.detach()`, `.clone()`, or `.cpu()` calls without understanding memory flow
+
+**Systematic debugging process**:
+1. **Establish baseline**: Document current behavior (loss curves, gradients, outputs)
+2. **Identify root cause**: Use debugger, print intermediate tensors, check gradients
+3. **Form hypothesis**: What specific change will fix the issue and why?
+4. **Make targeted change**: Implement one fix at a time
+5. **Validate fix**: Confirm it resolves the issue without breaking other tests
+
+### 11. Adding Unvalidated Features During Test Fixing
+
+**Problem**: Adding new functionality while debugging test failures
+
+- ❌ Adding new training features while fixing convergence test
+- ❌ Refactoring model architecture while debugging gradient test
+- ✅ Fix the test first, add features later
+- ✅ Keep debugging changes minimal and focused
+- ✅ Create separate PR for new features after tests are green
+
+### 12. Analyzing Truncated Test Output
+
+**Problem**: Making decisions based on incomplete test output
+
+- ❌ Terminal truncates 10,000 line stack trace, missing root cause
+- ❌ Truncated tensor values hide NaN/Inf in middle of array
+
+**Always redirect to file for analysis**:
+```bash
+pytest tests/test_gbm.py -v > test_output.txt 2>&1
+# Then read complete output
+```
+
+- ✅ Use `torch.set_printoptions(profile="full")` to see all tensor values
+- ✅ Save intermediate results to disk for post-mortem analysis
+
+### 13. Disabling Safety Checks for Performance
+
+**Problem**: Removing validation to speed up tests
+
+- ❌ Commenting out `assert torch.isfinite()` checks
+- ❌ Disabling gradient checking in tests
+- ❌ Skipping convergence validation
+- ✅ Keep safety checks in tests, optimize implementation instead
+- ✅ Use separate performance benchmarks without safety overhead
+- ✅ In production, make safety checks configurable but default to enabled
+
+---
+
+## Blockchain Storage Test Coverage
+
+All storage features have comprehensive test coverage:
+
+- **CLI commands**: 22 tests (83% coverage of `__main__.py`)
+  - verify, find-corruption, list-versions, inspect commands
+  - gc-preview, gc-run with protected tags
+  - tensorboard-log, error handling
+- **InferenceClient**: 8 tests (pinned mode, tracking mode, lifecycle)
+- **Chain verification**: 15 tests (genesis, merkle chain, corruption detection)
+- **Garbage collection**: 15 tests (retention policies, safety checks)
+- **TensorBoard**: 12 tests (logging, metadata, error handling)
+- **Training integration**: 7 tests (auto_commit, periodic commits, optimizer state preservation)
+
+**Total: 86 storage tests, 73% overall coverage**
+
+Run storage tests:
+```bash
+docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/test_storage/ -v
+docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/test_integrity/ -v
+```
+
+See also: [Blockchain Storage](blockchain_storage.md) for complete storage documentation.
+
+---
+
 ## Summary
 
 - **Fully typed**: All tests pass `mypy --strict`
@@ -357,5 +600,7 @@ def test_random_generation() -> None:
 - **Deterministic**: Set `torch.manual_seed()` in every test
 - **Comprehensive**: Cover happy path, edge cases, errors
 - **Async**: Use `pytest-asyncio` for async code
+- **Output handling**: Always redirect to files, read complete output
+- **Avoid anti-patterns**: See 13 testing anti-patterns above
 
-See also: [Type Safety](type_safety.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [PyTorch Facade](pytorch_facade.md)
+See also: [Coding Standards](coding_standards.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [PyTorch Facade](pytorch_facade.md), [Blockchain Storage](blockchain_storage.md)

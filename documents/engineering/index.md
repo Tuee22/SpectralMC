@@ -40,7 +40,8 @@ Violating these guidelines can result in:
    - Black formatting requirements and configuration
    - mypy strict mode enforcement (zero tolerance for `Any`, `cast`, `type: ignore`)
    - Custom `.pyi` type stubs for third-party libraries
-   - Complete type safety requirements consolidated in one document
+   - **5 implementation anti-patterns** to avoid
+   - **Dependency deprecation management** with zero-tolerance policy
 
 2. **[Functional Programming](functional_programming.md)** ⭐ New
    - Algebraic Data Types (ADTs) for errors and domain states
@@ -79,10 +80,13 @@ Violating these guidelines can result in:
 
 ### Testing & Compute Policy
 
-7. **[Testing Requirements](testing_requirements.md)**
+7. **[Testing Requirements](testing_requirements.md)** ⭐ Comprehensive Guide
    - Test structure and type safety
    - GPU testing with `@pytest.mark.gpu`
    - Deterministic testing requirements
+   - **13 testing anti-patterns** to avoid
+   - **Test output handling** best practices
+   - **Blockchain storage test coverage**
 
 8. **[CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)**
    - Two-phase architecture (CPU init → GPU compute)
@@ -104,6 +108,16 @@ Violating these guidelines can result in:
     - Source build configuration
     - Common build errors and solutions
     - Validation and testing
+
+### Model Versioning
+
+11. **[Blockchain Storage](blockchain_storage.md)** ⭐ Production Model Versioning
+    - S3-based blockchain model versioning system
+    - Atomic commits with 10-step CAS protocol
+    - InferenceClient (pinned/tracking modes)
+    - Chain verification and garbage collection
+    - CLI tools and TensorBoard integration
+    - Training integration with auto-commit
 
 ---
 
@@ -177,10 +191,15 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
 **GPU/CPU** (see [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)):
 - ❌ Implicit GPU/CPU transfers (`.cuda()`, `.cpu()`, `.to(device)`)
 
-**General**:
-- ❌ Direct pytest usage (must use `poetry run test-all`)
-- ❌ Mutable default arguments
+**Testing** (see [Testing Requirements](testing_requirements.md)):
+- ❌ `pytest.skip()` without fixing root cause
+- ❌ Tests that pass when features are broken
+- ❌ Analyzing truncated test output
+
+**Implementation** (see [Coding Standards](coding_standards.md)):
 - ❌ Silent exception handling
+- ❌ Mutable default arguments
+- ❌ Ignoring numerical warnings
 
 ### Required Patterns
 

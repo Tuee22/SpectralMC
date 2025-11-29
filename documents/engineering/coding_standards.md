@@ -853,6 +853,235 @@ Before committing new/updated stubs:
 
 ---
 
+---
+
+## Implementation Anti-Patterns
+
+### 1. Silent Failure Handling
+
+**Problem**: Catching exceptions without proper handling or logging
+
+- ❌ `try: result = simulate() except: return default_value` - hides errors
+- ❌ `if torch.isnan(loss).any(): loss = torch.tensor(0.0)` - masks numerical issues
+- ❌ Broad exception handlers: `except Exception: pass`
+- ✅ Let exceptions propagate unless you can meaningfully handle them
+- ✅ Log errors with context before re-raising
+- ✅ Use specific exception types: `except ValueError as e:`
+
+**Impact**: Silent failures in numerical code lead to incorrect results downstream
+
+**Example**:
+```python
+# ❌ Silent failure
+try:
+    result = monte_carlo_simulation(params)
+except Exception:
+    result = torch.zeros(batch_size)  # Wrong! Hides the error
+
+# ✅ Proper handling
+try:
+    result = monte_carlo_simulation(params)
+except NumericalInstabilityError as e:
+    logger.error(f"Simulation failed: {e}, params: {params}")
+    raise  # Re-raise to fail fast
+```
+
+### 2. False Success Patterns
+
+**Problem**: Tests or implementations that report success without validation
+
+- ❌ Training loop returns success even when loss diverged
+- ❌ `status = "converged"` without checking convergence criteria
+- ❌ Function returns successfully with NaN/Inf values
+- ✅ Always validate outputs before returning success status
+- ✅ Use type hints and runtime validation (pydantic)
+- ✅ Raise exceptions for invalid states rather than returning error codes
+
+**Example**:
+```python
+# ❌ False success
+def train_model(model, data):
+    for epoch in range(100):
+        loss = train_step(model, data)
+    return {"status": "success", "loss": loss}  # Could be NaN!
+
+# ✅ Validated success
+def train_model(model, data):
+    for epoch in range(100):
+        loss = train_step(model, data)
+        if not torch.isfinite(loss):
+            raise TrainingDivergenceError(f"Loss became {loss} at epoch {epoch}")
+    return {"status": "converged", "final_loss": float(loss)}
+```
+
+### 3. Ignoring Numerical Warnings
+
+**Problem**: Treating warnings as noise instead of signals
+
+- ❌ Suppressing "divide by zero" warnings
+- ❌ Ignoring "invalid value encountered" from NumPy/PyTorch
+- ❌ Filtering out all warnings with `warnings.filterwarnings("ignore")`
+- ✅ Investigate and fix root cause of warnings
+- ✅ Only filter specific expected warnings (e.g., QuantLib deprecation warnings)
+- ✅ Convert warnings to errors during testing: `warnings.simplefilter("error")`
+
+### 4. Mutable Default Arguments
+
+**Problem**: Using mutable objects as default arguments
+
+- ❌ `def simulate(config={}):` - shared across calls
+- ❌ `def run_batch(params=[]):` - accumulates across calls
+- ✅ `def simulate(config=None): config = config or {}`
+- ✅ Use immutable defaults or None
+
+**Impact**: Especially dangerous in parallel/distributed computing with Ray/Dask
+
+### 5. Inconsistent Device Handling
+
+**Problem**: Not managing CPU/GPU device placement consistently
+
+- ❌ Assuming tensors are on CUDA without checking
+- ❌ Moving tensors between devices unnecessarily
+- ❌ Not handling device in function signatures
+- ✅ Explicit device management: `device = torch.device("cuda" if torch.cuda.is_available() else "cpu")`
+- ✅ Keep tensors on same device throughout computation
+- ✅ Use `models/cpu_gpu_transfer.py` utilities for controlled transfers
+
+**Example**: Model on GPU, input data on CPU - causes cryptic errors
+
+---
+
+## Dependency Deprecation Management
+
+SpectralMC enforces a **zero-tolerance policy** for deprecated APIs in production code to ensure long-term maintainability and compatibility.
+
+### Zero-Tolerance Policy
+
+**Prohibited**:
+- ❌ NO deprecated APIs in `src/spectralmc/` code
+- ❌ NO suppressing deprecation warnings without documented upstream issue
+- ❌ NO using `# type: ignore` or similar to hide deprecation warnings
+
+**Required**:
+- ✅ All deprecations must have migration plan within 1 sprint
+- ✅ Use modern, non-deprecated APIs for all new code
+- ✅ Fix deprecation warnings immediately when they appear
+
+### Allowed Exceptions
+
+Only third-party library internals may use deprecated code if:
+1. **Upstream issue tracked**: Must have link to library's GitHub issue
+2. **Pytest filter documented**: Must add filter in `pyproject.toml` with explanation
+3. **Monthly review**: Must check for fixes in dependency updates
+
+**Example** (current exceptions):
+```toml
+[tool.pytest.ini_options]
+filterwarnings = [
+    # Botocore datetime.utcnow() - AWS SDK internal (boto/botocore#3201)
+    "ignore::DeprecationWarning:botocore.*",
+    # QuantLib SWIG bindings - unfixable (generated code)
+    "ignore::DeprecationWarning:.*QuantLib.*",
+]
+```
+
+### Monthly Review Checklist
+
+Run these checks on the 1st of each month:
+
+```bash
+# 1. Check for dependency updates
+docker compose -f docker/docker-compose.yml exec spectralmc poetry show --outdated
+
+# 2. Check botocore for datetime.utcnow fix (currently pending)
+# Visit: https://github.com/boto/botocore/releases
+
+# 3. Check for new deprecation warnings in tests
+docker compose -f docker/docker-compose.yml exec spectralmc \
+  pytest tests/ -W default::DeprecationWarning > /tmp/warnings.txt 2>&1
+grep "DeprecationWarning" /tmp/warnings.txt | grep -v "botocore\|QuantLib"
+
+# 4. Review PyTorch/NumPy/CuPy changelogs for upcoming deprecations
+# - PyTorch: https://github.com/pytorch/pytorch/releases
+# - NumPy: https://numpy.org/news/
+# - CuPy: https://github.com/cupy/cupy/releases
+```
+
+### Code Review Checklist
+
+Block merge if ANY of these are present:
+
+- [ ] Uses `torch.utils.dlpack.from_dlpack()` instead of `torch.from_dlpack()`
+- [ ] Uses `cupy_array.toDlpack()` instead of direct `torch.from_dlpack()`
+- [ ] Uses removed NumPy aliases (`np.float`, `np.int`, `np.complex_`, `np.bool`)
+- [ ] Adds `@pytest.mark.skip()` without upstream issue link
+- [ ] Suppresses `DeprecationWarning` in production code without explanation
+- [ ] Ignores deprecation warnings in function/method implementations
+
+### Migration Examples
+
+**DLPack API (COMPLETED)**:
+```python
+# ❌ DEPRECATED (removed in CuPy 14+)
+capsule = cupy_array.toDlpack()
+torch_tensor = torch.utils.dlpack.from_dlpack(capsule)
+
+# ✅ MODERN (PyTorch 1.10+, CuPy 9.0+)
+torch_tensor = torch.from_dlpack(cupy_array)
+```
+
+**NumPy Type Aliases (already correct)**:
+```python
+# ❌ REMOVED in NumPy 2.0
+Type[np.float]    # Don't use
+Type[np.int]      # Don't use
+Type[np.complex_] # Don't use
+
+# ✅ CORRECT (NumPy 2.0+)
+Type[np.float64]
+Type[np.int64]
+Type[np.complex128]
+```
+
+### Dependency Update Protocol
+
+When updating major dependencies (PyTorch, NumPy, CuPy):
+
+1. **Read migration guide FIRST**
+   - PyTorch: Check release notes "Breaking Changes" section
+   - NumPy: https://numpy.org/doc/stable/numpy_2_0_migration_guide.html
+   - CuPy: Check changelog "Backward Incompatible Changes"
+
+2. **Test in isolation**
+   ```bash
+   git checkout -b deps/pytorch-upgrade
+   poetry update torch  # ONE dependency at a time
+   docker compose -f docker/docker-compose.yml exec spectralmc \
+     poetry run test-all > /tmp/test_upgrade.txt 2>&1
+   ```
+
+3. **Verify no new deprecations**
+   ```bash
+   docker compose -f docker/docker-compose.yml exec spectralmc \
+     pytest tests/ -W error::DeprecationWarning
+   ```
+
+### Status: Deprecation-Free Codebase
+
+**Last Audit**: 2025-01-09
+
+**SpectralMC Code**:
+- ✅ All DLPack usage migrated to `torch.from_dlpack()`
+- ✅ All NumPy types using explicit precision (`np.float64`, not `np.float`)
+- ✅ All PyTorch APIs using non-deprecated methods
+- ✅ Zero deprecation warnings from `src/spectralmc/`
+
+**Third-Party Dependencies**:
+- ⏳ `botocore 1.36.1`: Waiting for `datetime.utcnow()` fix (tracked: boto/botocore#3201)
+- ⏸️ `QuantLib 1.37`: SWIG deprecations unfixable (accepted as permanent exception)
+
+---
+
 ## Summary
 
 SpectralMC's coding standards ensure:
@@ -862,6 +1091,8 @@ SpectralMC's coding standards ensure:
 - **Complete type coverage** via custom stubs for all dependencies
 - **Reproducible type checking** independent of external changes
 - **Executable documentation** through comprehensive type annotations
+- **Proper error handling** avoiding silent failures and false success patterns
+- **Zero deprecated APIs** with monthly review protocol
 
 Before committing code:
 
@@ -878,3 +1109,4 @@ See also:
 - [Immutability Doctrine](./immutability_doctrine.md) - Frozen dataclasses and functional updates
 - [Pydantic Patterns](./pydantic_patterns.md) - Model validation and configuration
 - [Documentation Standards](./documentation_standards.md) - Docstring requirements
+- [Testing Requirements](./testing_requirements.md) - Testing anti-patterns and best practices
