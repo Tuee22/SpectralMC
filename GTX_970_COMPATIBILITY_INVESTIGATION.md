@@ -732,9 +732,7 @@ The NVIDIA GeForce GTX 970 (compute capability 5.2, sm_52) is **fully compatible
 - ✅ Container-based development environment
 
 **What Remains**:
-- ⚠️ 4 CPU-only tests fail due to missing LAPACK support
-- ⚠️ `CovarianceComplexBatchNorm` cannot run on CPU (requires eigendecomposition)
-- ⚠️ CPU-only batch norm operations require Docker rebuild with LAPACK
+- ✅ All tests now pass (LAPACK support added)
 
 ### Impact Analysis
 

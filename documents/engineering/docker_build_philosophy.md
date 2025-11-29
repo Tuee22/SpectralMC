@@ -14,7 +14,7 @@ SpectralMC supports two build modes controlled by the `BUILD_FROM_SOURCE` enviro
 
 ### Binary Build (Default)
 
-**When to use**: Modern GPUs with compute capability ≥ 6.0 (Pascal, Volta, Turing, Ampere, Ada, Hopper)
+**When to use**: Modern GPUs with compute capability ≥ 6.0 (Pascal, Volta, Turing, Ampere, Ada, Hopper, Blackwell)
 
 ```bash
 # Standard build (fast, pre-compiled packages)
@@ -22,10 +22,12 @@ cd docker && docker compose up --build -d
 ```
 
 **Characteristics**:
-- **Build time**: 5-10 minutes
-- **PyTorch**: Pre-compiled binary wheel (PyTorch 2.1.2+cu118)
-- **CuPy**: Pre-compiled binary wheel (CuPy 12.3.0)
-- **GPU support**: Compute capability 6.0+ (GTX 1060+, Tesla P100+, RTX series)
+- **Build time**: 10-15 minutes
+- **Dockerfile**: `docker/Dockerfile`
+- **Base image**: `nvidia/cuda:12.8.1-devel-ubuntu22.04`
+- **PyTorch**: Pre-compiled binary wheel (PyTorch 2.7.1+cu128)
+- **CuPy**: Pre-compiled binary wheel (CuPy 13.4.0+, cuda12x)
+- **GPU support**: Compute capability 6.0+ (GTX 1060+, Tesla P100+, RTX series including RTX 5090)
 - **Use case**: Development, modern hardware, fast iteration
 
 ### Source Build (Legacy GPUs)
@@ -39,8 +41,10 @@ BUILD_FROM_SOURCE=true docker compose up --build -d
 
 **Characteristics**:
 - **Build time**: 2-4 hours (first build only, cached thereafter)
+- **Dockerfile**: `docker/Dockerfile.source`
+- **Base image**: `nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04`
 - **PyTorch**: Built from source with sm_52 support (PyTorch 2.4.1)
-- **CuPy**: Latest version from PyPI (CuPy 13.x)
+- **CuPy**: Latest version from PyPI (CuPy 13.x, cuda11x)
 - **GPU support**: Compute capability 5.2+ (GTX 970+)
 - **Use case**: Legacy hardware, validated on GTX 970
 
@@ -157,23 +161,28 @@ BUILD_FROM_SOURCE=true docker compose -f docker/docker-compose.yml up --build -d
 
 ### How It Works
 
-The Dockerfile uses conditional RUN statements:
+SpectralMC uses **separate Dockerfiles** for binary and source builds:
 
-```dockerfile
-ARG BUILD_FROM_SOURCE=false
+- **Binary builds** → `docker/Dockerfile` (CUDA 12.8.1, PyTorch 2.7.1+cu128)
+- **Source builds** → `docker/Dockerfile.source` (CUDA 11.8.0, PyTorch 2.4.1 source)
 
-RUN if [ "$BUILD_FROM_SOURCE" = "true" ]; then \
-        # Source build path: Clone and compile PyTorch with sm_52
-        git clone --branch v2.4.1 --recursive --depth 1 https://github.com/pytorch/pytorch.git && \
-        cd pytorch && python setup.py bdist_wheel && \
-        pip install dist/*.whl; \
-    else \
-        # Binary build path: Install pre-compiled wheels
-        pip install torch==2.1.2+cu118 --index-url https://download.pytorch.org/whl/cu118; \
-    fi
+The `docker-compose.yml` file uses shell parameter expansion to select the correct Dockerfile:
+
+```yaml
+spectralmc:
+  build:
+    dockerfile: docker/${BUILD_FROM_SOURCE:+Dockerfile.source}${BUILD_FROM_SOURCE:-Dockerfile}
 ```
 
-**Key insight**: Most Dockerfile layers are identical between builds. Only PyTorch/CuPy installation differs.
+**Selection logic**:
+- `BUILD_FROM_SOURCE=true` → expands to `docker/Dockerfile.source`
+- `BUILD_FROM_SOURCE=false` (or unset) → expands to `docker/Dockerfile`
+
+**Why separate Dockerfiles?**
+- **Different base images**: CUDA 12.8.1 (RTX 5090) vs CUDA 11.8.0 (GTX 970)
+- **Clean separation**: Each Dockerfile optimized for its use case
+- **Simpler maintenance**: No complex conditional logic within Dockerfiles
+- **Docker limitation**: Cannot conditionally select base image with ARG in single Dockerfile
 
 ---
 
@@ -233,14 +242,16 @@ SpectralMC's Dockerfile is organized to **maximize Docker build cache hits** and
 
 | Aspect | Binary Build | Source Build |
 |--------|--------------|--------------|
-| **Build time (first)** | 5-10 minutes | 2-4 hours |
-| **Build time (cached)** | 30 seconds | 30 seconds |
-| **PyTorch version** | 2.1.2+cu118 | 2.4.1 (source) |
-| **CuPy version** | 12.3.0 | 13.x (latest) |
-| **NumPy support** | NumPy 1.x | NumPy 2.x |
+| **Dockerfile** | `docker/Dockerfile` | `docker/Dockerfile.source` |
+| **Base image** | CUDA 12.8.1 | CUDA 11.8.0 + cuDNN8 |
+| **Build time (first)** | 10-15 minutes | 2-4 hours |
+| **Build time (cached)** | 2-5 minutes | 2-5 minutes |
+| **PyTorch version** | 2.7.1+cu128 | 2.4.1 (source) |
+| **CuPy version** | 13.4+ (cuda12x) | 13.x (cuda11x) |
+| **NumPy support** | NumPy 2.x | NumPy 2.x |
 | **GPU support** | Compute ≥ 6.0 | Compute ≥ 5.2 (sm_52) |
-| **Supported GPUs** | GTX 1060+, RTX series, Tesla P100+ | GTX 970+, GTX 980 |
-| **Use case** | Development, modern hardware | Production on legacy hardware |
+| **Supported GPUs** | GTX 1060+, RTX series (incl. RTX 5090), Tesla P100+ | GTX 970+, GTX 980 |
+| **Use case** | Development, modern hardware | Legacy hardware (GTX 970) |
 | **Recommended for** | Most users | GTX 970/980 owners only |
 
 ### When to Use Each
@@ -259,7 +270,11 @@ SpectralMC's Dockerfile is organized to **maximize Docker build cache hits** and
 
 ## Complete Dockerfile Example
 
-Here's the key sections of the Dockerfile showing the Poetry-first pattern:
+**Note**: SpectralMC now uses **two separate Dockerfiles**:
+- `docker/Dockerfile` - Binary builds (CUDA 12.8.1)
+- `docker/Dockerfile.source` - Source builds (CUDA 11.8.0)
+
+Here's the key sections showing the Poetry-first pattern (from `docker/Dockerfile`):
 
 ```dockerfile
 # Layer 3: Poetry Installation via pip
@@ -325,11 +340,16 @@ BUILD_FROM_SOURCE=true docker compose up --build -d
 ## Summary
 
 - **Dual build strategy**: Binary (fast) vs Source (GTX 970 support)
-- **Poetry-first**: Install via pip, use only Poetry for dependencies
+- **Separate Dockerfiles**:
+  - `docker/Dockerfile` for binary builds (CUDA 12.8.1, PyTorch 2.7.1+cu128)
+  - `docker/Dockerfile.source` for source builds (CUDA 11.8.0, PyTorch 2.4.1)
+- **Dockerfile selection**: docker-compose.yml uses shell parameter expansion based on BUILD_FROM_SOURCE
+- **Poetry-first**: Install via pip (binary) or curl script (source), use only Poetry for dependencies
 - **No poetry.lock in Docker**: Regenerated from pyproject.toml
-- **Layer optimization**: Early layers rarely change, late layers change frequently
-- **BUILD_FROM_SOURCE flag**: Controls PyTorch build mode
-- **First source build**: 2-4 hours (cached thereafter)
-- **Code changes**: ~30 seconds rebuild time (both modes)
+- **Layer optimization**: Each Dockerfile optimized for its use case
+- **BUILD_FROM_SOURCE flag**: Selects which Dockerfile to use
+- **Binary build**: 10-15 minutes (supports RTX 5090 sm_120)
+- **Source build**: 2-4 hours first time (supports GTX 970 sm_52), cached thereafter
+- **Code changes**: ~2-5 minutes rebuild time (both modes)
 
 See also: [Type Safety](type_safety.md), [Testing Requirements](testing_requirements.md)

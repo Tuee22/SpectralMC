@@ -1,14 +1,18 @@
 # docker/docker-compose.yml
 #
-# SpectralMC Docker Compose - PyTorch Source Build
+# SpectralMC Docker Compose - Dual-Mode Build Strategy (Separate Dockerfiles)
 #
-# Builds PyTorch 2.4.1 from source with sm_52 support for legacy GPUs
-# Supports all NVIDIA GPUs including GTX 970 Maxwell (sm_52) and newer
-#
-# Build and start:
+# Binary build (default - CUDA 12.8, fast, 10-15 minutes):
 #   docker compose up --build -d
+#   - Uses: docker/Dockerfile
+#   - PyTorch: 2.7.1+cu128 binary wheel
+#   - GPUs: GTX 1060+, RTX series (including RTX 5090 sm_120)
 #
-# Note: First build takes 2-4 hours (PyTorch compilation), cached afterward
+# Source build (CUDA 11.8, GTX 970 support, 2-4 hours first build):
+#   BUILD_FROM_SOURCE=true docker compose up --build -d
+#   - Uses: docker/Dockerfile.source
+#   - PyTorch: 2.4.1 compiled from source with sm_52 support
+#   - GPUs: GTX 970+, all Maxwell and newer
 
 name: spectralmc
 
@@ -62,7 +66,10 @@ services:
     container_name: spectralmc-app
     build:
       context: ..                          # repo root
-      dockerfile: docker/Dockerfile
+      # Conditional dockerfile selection:
+      # - BUILD_FROM_SOURCE=true  → docker/Dockerfile.source (CUDA 11.8, GTX 970 support)
+      # - BUILD_FROM_SOURCE=false → docker/Dockerfile (CUDA 12.8, RTX 5090 support)
+      dockerfile: docker/${BUILD_FROM_SOURCE:+Dockerfile.source}${BUILD_FROM_SOURCE:-Dockerfile}
       args:
         BUILDKIT_INLINE_CACHE: "1"
     image: spectralmc:local

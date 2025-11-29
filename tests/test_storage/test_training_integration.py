@@ -1,5 +1,8 @@
 # tests/test_storage/test_training_integration.py
-"""Integration tests for GbmCVNNPricer training with blockchain storage."""
+"""Integration tests for GbmCVNNPricer training with blockchain storage.
+
+All tests require GPU - missing GPU is a hard failure, not a skip.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +11,11 @@ from typing import Dict, Union
 import pytest
 import torch
 import torch.nn as nn
+
+# Module-level GPU requirement - test file fails immediately without GPU
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
+GPU_DEV: torch.device = torch.device("cuda:0")
 
 from spectralmc.cvnn_factory import (
     ActivationCfg,
@@ -78,11 +86,9 @@ def make_test_config(
     )
 
     cpu_rng_state = torch.get_rng_state().numpy().tobytes()
-    cuda_rng_states = []
-    if torch.cuda.is_available():
-        cuda_rng_states = [
-            state.cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()
-        ]
+    cuda_rng_states = [
+        state.cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()
+    ]
 
     # Black-Scholes parameter bounds (required for SobolSampler)
     domain_bounds: Dict[str, BoundSpec] = {
@@ -106,7 +112,6 @@ def make_test_config(
     )
 
 
-@pytest.mark.gpu
 @pytest.mark.asyncio
 async def test_training_with_auto_commit(
     async_store: AsyncBlockchainModelStore,
@@ -136,7 +141,6 @@ async def test_training_with_auto_commit(
     assert "Final checkpoint" in version.commit_message
 
 
-@pytest.mark.gpu
 @pytest.mark.asyncio
 async def test_training_with_commit_interval(
     async_store: AsyncBlockchainModelStore,
@@ -166,7 +170,6 @@ async def test_training_with_commit_interval(
     assert "Checkpoint" in version.commit_message
 
 
-@pytest.mark.gpu
 @pytest.mark.asyncio
 async def test_training_without_storage_backward_compat(
     async_store: AsyncBlockchainModelStore,
@@ -194,7 +197,6 @@ async def test_training_without_storage_backward_compat(
             pytest.fail("Expected no HEAD since we didn't commit to store")
 
 
-@pytest.mark.gpu
 @pytest.mark.asyncio
 async def test_training_validation_auto_commit_requires_store(
     async_store: AsyncBlockchainModelStore,
@@ -218,7 +220,6 @@ async def test_training_validation_auto_commit_requires_store(
         )
 
 
-@pytest.mark.gpu
 @pytest.mark.asyncio
 async def test_training_validation_commit_interval_requires_store(
     async_store: AsyncBlockchainModelStore,
@@ -242,7 +243,6 @@ async def test_training_validation_commit_interval_requires_store(
         )
 
 
-@pytest.mark.gpu
 @pytest.mark.asyncio
 async def test_training_commit_message_template(
     async_store: AsyncBlockchainModelStore,
@@ -273,7 +273,6 @@ async def test_training_commit_message_template(
     assert "batch=" in version.commit_message
 
 
-@pytest.mark.gpu
 @pytest.mark.asyncio
 async def test_training_commit_preserves_optimizer_state(
     async_store: AsyncBlockchainModelStore,

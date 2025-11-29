@@ -3,6 +3,8 @@
 
 CuPy is imported unconditionally—if it is not installed the test session
 will fail immediately, making the missing dependency obvious.
+
+All tests require GPU - missing GPU is a hard failure, not a skip.
 """
 
 from __future__ import annotations
@@ -16,6 +18,11 @@ from typing import Generator
 import cupy as cp
 import pytest
 import torch
+
+# Module-level GPU requirement - test suite fails immediately without GPU
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
+GPU_DEV: torch.device = torch.device("cuda:0")
 
 
 def _free_cupy() -> None:

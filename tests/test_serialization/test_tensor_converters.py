@@ -1,10 +1,18 @@
 # tests/test_serialization/test_tensor_converters.py
-"""Tests for tensor and optimizer state serialization."""
+"""Tests for tensor and optimizer state serialization.
+
+All tests require GPU - missing GPU is a hard failure, not a skip.
+"""
 
 from __future__ import annotations
 
 import torch
 import pytest
+
+# Module-level GPU requirement - test file fails immediately without GPU
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
+GPU_DEV: torch.device = torch.device("cuda:0")
 
 from spectralmc.models.torch import (
     AdamOptimizerState,
@@ -162,9 +170,9 @@ def test_rng_state_round_trip() -> None:
     cpu_state = torch.get_rng_state().numpy().tobytes()
     cuda_states = []
 
-    if torch.cuda.is_available():
-        for i in range(torch.cuda.device_count()):
-            cuda_states.append(torch.cuda.get_rng_state(i).numpy().tobytes())
+    # GPU is always available (enforced by module-level assertion)
+    for i in range(torch.cuda.device_count()):
+        cuda_states.append(torch.cuda.get_rng_state(i).numpy().tobytes())
 
     # Round trip
     proto = RNGStateConverter.to_proto(cpu_state, cuda_states)

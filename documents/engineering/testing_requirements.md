@@ -2,7 +2,7 @@
 
 ## Overview
 
-All tests in SpectralMC must be fully typed, deterministic, and pass mypy strict mode. Tests are executed via `poetry run test-all` and are separated into CPU and GPU categories.
+All tests in SpectralMC must be fully typed, deterministic, and pass mypy strict mode. Tests are executed via `poetry run test-all`. All tests require GPU - silent CPU fallbacks are strictly forbidden.
 
 **Related Standards**: [Type Safety](type_safety.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [PyTorch Facade](pytorch_facade.md)
 
@@ -59,7 +59,6 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
 
 # ✅ CORRECT - With arguments
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all -v
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all -m gpu
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_gbm.py
 
 # ❌ FORBIDDEN - Direct pytest (enforced by Dockerfile)
@@ -70,52 +69,69 @@ docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/
 
 ---
 
-## GPU Testing
+## GPU Requirements
 
-Mark GPU-specific tests with `@pytest.mark.gpu`:
+**All tests assume GPU is available. Tests MUST fail if CUDA is unavailable.**
+
+SpectralMC is a GPU-accelerated library. Silent fallbacks from GPU to CPU are strictly forbidden because they mask performance regressions and can hide real bugs in GPU code paths.
+
+### Required Pattern
+
+Use module-level assertions to fail immediately without GPU:
 
 ```python
-import pytest
 import torch
 
+# Module-level GPU requirement - test file fails immediately without GPU
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
+GPU_DEV: torch.device = torch.device("cuda:0")
+
+def test_gpu_operation() -> None:
+    """All tests run on GPU by default."""
+    tensor = torch.randn(10, device=GPU_DEV)
+    assert tensor.device.type == "cuda"
+```
+
+### Forbidden Patterns
+
+```python
+# ❌ FORBIDDEN - Silent CPU fallback
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# ❌ FORBIDDEN - pytest.mark.gpu markers (GPU is assumed, not optional)
 @pytest.mark.gpu
-def test_cuda_transfer() -> None:
-    """Test tensor transfer to CUDA device."""
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
+def test_something() -> None:
+    ...
 
-    cpu_tensor: torch.Tensor = torch.randn(10)
-    gpu_tensor: torch.Tensor = cpu_tensor.cuda()
+# ❌ FORBIDDEN - pytest.skip for missing GPU (missing GPU is a failure)
+if not torch.cuda.is_available():
+    pytest.skip("CUDA not available")
 
-    assert gpu_tensor.device.type == "cuda"
+# ❌ FORBIDDEN - Conditional device fixtures
+@pytest.fixture
+def device() -> torch.device:
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ```
 
-### Running GPU Tests
+### Correct Patterns
 
-```bash
-# Run only GPU tests
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all -m gpu
+```python
+# ✅ CORRECT - Module-level GPU assertion
+assert torch.cuda.is_available(), "CUDA required"
+GPU_DEV: torch.device = torch.device("cuda:0")
 
-# Run all tests except GPU
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all -m 'not gpu'
+# ✅ CORRECT - Explicit GPU device
+def test_training() -> None:
+    model = MyModel().to(GPU_DEV)
+    tensor = torch.randn(10, device=GPU_DEV)
+    ...
 
-# Run all tests (CPU + GPU)
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
+# ✅ CORRECT - GPU device fixture (no fallback)
+@pytest.fixture
+def gpu_device() -> torch.device:
+    return torch.device("cuda:0")
 ```
-
-### Default Behavior
-
-By default, `pytest` excludes GPU tests (configured in `pyproject.toml`):
-
-```toml
-[tool.pytest.ini_options]
-addopts = "-ra -q -m 'not gpu'"
-markers = [
-    "gpu: needs CUDA",
-]
-```
-
-Use `poetry run test-all` to include GPU tests.
 
 ---
 
@@ -165,16 +181,20 @@ def test_numerical_computation() -> None:
 
 ## Test Fixtures
 
-Use pytest fixtures for common test setup:
+Use pytest fixtures for common test setup. **Never use conditional device fallback in fixtures.**
 
 ```python
 import pytest
 import torch
 
+# Module-level GPU requirement
+assert torch.cuda.is_available(), "CUDA required"
+GPU_DEV: torch.device = torch.device("cuda:0")
+
 @pytest.fixture
-def device() -> torch.device:
-    """Get CUDA device if available, else CPU."""
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def gpu_device() -> torch.device:
+    """Get CUDA device (no fallback)."""
+    return GPU_DEV
 
 @pytest.fixture
 def complex_model() -> ComplexLinear:
@@ -182,16 +202,16 @@ def complex_model() -> ComplexLinear:
     torch.manual_seed(42)
     return ComplexLinear(in_features=10, out_features=5)
 
-def test_with_fixture(complex_model: ComplexLinear, device: torch.device) -> None:
+def test_with_fixture(complex_model: ComplexLinear, gpu_device: torch.device) -> None:
     """Test using fixtures."""
-    complex_model = complex_model.to(device)
-    real_in = torch.randn(32, 10, device=device)
-    imag_in = torch.randn(32, 10, device=device)
+    complex_model = complex_model.to(gpu_device)
+    real_in = torch.randn(32, 10, device=gpu_device)
+    imag_in = torch.randn(32, 10, device=gpu_device)
 
     real_out, imag_out = complex_model(real_in, imag_in)
 
     assert real_out.shape == (32, 5)
-    assert imag_out.device == device
+    assert imag_out.device == gpu_device
 ```
 
 ---
@@ -258,9 +278,7 @@ Configuration in `pyproject.toml`:
 ```toml
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-markers = [
-    "asyncio: async test",
-]
+markers = ["asyncio: async test"]
 ```
 
 ---
@@ -297,14 +315,18 @@ tests/
 # ❌ WRONG - Silent CPU fallback
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# ✅ CORRECT - Explicit GPU requirement
-@pytest.mark.gpu
+# ❌ WRONG - pytest.skip for missing GPU
+if not torch.cuda.is_available():
+    pytest.skip("CUDA required")
+
+# ✅ CORRECT - Module-level assertion (fails immediately)
+assert torch.cuda.is_available(), "CUDA required"
+GPU_DEV: torch.device = torch.device("cuda:0")
+
 def test_gpu_operation() -> None:
     """Test GPU operation."""
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA required")
-
-    device = torch.device("cuda:0")  # Explicit device
+    tensor = torch.randn(10, device=GPU_DEV)
+    assert tensor.device.type == "cuda"
 ```
 
 ### Pitfall 2: Missing Type Hints
@@ -374,11 +396,11 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all 
 ### For Specific Test Categories
 
 ```bash
-# CPU tests only
-docker compose -f docker/docker-compose.yml exec spectralmc pytest tests -m 'not gpu' > /tmp/test-cpu.txt 2>&1
+# Run specific test file
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_gbm.py > /tmp/test-gbm.txt 2>&1
 
-# GPU tests only
-docker compose -f docker/docker-compose.yml exec spectralmc pytest tests -m gpu > /tmp/test-gpu.txt 2>&1
+# Run storage tests
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_storage/ > /tmp/test-storage.txt 2>&1
 
 # Type checking
 docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc --strict > /tmp/mypy-output.txt 2>&1
@@ -438,8 +460,9 @@ docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc 
 
 - ❌ `pytest.skip("TODO: fix later")` - technical debt grows unbounded
 - ❌ `pytest.skip("flaky test")` - masks real bugs
+- ❌ `pytest.skip("CUDA not available")` - missing GPU is a failure, not a skip
 - ✅ Fix the test or remove it entirely
-- ✅ Use `@pytest.mark.gpu` for hardware requirements, not skip
+- ✅ Use module-level `assert torch.cuda.is_available()` to fail fast
 
 **Impact**: Critical bugs remain hidden, test suite provides false confidence
 
@@ -596,7 +619,9 @@ See also: [Blockchain Storage](blockchain_storage.md) for complete storage docum
 
 - **Fully typed**: All tests pass `mypy --strict`
 - **Run via Poetry**: Use `poetry run test-all`, never direct `pytest`
-- **GPU tests**: Mark with `@pytest.mark.gpu`
+- **GPU required**: All tests require GPU - use `assert torch.cuda.is_available()` at module level
+- **No fallbacks**: Silent CPU fallbacks are strictly forbidden
+- **No skips**: `pytest.skip("CUDA not available")` is forbidden - missing GPU is a failure
 - **Deterministic**: Set `torch.manual_seed()` in every test
 - **Comprehensive**: Cover happy path, edge cases, errors
 - **Async**: Use `pytest-asyncio` for async code

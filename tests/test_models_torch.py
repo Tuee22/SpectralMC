@@ -21,8 +21,12 @@ import torch
 
 import spectralmc.models.torch as sm_torch
 
+# Module-level GPU requirement - test file fails immediately without GPU
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
+GPU_DEV: torch.device = torch.device("cuda:0")
+
 # ──────────────────────────── helpers & fixtures ────────────────────────────
-_HAS_CUDA: bool = torch.cuda.is_available()
 
 
 def _make_parameters() -> List[torch.nn.Parameter]:
@@ -41,14 +45,9 @@ def test_dtype_roundtrip() -> None:
 
 def test_device_roundtrip() -> None:
     assert sm_torch.Device.from_torch(torch.device("cpu")) is sm_torch.Device.cpu
-    if _HAS_CUDA:
-        assert (
-            sm_torch.Device.from_torch(torch.device("cuda", 0)) is sm_torch.Device.cuda
-        )
-    else:
-        # Non‑zero CUDA index should always fail, regardless of hardware
-        with pytest.raises(ValueError):
-            sm_torch.Device.from_torch(torch.device("cuda", 1))
+    assert (
+        sm_torch.Device.from_torch(torch.device("cuda", 0)) is sm_torch.Device.cuda
+    )
 
 
 # ───────────────────────── context‑managers (thread safe) ───────────────────
@@ -118,12 +117,9 @@ def test_adam_optimizer_state_roundtrip() -> None:
 def test_torch_env_snapshot() -> None:
     env: sm_torch.TorchEnv = sm_torch.TorchEnv.snapshot()
     assert env.torch_version == torch.__version__
-    if _HAS_CUDA:
-        assert env.cuda_version != "<not available>"
-        assert env.gpu_name not in {"<cpu>", ""}
-    else:
-        assert env.cuda_version == "<not available>"
-        assert env.gpu_name == "<cpu>"
+    # GPU is always available (enforced by module-level assertion)
+    assert env.cuda_version != "<not available>"
+    assert env.gpu_name not in {"<cpu>", ""}
 
 
 # ─────────────────────── Determinism / reproducibility ----------------------
@@ -143,8 +139,8 @@ def test_deterministic_random_stream() -> None:
     assert torch.equal(a, b)
 
 
-@pytest.mark.skipif(not _HAS_CUDA, reason="cuDNN flags only relevant with CUDA")
 def test_cudnn_determinism_flags() -> None:
+    """Verify cuDNN flags are set for deterministic behavior."""
     assert torch.backends.cudnn.deterministic is True
     assert torch.backends.cudnn.benchmark is False
     # TF32 must be disabled
@@ -153,7 +149,6 @@ def test_cudnn_determinism_flags() -> None:
 
 
 # ─────────────────────────── default_device with CUDA -----------------------
-@pytest.mark.skipif(not _HAS_CUDA, reason="requires a CUDA device")
 def test_default_device_cuda_context() -> None:
     prev: torch.device = torch.tensor([]).device
     with sm_torch.default_device(torch.device("cuda", 0)):

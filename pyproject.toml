@@ -9,6 +9,15 @@ packages = [
 ]
 
 # --------------------------------------------------------------------------- #
+#        P Y T O R C H   C U D A   1 2 . 8   W H E E L   S O U R C E          #
+# --------------------------------------------------------------------------- #
+[[tool.poetry.source]]
+name     = "pytorch-cu128"
+url      = "https://download.pytorch.org/whl/cu128"
+priority = "explicit"   # only used when a dependency asks for it
+
+
+# --------------------------------------------------------------------------- #
 #                       R U N T I M E   D E P E N D E N C I E S               #
 # --------------------------------------------------------------------------- #
 [tool.poetry.dependencies]
@@ -52,12 +61,12 @@ types-aiobotocore = { version = ">=2.13,<3.0", extras = ["s3"] }
 scipy            = ">=1.13,<2.0"
 scikit-learn     = ">=1.6,<2.0"
 
-# --- PyTorch 2.1.2 with CUDA 11.8 (sm_52 support for GTX 970) -------------- #
-# Building PyTorch from source instead of using binary wheels (GTX 970 sm_52 support)
-# torch            = { version = "2.1.2+cu118", source = "pytorch-cu118", optional = true }
+# --- PyTorch 2.7.1 compiled for CUDA 12.8 (binary default) ----------------- #
+# Note: Source builds (BUILD_FROM_SOURCE=true) use Dockerfile.source with PyTorch 2.4.1
+torch            = { version = "2.7.1+cu128", source = "pytorch-cu128" }
 safetensors      = ">=0.5.3,<1.0"
 stable_baselines3 = ">=2.6,<3.0"
-cupy-cuda11x     = ">=13.0,<14.0"
+cupy-cuda12x     = ">=13.4,<14.0"
 numba            = ">=0.61,<1.0"
 pystan           = ">=3.10,<4.0"
 pymc             = ">=5.22,<6.0"
@@ -137,12 +146,9 @@ warn_required_dynamic_aliases = true
 
 [tool.pytest.ini_options]
 testpaths = "tests"
-addopts   = "-ra -q -m 'not gpu'"
+addopts   = "-ra -q"
 asyncio_mode = "auto"
-markers   = [
-    "gpu: needs CUDA",
-    "asyncio: async test"
-]
+markers   = ["asyncio: async test"]
 filterwarnings = [
     # Hide SWIG-generated DeprecationWarnings raised while importing QuantLib
     # Pattern matches SWIG type definition warnings from <frozen importlib._bootstrap>

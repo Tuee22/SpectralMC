@@ -47,6 +47,11 @@ from spectralmc.sobol_sampler import BoundSpec
 import torch
 from torch import Tensor
 
+# Module-level GPU requirement - test file fails immediately without GPU
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
+GPU_DEV: torch.device = torch.device("cuda:0")
+
 # --------------------------------------------------------------------------- #
 # Patch forward reference in SimulationParams                                 #
 # --------------------------------------------------------------------------- #
@@ -128,7 +133,7 @@ def _make_cvnn(
 
 def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
     """Deterministically construct a :class:`GbmCVNNPricer`."""
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0")
     torch_dtype = torch.float32 if precision is Precision.float32 else torch.float64
     torch.manual_seed(seed)
 

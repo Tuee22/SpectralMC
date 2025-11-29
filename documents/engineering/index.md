@@ -82,7 +82,7 @@ Violating these guidelines can result in:
 
 7. **[Testing Requirements](testing_requirements.md)** ⭐ Comprehensive Guide
    - Test structure and type safety
-   - GPU testing with `@pytest.mark.gpu`
+   - **GPU required** - all tests require GPU, no silent CPU fallbacks
    - Deterministic testing requirements
    - **13 testing anti-patterns** to avoid
    - **Test output handling** best practices

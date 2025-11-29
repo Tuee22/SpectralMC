@@ -246,12 +246,6 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
 # Run with verbose output
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all -v
 
-# Run only CPU tests (excludes @pytest.mark.gpu)
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all -m 'not gpu'
-
-# Run only GPU tests
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all -m gpu
-
 # Run specific test file
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_gbm.py
 
@@ -282,8 +276,8 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all 
 ### Test Organization
 
 - **Test directory**: `tests/`
-- **Default behavior**: Excludes GPU tests (`-m 'not gpu'` in `pyproject.toml`)
-- **GPU tests**: Marked with `@pytest.mark.gpu` decorator
+- **GPU required**: All tests require GPU - missing GPU causes test failure
+- **No fallbacks**: Silent CPU fallbacks are forbidden
 - **Fixtures**: Global GPU memory cleanup in `tests/conftest.py`
 
 ### Type Checking

@@ -4,6 +4,8 @@ GPU memory and compute capability validation tests.
 
 Ensures that the GPU has sufficient resources for the test suite and that
 PyTorch/CuPy were compiled for the correct compute capability.
+
+All tests require GPU - missing GPU is a hard failure, not a skip.
 """
 
 from __future__ import annotations
@@ -11,16 +13,16 @@ from __future__ import annotations
 from typing import Tuple
 
 import cupy as cp
-import pytest
 import torch
 
+# Module-level GPU requirement - test file fails immediately without GPU
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
-@pytest.mark.gpu
+GPU_DEV: torch.device = torch.device("cuda:0")
+
+
 def test_gpu_memory_sufficient() -> None:
     """Verify GPU has sufficient memory for test suite."""
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
-
     # Use torch.cuda module's get_device_properties function
     cuda_module = torch.cuda
     props = cuda_module.get_device_properties(0)
@@ -33,12 +35,8 @@ def test_gpu_memory_sufficient() -> None:
     )
 
 
-@pytest.mark.gpu
 def test_gpu_compute_capability() -> None:
     """Verify GPU compute capability is detected and supported."""
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
-
     # Use torch.cuda module's get_device_capability function
     cuda_module = torch.cuda
     compute_cap: Tuple[int, int] = cuda_module.get_device_capability(0)
@@ -51,14 +49,10 @@ def test_gpu_compute_capability() -> None:
     print(f"GPU compute capability: {major}.{minor}")
 
 
-@pytest.mark.gpu
 def test_gpu_operations_basic() -> None:
     """Verify basic GPU operations work (PyTorch kernel execution)."""
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
-
     # Test basic tensor operations
-    x = torch.randn(100, 100, device="cuda")
+    x = torch.randn(100, 100, device=GPU_DEV)
     y = torch.matmul(x, x.T)
 
     # Verify result is finite (no NaN/Inf)
@@ -68,13 +62,12 @@ def test_gpu_operations_basic() -> None:
     assert y.shape == (100, 100), f"Expected (100, 100), got {y.shape}"
 
 
-@pytest.mark.gpu
 def test_cupy_available() -> None:
     """Verify CuPy is available and can run GPU operations."""
     # Use cupy.cuda.runtime to check availability
     cuda_runtime = cp.cuda.runtime
-    if cuda_runtime.getDeviceCount() == 0:
-        pytest.skip("CuPy CUDA not available")
+    device_count: int = cuda_runtime.getDeviceCount()
+    assert device_count > 0, "CuPy CUDA not available"
 
     # Test basic CuPy operations using cp.random module
     random_module = cp.random

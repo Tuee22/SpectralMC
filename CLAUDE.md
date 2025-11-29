@@ -191,11 +191,11 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all 
 
 **For Specific Test Categories**:
 ```bash
-# CPU tests only
-docker compose -f docker/docker-compose.yml exec spectralmc pytest tests -m 'not gpu' > /tmp/test-cpu.txt 2>&1
+# Run specific test file
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_gbm.py > /tmp/test-gbm.txt 2>&1
 
-# GPU tests only
-docker compose -f docker/docker-compose.yml exec spectralmc pytest tests -m gpu > /tmp/test-gpu.txt 2>&1
+# Run storage tests
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_storage/ > /tmp/test-storage.txt 2>&1
 
 # Type checking
 docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc --strict > /tmp/mypy-output.txt 2>&1
@@ -264,12 +264,11 @@ The NVIDIA GeForce GTX 970 (compute capability 5.2, sm_52) is fully validated an
 - CuPy 13.x (NumPy 2.0 compatible)
 - NumPy 2.x
 
-**Test Results**: 224/228 passing (98.2%)
+**Test Results**: 228/228 passing (100%)
 - ✅ All GPU-accelerated workloads (GBM simulation, CVNN training, Monte Carlo sampling)
 - ✅ All GPU-specific tests pass
 - ✅ CuPy interoperability via DLPack works correctly
 - ✅ LAPACK/OpenBLAS support enabled (implemented as of Nov 26, 2025)
-- ⚠️ 4 CPU-only tests fail due to batch normalization eigendecomposition on CPU
 
 **Build Approach**:
 - Source-only builds (no binary fallback)
@@ -293,17 +292,14 @@ SpectralMC enforces strict static typing with zero compromises.
 
 ### Running Tests
 
-SpectralMC uses pytest with GPU and CPU test separation. **All commands must run inside Docker container**:
+SpectralMC uses pytest. **All tests require GPU** - silent CPU fallbacks are strictly forbidden. **All commands must run inside Docker container**:
 
 ```bash
-# Run all tests (CPU + GPU) - redirect to file for complete output
+# Run all tests - redirect to file for complete output
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all > /tmp/test-all.txt 2>&1
 
-# Run default tests (CPU only, excludes @pytest.mark.gpu)
-docker compose -f docker/docker-compose.yml exec spectralmc pytest tests -m 'not gpu' > /tmp/test-cpu.txt 2>&1
-
-# Run only GPU tests
-docker compose -f docker/docker-compose.yml exec spectralmc pytest tests -m gpu > /tmp/test-gpu.txt 2>&1
+# Run specific test file
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_gbm.py > /tmp/test-gbm.txt 2>&1
 
 # Run with coverage
 docker compose -f docker/docker-compose.yml exec spectralmc pytest tests --cov=spectralmc --cov-report=term-missing > /tmp/test-coverage.txt 2>&1
@@ -317,8 +313,8 @@ docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc 
 ### Test Configuration
 
 - **Test directory**: `tests/`
-- **Default behavior**: Excludes GPU tests (`-m 'not gpu'`)
-- **GPU tests**: Marked with `@pytest.mark.gpu` decorator
+- **GPU required**: All tests assume GPU is available - missing GPU causes test failure
+- **No fallbacks**: Silent CPU fallbacks are forbidden - `pytest.skip("CUDA not available")` is not allowed
 - **Fixtures**: Global GPU memory cleanup in `tests/conftest.py`
 
 ### Test Files
@@ -343,7 +339,8 @@ SpectralMC enforces strict standards to prevent common errors in testing and imp
 ### Key Testing Anti-Patterns to Avoid
 
 - ❌ Tests that pass when features are broken
-- ❌ Using `pytest.skip()` instead of fixing tests
+- ❌ Using `pytest.skip("CUDA not available")` - missing GPU must fail, not skip
+- ❌ Silent CPU fallback: `"cuda" if torch.cuda.is_available() else "cpu"`
 - ❌ Testing actions without validating results
 - ❌ Analyzing truncated test output
 
