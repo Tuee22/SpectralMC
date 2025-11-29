@@ -44,6 +44,8 @@ from .errors import (
     AuditLogError,
     S3Error,
 )
+from .s3_operations import S3Operations
+from .s3_errors import S3OperationError
 
 _logger = logging.getLogger(__name__)
 
@@ -260,6 +262,8 @@ class AsyncBlockchainModelStore:
         self._client_context: Optional[_AsyncContextManager] = (
             None  # Context manager for client
         )
+        # Functional S3 operations wrapper (initialized in __aenter__)
+        self._s3_ops: Optional[S3Operations] = None
 
     async def __aenter__(self) -> AsyncBlockchainModelStore:
         """Enter async context manager."""
@@ -285,6 +289,9 @@ class AsyncBlockchainModelStore:
         self._client_context = client_context
         aenter_method = getattr(self._client_context, "__aenter__")
         self._s3_client = await aenter_method()
+
+        # Initialize functional S3 operations wrapper
+        self._s3_ops = S3Operations(self._s3_client)
 
         return self
 
@@ -434,62 +441,192 @@ class AsyncBlockchainModelStore:
     # Public API
     # -------------------------------------------------------------------------
 
-    @retry_on_throttle(max_retries=5)
-    async def get_head(self) -> Result[ModelVersion, HeadNotFoundError]:
+    async def get_head(
+        self,
+    ) -> Result[ModelVersion, HeadNotFoundError | S3OperationError]:
         """
-        Get current HEAD version.
+        Get current HEAD version with automatic retry on throttling.
+
+        Retries up to 5 times with exponential backoff (0.1s, 0.2s, 0.4s, 0.8s, 1.6s)
+        when encountering S3NetworkError (throttling/transient failures).
 
         Returns:
             Success(ModelVersion) if HEAD exists
-            Failure(HeadNotFoundError) if no commits yet
+            Failure(HeadNotFoundError) if no commits yet (empty chain)
+            Failure(S3OperationError) for S3 operational failures:
+                - S3BucketNotFound: Bucket doesn't exist
+                - S3AccessDenied: Permission denied
+                - S3NetworkError: Network/timeout error (after max retries)
+                - S3UnknownError: Other S3 errors
 
-        Raises:
-            ClientError: If S3 operation fails (non-404 errors)
+        Example:
+            ```python
+            async with AsyncBlockchainModelStore("my-bucket") as store:
+                result = await store.get_head()
+                match result:
+                    case Success(head):
+                        print(f"Current HEAD: v{head.counter}")
+                    case Failure(HeadNotFoundError()):
+                        print("No commits yet")
+                    case Failure(S3BucketNotFound(bucket=b)):
+                        print(f"Bucket not found: {b}")
+                    case Failure(error):
+                        print(f"S3 error: {error}")
+            ```
         """
-        try:
-            data = await self._download_json("chain.json")
+        if self._s3_ops is None:
+            # This shouldn't happen if using async context manager correctly
+            from .s3_errors import S3UnknownError
 
-            # Extract and validate fields
-            counter = data.get("counter")
-            semantic_version = data.get("semantic_version")
-            parent_hash = data.get("parent_hash")
-            content_hash = data.get("content_hash")
-            commit_timestamp = data.get("commit_timestamp")
-            commit_message = data.get("commit_message")
-
-            if not isinstance(counter, int):
-                raise TypeError(f"counter must be int, got {type(counter)}")
-            if not isinstance(semantic_version, str):
-                raise TypeError(
-                    f"semantic_version must be str, got {type(semantic_version)}"
+            return Failure(
+                S3UnknownError(
+                    error_code="NotInitialized",
+                    message="S3Operations not initialized. Use 'async with' context manager.",
                 )
-            if not isinstance(parent_hash, str):
-                raise TypeError(f"parent_hash must be str, got {type(parent_hash)}")
-            if not isinstance(content_hash, str):
-                raise TypeError(f"content_hash must be str, got {type(content_hash)}")
-            if not isinstance(commit_timestamp, str):
-                raise TypeError(
-                    f"commit_timestamp must be str, got {type(commit_timestamp)}"
-                )
-            if not isinstance(commit_message, str):
-                raise TypeError(
-                    f"commit_message must be str, got {type(commit_message)}"
-                )
-
-            version = ModelVersion(
-                counter=counter,
-                semantic_version=semantic_version,
-                parent_hash=parent_hash,
-                content_hash=content_hash,
-                commit_timestamp=commit_timestamp,
-                commit_message=commit_message,
             )
-            return Success(version)
-        except ClientError as e:
-            error_code = e.response["Error"]["Code"]
-            if error_code == "NoSuchKey":
-                return Failure(HeadNotFoundError())
-            raise
+
+        # Retry logic for throttling errors
+        max_retries = 5
+        base_delay = 0.1
+        max_delay = 5.0
+        last_network_error: Optional[S3OperationError] = None
+
+        for attempt in range(max_retries + 1):
+            # Use functional S3Operations to get chain.json
+            result = await self._s3_ops.get_object(self.bucket_name, "chain.json")
+
+            match result:
+                case Failure(error):
+                    # Check if it's S3ObjectNotFound (empty chain)
+                    from .s3_errors import S3ObjectNotFound, S3NetworkError
+
+                    if isinstance(error, S3ObjectNotFound):
+                        # Empty chain is valid state - return immediately
+                        return Failure(HeadNotFoundError())
+
+                    # Check if it's a network/throttling error that should be retried
+                    if isinstance(error, S3NetworkError):
+                        if attempt < max_retries:
+                            # Retry with exponential backoff
+                            delay = min(base_delay * (2**attempt), max_delay)
+                            await asyncio.sleep(delay)
+                            last_network_error = error
+                            continue  # Retry
+
+                        # Max retries exceeded - return the last network error
+                        return Failure(error)
+
+                    # All other S3 errors (BucketNotFound, AccessDenied, etc.) - fail immediately
+                    return Failure(error)
+
+                case Success(data):
+                    # Success - break out of retry loop and continue with parsing
+                    break
+
+        # At this point, we must have Success(data) from the match statement
+        # Otherwise we would have returned already within the retry loop
+        match result:
+            case Success(data):
+                # Parse and validate JSON
+                try:
+                    parsed = json.loads(data.decode("utf-8"))
+                    if not isinstance(parsed, dict):
+                        from .s3_errors import S3UnknownError
+
+                        return Failure(
+                            S3UnknownError(
+                                error_code="InvalidData",
+                                message=f"Expected dict, got {type(parsed)}",
+                            )
+                        )
+
+                    # Extract and validate fields
+                    counter = parsed.get("counter")
+                    semantic_version = parsed.get("semantic_version")
+                    parent_hash = parsed.get("parent_hash")
+                    content_hash = parsed.get("content_hash")
+                    commit_timestamp = parsed.get("commit_timestamp")
+                    commit_message = parsed.get("commit_message")
+
+                    if not isinstance(counter, int):
+                        from .s3_errors import S3UnknownError
+
+                        return Failure(
+                            S3UnknownError(
+                                error_code="InvalidData",
+                                message=f"counter must be int, got {type(counter)}",
+                            )
+                        )
+                    if not isinstance(semantic_version, str):
+                        from .s3_errors import S3UnknownError
+
+                        return Failure(
+                            S3UnknownError(
+                                error_code="InvalidData",
+                                message=f"semantic_version must be str, got {type(semantic_version)}",
+                            )
+                        )
+                    if not isinstance(parent_hash, str):
+                        from .s3_errors import S3UnknownError
+
+                        return Failure(
+                            S3UnknownError(
+                                error_code="InvalidData",
+                                message=f"parent_hash must be str, got {type(parent_hash)}",
+                            )
+                        )
+                    if not isinstance(content_hash, str):
+                        from .s3_errors import S3UnknownError
+
+                        return Failure(
+                            S3UnknownError(
+                                error_code="InvalidData",
+                                message=f"content_hash must be str, got {type(content_hash)}",
+                            )
+                        )
+                    if not isinstance(commit_timestamp, str):
+                        from .s3_errors import S3UnknownError
+
+                        return Failure(
+                            S3UnknownError(
+                                error_code="InvalidData",
+                                message=f"commit_timestamp must be str, got {type(commit_timestamp)}",
+                            )
+                        )
+                    if not isinstance(commit_message, str):
+                        from .s3_errors import S3UnknownError
+
+                        return Failure(
+                            S3UnknownError(
+                                error_code="InvalidData",
+                                message=f"commit_message must be str, got {type(commit_message)}",
+                            )
+                        )
+
+                    version = ModelVersion(
+                        counter=counter,
+                        semantic_version=semantic_version,
+                        parent_hash=parent_hash,
+                        content_hash=content_hash,
+                        commit_timestamp=commit_timestamp,
+                        commit_message=commit_message,
+                    )
+                    return Success(version)
+
+                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                    from .s3_errors import S3UnknownError
+
+                    return Failure(
+                        S3UnknownError(
+                            error_code="InvalidJSON",
+                            message=f"Failed to parse chain.json: {e}",
+                        )
+                    )
+
+            case Failure(error):
+                # This should never happen - all Failure cases are handled in the retry loop
+                # But we include it for exhaustiveness and type safety
+                return Failure(error)
 
     async def commit(
         self, checkpoint_data: bytes, content_hash: str, message: str = ""

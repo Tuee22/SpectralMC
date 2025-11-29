@@ -1,13 +1,14 @@
 # docker/docker-compose.yml
 #
-# SpectralMC Docker Compose - GTX 970 Source Build
+# SpectralMC Docker Compose - PyTorch Source Build
 #
-# Builds PyTorch and CuPy from source with sm_52 support for Maxwell GPUs
+# Builds PyTorch 2.4.1 from source with sm_52 support for legacy GPUs
+# Supports all NVIDIA GPUs including GTX 970 Maxwell (sm_52) and newer
 #
 # Build and start:
 #   docker compose up --build -d
 #
-# Note: First build takes 2-4 hours (PyTorch + CuPy compilation)
+# Note: First build takes 2-4 hours (PyTorch compilation), cached afterward
 
 name: spectralmc
 
@@ -64,7 +65,6 @@ services:
       dockerfile: docker/Dockerfile
       args:
         BUILDKIT_INLINE_CACHE: "1"
-        BUILD_FROM_SOURCE: "${BUILD_FROM_SOURCE:-false}"
     image: spectralmc:local
     pull_policy: "never"                   # never reach out to a registry
     depends_on:

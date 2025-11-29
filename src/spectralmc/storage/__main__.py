@@ -45,7 +45,7 @@ import asyncio
 import sys
 import argparse
 import json
-from typing import NoReturn
+from typing import NoReturn, Never
 
 from ..result import Result, Success, Failure
 from .store import AsyncBlockchainModelStore
@@ -53,53 +53,128 @@ from .verification import verify_chain, verify_chain_detailed, find_corruption
 from .gc import run_gc
 from .tensorboard_writer import log_blockchain_to_tensorboard
 from .errors import ChainCorruptionError, VersionNotFoundError, HeadNotFoundError, StorageError
+from .s3_errors import (
+    S3BucketNotFound,
+    S3ObjectNotFound,
+    S3AccessDenied,
+    S3NetworkError,
+    S3UnknownError,
+)
+
+
+def assert_never(value: Never) -> Never:
+    """
+    Type-safe exhaustiveness check for pattern matching.
+
+    This function should never be reachable. If the type checker allows
+    this function to be called, it means the match statement is not exhaustive.
+
+    Args:
+        value: Value that should be of type Never (unreachable)
+
+    Raises:
+        AssertionError: Always (this should never execute)
+    """
+    raise AssertionError(f"Unhandled case: {value!r}")
 
 
 async def cmd_verify(bucket_name: str, detailed: bool = False) -> int:
     """
     Verify blockchain integrity.
 
+    Uses functional programming with Result types and exhaustive pattern matching
+    to handle all error cases explicitly. No unhandled exceptions.
+
     Args:
         bucket_name: S3 bucket name
         detailed: Show detailed corruption report
 
     Returns:
-        Exit code (0 = valid, 1 = corrupted, 2 = error)
+        Exit code:
+            0: Chain is valid
+            1: Chain is corrupted
+            2: Operational error (S3, network, etc.)
     """
-    try:
-        async with AsyncBlockchainModelStore(bucket_name) as store:
-            if detailed:
-                report = await verify_chain_detailed(store)
+    async with AsyncBlockchainModelStore(bucket_name) as store:
+        result = await verify_chain(store)
 
+        match result:
+            case Success(report) if report.is_valid and detailed:
+                # Detailed output for valid chain
                 print(
                     json.dumps(
                         {
-                            "is_valid": report.is_valid,
-                            "corrupted_version": (
-                                report.corrupted_version.counter
-                                if report.corrupted_version
-                                else None
-                            ),
-                            "corruption_type": report.corruption_type,
+                            "is_valid": True,
+                            "corrupted_version": None,
+                            "corruption_type": None,
                             "details": report.details,
                         },
                         indent=2,
                     )
                 )
+                return 0
 
-                return 0 if report.is_valid else 1
-            else:
-                # Simple verification
-                await verify_chain(store)
+            case Success(report) if report.is_valid:
+                # Simple output for valid chain
                 print(f"✓ Chain integrity verified for bucket: {bucket_name}")
                 return 0
 
-    except ChainCorruptionError as e:
-        print(f"✗ Chain corruption detected: {e}", file=sys.stderr)
-        return 1
-    except (VersionNotFoundError, StorageError, HeadNotFoundError) as e:
-        print(f"✗ Error during verification: {e}", file=sys.stderr)
-        return 2
+            case Success(report):
+                # Chain is corrupted (is_valid = False)
+                if detailed:
+                    print(
+                        json.dumps(
+                            {
+                                "is_valid": False,
+                                "corrupted_version": (
+                                    report.corrupted_version.counter
+                                    if report.corrupted_version
+                                    else None
+                                ),
+                                "corruption_type": report.corruption_type,
+                                "details": report.details,
+                            },
+                            indent=2,
+                        ),
+                        file=sys.stderr,
+                    )
+                else:
+                    print(f"✗ Chain corruption detected:", file=sys.stderr)
+                    print(f"  Type: {report.corruption_type}", file=sys.stderr)
+                    print(f"  Details: {report.details}", file=sys.stderr)
+                return 1
+
+            case Failure(S3BucketNotFound(bucket, msg)):
+                print(f"✗ Error: Bucket not found: {bucket}", file=sys.stderr)
+                print(f"  {msg}", file=sys.stderr)
+                return 2
+
+            case Failure(S3ObjectNotFound(bucket, key, msg)):
+                print(f"✗ Error: Object not found in bucket {bucket}: {key}", file=sys.stderr)
+                print(f"  {msg}", file=sys.stderr)
+                return 2
+
+            case Failure(S3AccessDenied(bucket, operation, msg)):
+                print(f"✗ Error: Access denied to bucket: {bucket}", file=sys.stderr)
+                print(f"  Operation: {operation}", file=sys.stderr)
+                print(f"  {msg}", file=sys.stderr)
+                return 2
+
+            case Failure(S3NetworkError(msg, retry_count)):
+                print(f"✗ Error: Network error:", file=sys.stderr)
+                print(f"  {msg}", file=sys.stderr)
+                print(f"  Retries attempted: {retry_count}", file=sys.stderr)
+                return 2
+
+            case Failure(S3UnknownError(code, msg)):
+                print(f"✗ Error: S3 error ({code}):", file=sys.stderr)
+                print(f"  {msg}", file=sys.stderr)
+                return 2
+
+            case _:
+                # All S3OperationError cases covered above
+                # This should be unreachable but mypy can't prove it for union types
+                raise AssertionError(f"Unexpected result type: {result}")
 
 
 async def cmd_find_corruption(bucket_name: str) -> int:

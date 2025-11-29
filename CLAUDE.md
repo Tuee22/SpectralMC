@@ -175,24 +175,29 @@ async with AsyncBlockchainModelStore("my-model-bucket") as store:
 **Loading Models**:
 ```python
 from spectralmc.storage import load_snapshot_from_checkpoint
+from spectralmc.result import Success, Failure
 
 async with AsyncBlockchainModelStore("my-model-bucket") as store:
     # Get HEAD version
-    head = await store.get_head()
-    
-    # Load checkpoint
-    model_template = torch.nn.Linear(5, 5)
-    config_template = make_config(model_template)
-    
-    snapshot = await load_snapshot_from_checkpoint(
-        store,
-        head,
-        model_template,
-        config_template
-    )
-    
-    # Use snapshot.cvnn for inference
-    model = snapshot.cvnn
+    head_result = await store.get_head()
+
+    match head_result:
+        case Success(head):
+            # Load checkpoint
+            model_template = torch.nn.Linear(5, 5)
+            config_template = make_config(model_template)
+
+            snapshot = await load_snapshot_from_checkpoint(
+                store,
+                head,
+                model_template,
+                config_template
+            )
+
+            # Use snapshot.cvnn for inference
+            model = snapshot.cvnn
+        case Failure(error):
+            print(f"Error getting HEAD: {error}")
 ```
 
 #### InferenceClient
@@ -310,12 +315,23 @@ flowchart TB
 
 ```python
 from spectralmc.storage import verify_chain, verify_chain_detailed
+from spectralmc.result import Success, Failure
 
 async with AsyncBlockchainModelStore("my-model-bucket") as store:
-    # Simple verification (raises ChainCorruptionError if invalid)
-    await verify_chain(store)
+    # Functional verification with Result types
+    result = await verify_chain(store)
 
-    # Detailed report
+    match result:
+        case Success(report) if report.is_valid:
+            print(f"Chain valid: {report.details}")
+        case Success(report):
+            # Corruption detected
+            print(f"Corruption: {report.corruption_type}")
+            print(f"At version: {report.corrupted_version.counter}")
+        case Failure(error):
+            print(f"S3 error during verification: {error}")
+
+    # Alternative: Use verify_chain_detailed directly (returns CorruptionReport)
     report = await verify_chain_detailed(store)
     if not report.is_valid:
         print(f"Corruption: {report.corruption_type}")
@@ -597,23 +613,27 @@ docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc 
 
 ## 🎮 GPU Support
 
-SpectralMC uses pre-compiled GPU packages by default, with an option to build from source for legacy GPUs.
+SpectralMC builds PyTorch from source to support legacy GPUs including GTX 970 (Maxwell, sm_52).
 
 ### Usage
 ```bash
-# Standard build (pre-compiled binaries, works for most GPUs)
+# Build from source (supports all GPUs including GTX 970)
 docker compose -f docker/docker-compose.yml up --build -d
-
-# Build from source (for legacy GPUs like GTX 970 with compute capability < 6.0)
-BUILD_FROM_SOURCE=true docker compose -f docker/docker-compose.yml up --build -d
 ```
 
-### When to Build from Source
-Use `BUILD_FROM_SOURCE=true` if you have a legacy GPU with compute capability < 6.0:
-- **Maxwell GPUs**: GTX 970, GTX 980 (compute capability 5.2)
-- **Kepler GPUs**: GTX 780 Ti (compute capability 3.5)
+### Source Build Details
 
-Source builds take 2-4 hours but only need to run once (cached in Docker layers).
+**Build characteristics**:
+- Compiles PyTorch 2.4.1 from source with CUDA 11.8
+- Build time: 2-4 hours (first build only, cached afterward)
+- Supports: All NVIDIA GPUs including Maxwell (sm_52) and Kepler (sm_35)
+- Examples: GTX 970, GTX 980, GTX 1060, RTX 2070, RTX 3080
+- No dependency on PyPI wheel availability
+
+**Why source builds?**
+- Binary PyTorch wheels dropped support for compute capability < 6.0
+- GTX 970 requires sm_52 support
+- Source builds guarantee reproducibility (no PyPI wheel changes)
 
 ### GPU Memory Configuration
 Tests are configured for **4GB VRAM minimum**:
@@ -623,28 +643,29 @@ Tests are configured for **4GB VRAM minimum**:
 
 ### GTX 970 Validation Status
 
-**Status**: ✅ PRODUCTION READY (validated 2025-11-26)
+**Status**: ✅ PRODUCTION READY for source builds (validated 2025-11-26, updated 2025-11-28)
 
-The NVIDIA GeForce GTX 970 (compute capability 5.2, sm_52) is fully validated and production-ready for all SpectralMC GPU workloads:
+The NVIDIA GeForce GTX 970 (compute capability 5.2, sm_52) is fully validated and production-ready for all SpectralMC GPU workloads when using source builds.
 
 **Configuration**:
-- PyTorch 2.4.0a0 (source build with sm_52 support)
+- PyTorch 2.4.1 (source build with sm_52 support)
 - CUDA 11.8
-- CuPy 13.6.0
-- NumPy 2.3.5
+- CuPy 13.x (NumPy 2.0 compatible)
+- NumPy 2.x
 
 **Test Results**: 224/228 passing (98.2%)
 - ✅ All GPU-accelerated workloads (GBM simulation, CVNN training, Monte Carlo sampling)
 - ✅ All GPU-specific tests pass
 - ✅ CuPy interoperability via DLPack works correctly
-- ⚠️ 4 CPU-only tests fail due to missing LAPACK (eigendecomposition in `CovarianceComplexBatchNorm`)
+- ✅ LAPACK/OpenBLAS support enabled (implemented as of Nov 26, 2025)
+- ⚠️ 4 CPU-only tests fail due to batch normalization eigendecomposition on CPU
 
-**Known Limitation**:
-- `CovarianceComplexBatchNorm` requires GPU for eigendecomposition when built without LAPACK
-- This is not a practical limitation (GPU batch norm is faster than CPU anyway)
-- To enable CPU batch norm: rebuild Docker with LAPACK (adds 2-4 hours to build time)
+**Build Approach**:
+- Source-only builds (no binary fallback)
+- Eliminates PyPI wheel dependency issues
+- Reproducible builds from git tags
 
-See `GTX_970_COMPATIBILITY_INVESTIGATION.md` for complete validation details.
+See `GTX_970_COMPATIBILITY_INVESTIGATION.md` for complete validation details and Nov 28, 2025 binary fallback removal decision.
 
 ## 🔍 Type Safety
 
@@ -1147,6 +1168,7 @@ When updating major dependencies (PyTorch, NumPy, CuPy):
 See `documents/engineering/index.md` for comprehensive engineering standards including:
 
 - **Code Quality**: Black formatting, mypy strict mode, custom type stubs
+- **Immutability Doctrine**: Never bypass immutability guarantees (frozen dataclasses, etc.)
 - **Development Patterns**: Pydantic models, PyTorch facade, project-specific patterns
 - **Testing**: Requirements, GPU testing, CPU/GPU compute policy
 - **Infrastructure**: Docker build philosophy (binary vs source builds, Poetry management)

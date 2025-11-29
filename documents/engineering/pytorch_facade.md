@@ -343,13 +343,142 @@ def my_function():
 
 ---
 
+## Complex-Valued Neural Networks
+
+SpectralMC represents complex numbers as **pairs of real tensors** (real, imag). All complex-valued layers follow this pattern.
+
+### Base Pattern
+
+```python
+class ComplexLayer(nn.Module):
+    """Base pattern for complex-valued layers."""
+
+    def forward(
+        self, real: torch.Tensor, imag: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Process complex input as (real, imag) pair.
+
+        Args:
+            real: Real component of complex input.
+            imag: Imaginary component of complex input.
+
+        Returns:
+            Tuple of (real_output, imag_output) representing complex output.
+        """
+        # Implementation here
+        return real_output, imag_output
+```
+
+**Key principles**:
+- Input: `(real, imag)` tensor pair
+- Output: `(real, imag)` tensor pair
+- Shapes: `real.shape == imag.shape` always
+- Device: Both tensors on same device
+- Dtype: Both tensors same dtype
+
+### Example: ComplexLinear
+
+```python
+class ComplexLinear(nn.Module):
+    """Complex-valued linear layer: W*z + b where W, z, b are complex."""
+
+    def __init__(self, in_features: int, out_features: int, bias: bool = True) -> None:
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+
+        # Complex weight = real_weight + i*imag_weight
+        self.real_weight = nn.Parameter(torch.randn(out_features, in_features))
+        self.imag_weight = nn.Parameter(torch.randn(out_features, in_features))
+
+        if bias:
+            self.real_bias = nn.Parameter(torch.zeros(out_features))
+            self.imag_bias = nn.Parameter(torch.zeros(out_features))
+        else:
+            self.real_bias = None
+            self.imag_bias = None
+
+    def forward(
+        self, real: torch.Tensor, imag: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Apply complex linear transformation: (A + iB)(x + iy) + (c + id).
+
+        Formula: (Ax - By) + i(Bx + Ay) + (c + id)
+
+        Args:
+            real: Real part of input, shape (batch, in_features).
+            imag: Imaginary part of input, shape (batch, in_features).
+
+        Returns:
+            Tuple of (real_output, imag_output), shape (batch, out_features).
+        """
+        # Real part: Ax - By + c
+        real_out = torch.nn.functional.linear(real, self.real_weight, self.real_bias)
+        real_out = real_out - torch.nn.functional.linear(imag, self.imag_weight, None)
+
+        # Imaginary part: Bx + Ay + d
+        imag_out = torch.nn.functional.linear(real, self.imag_weight, self.imag_bias)
+        imag_out = imag_out + torch.nn.functional.linear(imag, self.real_weight, None)
+
+        return real_out, imag_out
+```
+
+### ComplexValuedModel Protocol
+
+Define interfaces using `Protocol` for type-safe duck typing:
+
+```python
+from typing import Protocol, runtime_checkable, Iterable
+import torch.nn as nn
+
+@runtime_checkable
+class ComplexValuedModel(Protocol):
+    """Protocol for complex-valued neural network models."""
+
+    def __call__(
+        self, real: torch.Tensor, imag: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass with complex input."""
+        ...
+
+    def parameters(self) -> Iterable[nn.Parameter]:
+        """Return model parameters for optimization."""
+        ...
+```
+
+**Usage**:
+
+```python
+def train_complex_model(
+    model: ComplexValuedModel,
+    real_data: torch.Tensor,
+    imag_data: torch.Tensor,
+) -> None:
+    """Train any model implementing ComplexValuedModel protocol."""
+    # Type checker ensures model has __call__ and parameters()
+    real_out, imag_out = model(real_data, imag_data)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    # ... training loop
+```
+
+**Benefits**:
+- No inheritance required
+- Type-safe duck typing
+- Runtime checking with `isinstance(model, ComplexValuedModel)`
+- mypy validates protocol compliance
+
+---
+
 ## Summary
 
 - **Import facade FIRST**: `import spectralmc.models.torch as sm_torch`
 - **Deterministic by default**: All operations reproducible
 - **Thread-safe**: Import in main thread before spawning workers
 - **Type-safe helpers**: Use `Device` enum and context managers
+- **Complex-valued layers**: Use `(real, imag)` tensor pair pattern
+- **Protocol usage**: Type-safe duck typing with `ComplexValuedModel` protocol
 - **Performance cost**: ~5-15% slower, but reproducible
 - **Required everywhere**: Tests, scripts, libraries all use facade
 
-See also: [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [Testing Requirements](testing_requirements.md)
+See also: [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [Testing Requirements](testing_requirements.md), [Coding Standards](./coding_standards.md)

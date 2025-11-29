@@ -108,7 +108,12 @@ async def test_e2e_complete_lifecycle(async_store: AsyncBlockchainModelStore) ->
     assert version2.parent_hash == version1.content_hash
 
     # 5. Verify chain integrity
-    await verify_chain(async_store)
+    result = await verify_chain(async_store)
+    match result:
+        case Success(report):
+            assert report.is_valid, f"Chain corrupted: {report.corruption_type}"
+        case Failure(error):
+            pytest.fail(f"S3 error during verification: {error}")
 
     # 6. Load final snapshot and verify state
     final_snapshot = await load_snapshot_from_checkpoint(
@@ -140,7 +145,12 @@ async def test_e2e_sequential_commits(async_store: AsyncBlockchainModelStore) ->
     assert len(successful_commits) == 5, "All 5 commits should succeed"
 
     # Verify chain integrity
-    await verify_chain(async_store)
+    result = await verify_chain(async_store)
+    match result:
+        case Success(report):
+            assert report.is_valid, f"Chain corrupted: {report.corruption_type}"
+        case Failure(error):
+            pytest.fail(f"S3 error during verification: {error}")
 
     # Verify HEAD exists and counter matches successful commits
     head_result = await async_store.get_head()
@@ -259,7 +269,12 @@ async def test_e2e_chain_verification_multiple_versions(
         await commit_snapshot(async_store, snapshot, f"Checkpoint {i}")
 
     # Verify chain integrity
-    await verify_chain(async_store)
+    result = await verify_chain(async_store)
+    match result:
+        case Success(report):
+            assert report.is_valid, f"Chain corrupted: {report.corruption_type}"
+        case Failure(error):
+            pytest.fail(f"S3 error during verification: {error}")
 
     # Verify all versions are accessible
     for i in range(20):
