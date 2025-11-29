@@ -6,14 +6,14 @@ from __future__ import annotations
 import pytest
 import torch
 
-from spectralmc.result import Success, Failure
+from spectralmc.gbm_trainer import GbmCVNNPricerConfig
+from spectralmc.models.torch import AdamOptimizerState, AdamParamGroup, AdamParamState
+from spectralmc.result import Failure, Success
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     commit_snapshot,
     load_snapshot_from_checkpoint,
 )
-from spectralmc.gbm_trainer import GbmCVNNPricerConfig
-from spectralmc.models.torch import AdamOptimizerState, AdamParamState, AdamParamGroup
 
 
 @pytest.mark.asyncio
@@ -48,9 +48,7 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
         )
     ]
 
-    optimizer_state = AdamOptimizerState(
-        param_states=param_states, param_groups=param_groups
-    )
+    optimizer_state = AdamOptimizerState(param_states=param_states, param_groups=param_groups)
 
     # Create a minimal GbmCVNNPricerConfig
     # Note: This is a simplified test, real usage would have proper BlackScholes config
@@ -111,9 +109,7 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
         torch.nn.Linear(10, 5),
     )
 
-    loaded_snapshot = await load_snapshot_from_checkpoint(
-        async_store, version, new_model, snapshot
-    )
+    loaded_snapshot = await load_snapshot_from_checkpoint(async_store, version, new_model, snapshot)
 
     # Verify model parameters are identical
     original_state = model.state_dict()
@@ -127,9 +123,7 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
 
     # Verify optimizer state
     assert loaded_snapshot.optimizer_state is not None
-    assert len(loaded_snapshot.optimizer_state.param_states) == len(
-        optimizer_state.param_states
-    )
+    assert len(loaded_snapshot.optimizer_state.param_states) == len(optimizer_state.param_states)
 
     # Verify global step
     assert loaded_snapshot.global_step == 100

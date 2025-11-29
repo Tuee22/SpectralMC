@@ -1,32 +1,32 @@
 # src/spectralmc/gbm_trainer.py
 """
-CUDA‑accelerated trainer for learning discounted Black–Scholes pay‑off
-spectra with a complex‑valued neural network (CVNN).
+CUDA-accelerated trainer for learning discounted Black-Scholes pay-off
+spectra with a complex-valued neural network (CVNN).
 
 Overview
 --------
-The :class:`GbmCVNNPricer` orchestrates four tightly‑coupled components:
+The :class:`GbmCVNNPricer` orchestrates four tightly-coupled components:
 
-1. **Quasi‑random contract generator** – `SobolSampler` draws input
-   contracts inside user‑supplied bounds.
-2. **Monte‑Carlo engine** – `spectralmc.gbm.BlackScholes` prices a batch
+1. **Quasi-random contract generator** - `SobolSampler` draws input
+   contracts inside user-supplied bounds.
+2. **Monte-Carlo engine** - `spectralmc.gbm.BlackScholes` prices a batch
    of contracts entirely on **CUDA**, then applies an FFT along the time
    axis.
-3. **Complex‑valued neural network** – any user model that satisfies the
+3. **Complex-valued neural network** - any user model that satisfies the
    :class:`ComplexValuedModel` protocol.  The trainer infers its
-   execution *device* and *real dtype* directly from the network’s first
+   execution *device* and *real dtype* directly from the network's first
    parameter and asserts that **all** parameters conform.
-4. **Optimiser & logging** – an *Adam* optimiser operating in
-   half‑open‑loop: model parameters live on the active CUDA device while
+4. **Optimiser & logging** - an *Adam* optimiser operating in
+   half-open-loop: model parameters live on the active CUDA device while
    the optimiser *state* is moved to CPU **before** every snapshot to
    satisfy :pyclass:`spectralmc.models.torch.AdamOptimizerState`.
 
 Determinism
 -----------
 *   Global PRNG seeding is delegated to callers.
-*   Model and optimiser states are serialised via pure‑CPU
+*   Model and optimiser states are serialised via pure-CPU
     :pyclass:`~spectralmc.models.torch.TensorState` objects; this avoids
-    device‑specific artefacts in unit tests.
+    device-specific artefacts in unit tests.
 
 Implementation notes
 --------------------
@@ -35,7 +35,7 @@ Implementation notes
 * The trainer *always* stores the optimiser snapshot on **CPU**.  During
   a restart we immediately migrate the state back to the training
   device.
-* Strict typing is enforced with **mypy --strict**; no `Any`, `cast` or
+* Strict typing is enforced with **mypy --strict**; no `Any`, `cast` or
   `type: ignore` are required.
 """
 
@@ -50,18 +50,12 @@ from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Callable,
-    Dict,
     Iterable,
-    Iterator,
-    List,
-    Optional,
     Protocol,
     Sequence,
-    Tuple,
-    TypeVar,
-    Mapping,
     runtime_checkable,
 )
+
 
 if TYPE_CHECKING:
     from spectralmc.storage import AsyncBlockchainModelStore
@@ -73,33 +67,35 @@ from spectralmc.storage.errors import (
     StorageError,
 )
 
+
 _logger = logging.getLogger(__name__)
 
 import cupy as cp
-from cupy.cuda import Stream as CuPyStream
 import numpy as np
+import torch
+from cupy.cuda import Stream as CuPyStream
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
+from torch import (
+    nn,
+    optim,
+)
+from torch.utils.tensorboard import SummaryWriter
 
 # CRITICAL: Import facade BEFORE torch for deterministic algorithms
-import spectralmc.models.torch as sm_torch  # noqa: E402
-import torch  # noqa: E402
-import torch.nn as nn  # noqa: E402
-import torch.optim as optim  # noqa: E402
-from torch.utils.tensorboard import SummaryWriter  # noqa: E402
-
-from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams  # noqa: E402
-from spectralmc.models.torch import (  # noqa: E402
+from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
+from spectralmc.models.cpu_gpu_transfer import module_state_device_dtype
+from spectralmc.models.numerical import Precision
+from spectralmc.models.torch import (
     AdamOptimizerState,
     AnyDType,
-    DType,
     Device,
+    DType,
     FullPrecisionDType,
 )
-from spectralmc.models.numerical import Precision
 from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler
-from spectralmc.models.cpu_gpu_transfer import module_state_device_dtype
 
-__all__: Tuple[str, ...] = (
+
+__all__: tuple[str, ...] = (
     "GbmCVNNPricerConfig",
     "StepMetrics",
     "TrainingResult",
@@ -116,21 +112,21 @@ __all__: Tuple[str, ...] = (
 
 @runtime_checkable
 class ComplexValuedModel(Protocol):
-    """Callable complex‑valued network ``(real, imag) -> (real, imag)``."""
+    """Callable complex-valued network ``(real, imag) -> (real, imag)``."""
 
     def __call__(
         self, __real: torch.Tensor, __imag: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]: ...
+    ) -> tuple[torch.Tensor, torch.Tensor]: ...
 
     # minimal subset of the nn.Module API
     def parameters(self) -> Iterable[nn.Parameter]: ...
-    def named_parameters(self) -> Iterable[Tuple[str, nn.Parameter]]: ...
+    def named_parameters(self) -> Iterable[tuple[str, nn.Parameter]]: ...
     def state_dict(
         self,
-        destination: Optional[Dict[str, torch.Tensor]] = None,
+        destination: dict[str, torch.Tensor] | None = None,
         prefix: str = "",
         keep_vars: bool = False,
-    ) -> Dict[str, torch.Tensor]: ...
+    ) -> dict[str, torch.Tensor]: ...
     def to(self, device: torch.device, dtype: torch.dtype) -> nn.Module: ...
     def train(self, mode: bool = True) -> None: ...
     def eval(self) -> None: ...
@@ -141,7 +137,7 @@ class ComplexValuedModel(Protocol):
 # =============================================================================
 
 StepLogger = Callable[["StepMetrics"], None]
-"""User‑supplied callback executed once after every optimiser step."""
+"""User-supplied callback executed once after every optimiser step."""
 
 
 class TrainingConfig(BaseModel):
@@ -155,16 +151,16 @@ class TrainingConfig(BaseModel):
 
 
 class GbmCVNNPricerConfig(BaseModel):
-    """Frozen snapshot used for (de‑)serialising a trainer."""
+    """Frozen snapshot used for (de-)serialising a trainer."""
 
     cfg: BlackScholesConfig
-    domain_bounds: Dict[str, BoundSpec]
+    domain_bounds: dict[str, BoundSpec]
     cvnn: ComplexValuedModel
-    optimizer_state: Optional[AdamOptimizerState] = None
+    optimizer_state: AdamOptimizerState | None = None
     global_step: int = 0
     sobol_skip: int = 0
-    torch_cpu_rng_state: Optional[bytes] = None
-    torch_cuda_rng_states: Optional[List[bytes]] = None
+    torch_cpu_rng_state: bytes | None = None
+    torch_cuda_rng_states: list[bytes] | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra="forbid")
 
@@ -219,7 +215,7 @@ class CudaExecutionContext:
 
     def run_cvnn_inference(
         self, cvnn: ComplexValuedModel, real_in: torch.Tensor, imag_in: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Execute CVNN inference on GPU with stream synchronization."""
         with torch.cuda.stream(self.torch_stream):
             pred_r, pred_i = cvnn(real_in, imag_in)
@@ -247,7 +243,7 @@ class CudaExecutionContext:
 
 
 class TensorBoardLogger:
-    """Light‑weight TensorBoard logger for :class:`StepMetrics`."""
+    """Light-weight TensorBoard logger for :class:`StepMetrics`."""
 
     def __init__(
         self,
@@ -305,8 +301,8 @@ class GbmCVNNPricer:
         # User payload -------------------------------------------------- #
         self._sim_params: SimulationParams = cfg.cfg.sim_params
         self._cvnn: ComplexValuedModel = cfg.cvnn
-        self._domain_bounds: Dict[str, BoundSpec] = cfg.domain_bounds
-        self._optimizer_state: Optional[AdamOptimizerState] = cfg.optimizer_state
+        self._domain_bounds: dict[str, BoundSpec] = cfg.domain_bounds
+        self._optimizer_state: AdamOptimizerState | None = cfg.optimizer_state
         self._global_step: int = cfg.global_step
         self._sobol_skip: int = cfg.sobol_skip
 
@@ -316,8 +312,7 @@ class GbmCVNNPricer:
 
         # GBM simulation requires full precision (not float16/bfloat16)
         assert isinstance(dtype_any, FullPrecisionDType), (
-            f"CVNN must use full precision dtype (float32/64, complex64/128), "
-            f"got {dtype_any}"
+            f"CVNN must use full precision dtype (float32/64, complex64/128), " f"got {dtype_any}"
         )
         self._dtype: FullPrecisionDType = dtype_any
 
@@ -327,9 +322,7 @@ class GbmCVNNPricer:
 
         # Complex dtypes & streams -------------------------------------- #
         self._complex_dtype: Precision = self._dtype.to_precision().to_complex()
-        self._torch_cdtype: torch.dtype = DType.from_precision(
-            self._complex_dtype
-        ).to_torch()
+        self._torch_cdtype: torch.dtype = DType.from_precision(self._complex_dtype).to_torch()
         self._cupy_cdtype: cp.dtype = self._complex_dtype.to_cupy()
 
         # Execution context (CUDA-only) --------------------------------- #
@@ -357,9 +350,7 @@ class GbmCVNNPricer:
         # Restore RNG states for deterministic reproducibility ----------- #
         if cfg.torch_cpu_rng_state is not None:
             torch.set_rng_state(
-                torch.from_numpy(
-                    np.frombuffer(cfg.torch_cpu_rng_state, dtype=np.uint8).copy()
-                )
+                torch.from_numpy(np.frombuffer(cfg.torch_cpu_rng_state, dtype=np.uint8).copy())
             )
         if cfg.torch_cuda_rng_states is not None and torch.cuda.is_available():
             torch.cuda.set_rng_state_all(
@@ -375,20 +366,24 @@ class GbmCVNNPricer:
 
     def snapshot(self) -> GbmCVNNPricerConfig:
         """
-        Return a fully‑deterministic snapshot.
+        Return a fully-deterministic snapshot.
 
         Note
         ----
         The optimiser state is **moved to CPU** so that the resulting
-        :class:`AdamOptimizerState` contains only CPU tensors – a hard
+        :class:`AdamOptimizerState` contains only CPU tensors - a hard
         requirement for the strict serialisation helper.
         """
         # No need to check CUDA - _context is always CudaExecutionContext
         # (enforced by __init__ which raises RuntimeError if not on CUDA)
 
         # Capture RNG states for reproducibility
+        # NOTE: .cpu() calls are acceptable here per CPU/GPU policy - these are
+        # serialization boundary conversions for checkpoint I/O, not compute
+        # operations. The TensorTree API cannot be used because it raises on
+        # no-op moves (CPU RNG state is already on CPU).
         torch_cpu_rng = torch.get_rng_state().cpu().numpy().tobytes()
-        torch_cuda_rng = (
+        torch_cuda_rng: list[bytes] | None = (
             [state.cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()]
             if torch.cuda.is_available() and torch.cuda.device_count() > 0
             else None
@@ -410,12 +405,10 @@ class GbmCVNNPricer:
     # ------------------------------------------------------------------ #
 
     def _simulate_fft(self, contract: BlackScholes.Inputs) -> cp.ndarray:
-        """Simulate one contract and return the batch‑mean FFT."""
+        """Simulate one contract and return the batch-mean FFT."""
         # No need to check - _context.mc_engine is always initialized
         prices = self._context.mc_engine.price(inputs=contract).put_price
-        mat = prices.reshape(
-            self._sim_params.batches_per_mc_run, self._sim_params.network_size
-        )
+        mat = prices.reshape(self._sim_params.batches_per_mc_run, self._sim_params.network_size)
         return cp.mean(cp.fft.fft(mat, axis=1), axis=0)
 
     def _torch_step(
@@ -424,18 +417,16 @@ class GbmCVNNPricer:
         imag_in: torch.Tensor,
         targets: torch.Tensor,
         optimizer: optim.Optimizer,
-    ) -> Tuple[torch.Tensor, float]:
+    ) -> tuple[torch.Tensor, float]:
         """One forward/backward/optimiser step; returns ``(loss, grad_norm)``."""
         pred_r, pred_i = self._cvnn(real_in, imag_in)
-        loss = nn.functional.mse_loss(
-            pred_r, torch.real(targets)
-        ) + nn.functional.mse_loss(pred_i, torch.imag(targets))
+        loss = nn.functional.mse_loss(pred_r, torch.real(targets)) + nn.functional.mse_loss(
+            pred_i, torch.imag(targets)
+        )
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
-        grad_norm = float(
-            torch.nn.utils.clip_grad_norm_(self._cvnn.parameters(), float("inf"))
-        )
+        grad_norm = float(torch.nn.utils.clip_grad_norm_(self._cvnn.parameters(), float("inf")))
         return loss, grad_norm
 
     # ------------------------------------------------------------------ #
@@ -465,6 +456,9 @@ class GbmCVNNPricer:
         """
         try:
             # Snapshot optimizer state before committing
+            # NOTE: Explicit .cpu() calls acceptable per CPU/GPU policy for checkpoint I/O.
+            # The TensorTree API cannot be used here due to type narrowing constraints
+            # with optimizer state_dict's complex nested type structure.
             state_dict = adam.state_dict()
             for param_id in state_dict["state"]:
                 for key in state_dict["state"][param_id]:
@@ -485,6 +479,9 @@ class GbmCVNNPricer:
 
             # Execute async commit synchronously
             async def _do_commit() -> None:
+                # NOTE: Function-level import required to break circular dependency:
+                # storage.__init__ -> inference.py -> gbm_trainer.py -> storage
+                # This is an acceptable exception per coding_standards.md.
                 from spectralmc.storage import commit_snapshot
 
                 version = await commit_snapshot(
@@ -526,14 +523,14 @@ class GbmCVNNPricer:
         self,
         config: TrainingConfig,
         *,
-        logger: Optional[StepLogger] = None,
-        blockchain_store: Optional[AsyncBlockchainModelStore] = None,
+        logger: StepLogger | None = None,
+        blockchain_store: AsyncBlockchainModelStore | None = None,
         auto_commit: bool = False,
-        commit_interval: Optional[int] = None,
+        commit_interval: int | None = None,
         commit_message_template: str = "Training checkpoint at step {step}",
     ) -> TrainingResult:
         """
-        Run **CUDA‑only** optimisation for *config.num_batches* steps.
+        Run **CUDA-only** optimisation for *config.num_batches* steps.
 
         Args:
             config: Training hyperparameters (num_batches, batch_size, learning_rate)
@@ -566,7 +563,7 @@ class GbmCVNNPricer:
 
         adam = optim.Adam(self._cvnn.parameters(), lr=config.learning_rate)
 
-        # (re‑)attach previous optimiser state -------------------------- #
+        # (re-)attach previous optimiser state -------------------------- #
         if self._optimizer_state is not None:
             adam.load_state_dict(self._optimizer_state.to_torch())
 
@@ -576,7 +573,7 @@ class GbmCVNNPricer:
         for _ in range(config.num_batches):
             tic = time.perf_counter()
 
-            # ── Monte‑Carlo + FFT (CuPy) ─────────────────────────────── #
+            # ── Monte-Carlo + FFT (CuPy) ─────────────────────────────── #
             sobol_inputs = self._sampler.sample(config.batch_size)
             current_sobol_skip += config.batch_size
             with self._context.cupy_stream:
@@ -590,11 +587,7 @@ class GbmCVNNPricer:
             with torch.cuda.stream(self._context.torch_stream):
                 # torch.from_dlpack() is the modern, non-deprecated API (replaces torch.utils.dlpack.from_dlpack)
                 # Type stub added in stubs/torch/__init__.pyi
-                targets = (
-                    torch.from_dlpack(fft_buf)
-                    .to(self._torch_cdtype)
-                    .detach()
-                )
+                targets = torch.from_dlpack(fft_buf).to(self._torch_cdtype).detach()
                 real_in, imag_in = _split_inputs(
                     sobol_inputs,
                     dtype=self._dtype.to_torch(),
@@ -639,8 +632,10 @@ class GbmCVNNPricer:
                 )
 
         # ── Snapshot optimiser      ─────────────────────────────────── #
+        # NOTE: Explicit .cpu() calls acceptable per CPU/GPU policy for checkpoint I/O.
+        # The TensorTree API cannot be used here due to type narrowing constraints
+        # with optimizer state_dict's complex nested type structure.
         state_dict = adam.state_dict()
-        # Move all tensors to CPU for serialization
         for param_id in state_dict["state"]:
             for key in state_dict["state"][param_id]:
                 val = state_dict["state"][param_id][key]
@@ -679,8 +674,8 @@ class GbmCVNNPricer:
 
     def predict_price(
         self, inputs: Sequence[BlackScholes.Inputs]
-    ) -> List[BlackScholes.HostPricingResults]:
-        """Vectorised valuation of plain‑vanilla European options."""
+    ) -> list[BlackScholes.HostPricingResults]:
+        """Vectorised valuation of plain-vanilla European options."""
         if not inputs:
             return []
 
@@ -697,7 +692,7 @@ class GbmCVNNPricer:
         spectrum = torch.view_as_complex(torch.stack((pred_r, pred_i), dim=-1))
         avg_ifft = torch.fft.ifft(spectrum, dim=1).mean(dim=1)
 
-        results: List[BlackScholes.HostPricingResults] = []
+        results: list[BlackScholes.HostPricingResults] = []
         for coeff, contract in zip(avg_ifft, inputs, strict=True):
             real_val = float(torch.real(coeff).item())
             imag_val = float(torch.imag(coeff).item())
@@ -724,8 +719,7 @@ class GbmCVNNPricer:
                     put_price_intrinsic=discount * max(contract.K - forward, 0.0),
                     call_price_intrinsic=discount * max(forward - contract.K, 0.0),
                     put_convexity=put_price - discount * max(contract.K - forward, 0.0),
-                    call_convexity=call_price
-                    - discount * max(forward - contract.K, 0.0),
+                    call_convexity=call_price - discount * max(forward - contract.K, 0.0),
                 )
             )
         return results
@@ -738,7 +732,7 @@ class GbmCVNNPricer:
 
 def _split_inputs(
     inputs: Sequence[BlackScholes.Inputs], *, dtype: torch.dtype, device: torch.device
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Convert Pydantic input contracts into ``(real, imag)`` tensors."""
     fields = list(BlackScholes.Inputs.model_fields.keys())
     rows = [[float(getattr(inp, f)) for f in fields] for inp in inputs]

@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import patch
 
+import pytest
+
+from spectralmc.result import Failure, Success
 from spectralmc.storage import AsyncBlockchainModelStore
 from spectralmc.storage.errors import ConflictError
-from spectralmc.result import Success, Failure
 
 
 @pytest.mark.asyncio
@@ -34,7 +35,7 @@ async def test_fast_forward_validation(async_store: AsyncBlockchainModelStore) -
 
     # Now simulate a concurrent commit by patching get_head to return stale data
     # while chain.json has actually moved forward
-    original_get_head = async_store.get_head
+    _original_get_head = async_store.get_head
 
     async def get_stale_head() -> object:
         """Return version1 as HEAD (stale)."""
@@ -52,14 +53,11 @@ async def test_fast_forward_validation(async_store: AsyncBlockchainModelStore) -
 
     # Verify rollback occurred - no version 3 artifacts
     # (would be v2_1.0.2 if it had succeeded)
-    import botocore.exceptions
 
     assert async_store._s3_client is not None
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
     version_dirs = []
-    async for page in paginator.paginate(
-        Bucket=async_store.bucket_name, Prefix="versions/"
-    ):
+    async for page in paginator.paginate(Bucket=async_store.bucket_name, Prefix="versions/"):
         if isinstance(page, dict) and "Contents" in page:
             contents = page["Contents"]
             assert isinstance(contents, list)

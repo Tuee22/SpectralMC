@@ -1,22 +1,19 @@
 # syntax=docker/dockerfile:1.4
-# SpectralMC Dockerfile - Dual-Mode Build Strategy
+# SpectralMC Dockerfile.source - Source Build for Legacy GPUs (GTX 970)
 #
-# Binary build (default - fast):
+# This Dockerfile builds PyTorch from source with sm_52 support for Maxwell GPUs.
+# For modern GPUs (GTX 1060+), use Dockerfile instead.
+#
+# Build command:
 #   docker compose up --build -d
-#   - PyTorch 2.7.1 binary wheel (CUDA 11.8)
-#   - Build time: 10-15 minutes
-#   - GPU support: GTX 1060+, RTX series, Tesla P100+ (compute capability ≥ 6.0)
 #
-# Source build (GTX 970 support):
-#   BUILD_FROM_SOURCE=true docker compose up --build -d
-#   - PyTorch 2.4.1 compiled from source with sm_52 (GTX 970 Maxwell) support
-#   - Build time: 2-4 hours (first build), cached afterward
-#   - GPU support: All NVIDIA GPUs including GTX 970 (compute capability ≥ 5.2)
+# Build characteristics:
+# - PyTorch 2.4.1 compiled from source with sm_52 (GTX 970 Maxwell) support
+# - CUDA 11.8 (last version with full Maxwell support)
+# - Build time: 2-4 hours (first build), cached afterward
+# - GPU support: All NVIDIA GPUs including GTX 970 (compute capability ≥ 5.2)
 #
-# Layer Strategy:
-# - Early layers: System dependencies (changes rarely, cached aggressively)
-# - Middle layers: PyTorch installation (conditional: binary or source)
-# - Late layers: Application code (changes frequently, rebuilds fast)
+# For complete documentation, see documents/engineering/gpu_build.md
 
 FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 ARG BUILD_FROM_SOURCE=false
@@ -88,24 +85,16 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
     update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 && \
     update-alternatives --set python /usr/bin/python3.12
 
+# ============================================================================
+# LAYER 3: pip and Poetry Installation (single command per doctrine)
+# ============================================================================
+# Poetry virtual environment config is handled by poetry.toml (virtualenvs.create = false)
+
 RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 && \
-    python -m pip install --upgrade pip setuptools wheel
+    python -m pip install --upgrade pip setuptools wheel poetry
 
 # ============================================================================
-# LAYER 3: Poetry Installation (changes: rarely)
-# ============================================================================
-
-RUN python -m pip install --upgrade pip setuptools wheel poetry && \
-    poetry config virtualenvs.create false
-
-# ============================================================================
-# LAYER 4: Python Build Dependencies (changes: rarely)
-# ============================================================================
-
-RUN pip install --no-cache-dir setuptools wheel pyyaml typing_extensions numpy fastrlock
-
-# ============================================================================
-# LAYER 5: Early Validation (FAST FAIL - runs in 30 seconds)
+# LAYER 4: Early Validation (FAST FAIL - runs in 30 seconds)
 # ============================================================================
 
 RUN if [ "$BUILD_FROM_SOURCE" = "true" ]; then \
@@ -127,26 +116,27 @@ RUN if [ "$BUILD_FROM_SOURCE" = "true" ]; then \
     fi
 
 # ============================================================================
-# LAYER 6: ccache Configuration (for source builds only)
+# LAYER 5: ccache Configuration (persisted as ENV for source builds)
 # ============================================================================
 
+ENV CCACHE_DIR=/root/.ccache
+ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache
+ENV CMAKE_CUDA_COMPILER_LAUNCHER=ccache
+
 RUN if [ "$BUILD_FROM_SOURCE" = "true" ]; then \
-        export CCACHE_DIR=/root/.ccache && \
-        export CMAKE_CXX_COMPILER_LAUNCHER=ccache && \
-        export CMAKE_CUDA_COMPILER_LAUNCHER=ccache && \
         ccache --max-size=20G && ccache --zero-stats; \
     fi
 
 WORKDIR /spectralmc
 
 # ============================================================================
-# LAYER 7: Copy Dependency Manifests ONLY (changes: occasionally)
+# LAYER 6: Copy Dependency Manifests ONLY (changes: occasionally)
 # ============================================================================
 
 COPY pyproject.toml ./
 
 # ============================================================================
-# LAYER 8: Install SpectralMC Dependencies FIRST (before PyTorch source build)
+# LAYER 7: Install SpectralMC Dependencies FIRST (before PyTorch source build)
 # ============================================================================
 # Poetry install may pull in torch as a transitive dependency.
 # We run it first, then build PyTorch from source to override.
@@ -156,7 +146,7 @@ RUN echo "=== [1/3] Installing SpectralMC dependencies (Poetry) ===" && \
     echo "✓ Dependencies installed"
 
 # ============================================================================
-# LAYER 9: Install PyTorch - Binary OR Source Build (AFTER poetry)
+# LAYER 8: Install PyTorch - Binary OR Source Build (AFTER poetry)
 # ============================================================================
 
 RUN if [ "$BUILD_FROM_SOURCE" = "true" ]; then \
@@ -193,14 +183,14 @@ RUN if [ "$BUILD_FROM_SOURCE" = "true" ]; then \
     fi
 
 # ============================================================================
-# LAYER 10: Verify CuPy Installation (NumPy 2.0 compatible)
+# LAYER 9: Verify CuPy Installation (NumPy 2.0 compatible)
 # ============================================================================
 
 RUN echo "=== [3/3] Verifying CuPy installation ===" && \
     python -c "import cupy; print(f'✓ CuPy {cupy.__version__} installed via Poetry')"
 
 # ============================================================================
-# LAYER 11: Validate CUDA Build
+# LAYER 10: Validate CUDA Build
 # ============================================================================
 
 RUN echo "=== Validating CUDA build ===" && \
@@ -212,13 +202,13 @@ RUN echo "=== Validating CUDA build ===" && \
     echo "✓ Build validation passed"
 
 # ============================================================================
-# LAYER 12: Copy Application Source Code (changes: FREQUENTLY)
+# LAYER 11: Copy Application Source Code (changes: FREQUENTLY)
 # ============================================================================
 
 COPY ./ /spectralmc/
 
 # ============================================================================
-# LAYER 13: Install SpectralMC Package (changes: frequently)
+# LAYER 12: Install SpectralMC Package (changes: frequently)
 # ============================================================================
 
 RUN echo "=== Installing SpectralMC package ===" && \
@@ -231,7 +221,7 @@ RUN echo "=== Installing SpectralMC package ===" && \
     echo "✓ SpectralMC installed"
 
 # ============================================================================
-# LAYER 14: Enforce CLAUDE.md Testing Policies
+# LAYER 13: Enforce CLAUDE.md Testing Policies
 # ============================================================================
 
 RUN if [ -f /usr/local/bin/pytest ]; then mv /usr/local/bin/pytest /usr/local/bin/pytest.real; fi && \
@@ -247,7 +237,7 @@ RUN if [ -f /usr/bin/timeout ]; then mv /usr/bin/timeout /usr/bin/timeout.real; 
     chmod +x /usr/bin/timeout
 
 # ============================================================================
-# LAYER 15: Final Configuration
+# LAYER 14: Final Configuration
 # ============================================================================
 
 EXPOSE 6006 8888

@@ -6,8 +6,9 @@ from __future__ import annotations
 from typing import Literal
 
 from spectralmc.gbm import BlackScholesConfig, SimulationParams
-from spectralmc.sobol_sampler import BoundSpec
 from spectralmc.proto import simulation_pb2
+from spectralmc.sobol_sampler import BoundSpec
+
 from .common import PrecisionConverter
 
 

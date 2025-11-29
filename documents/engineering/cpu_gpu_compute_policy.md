@@ -4,7 +4,7 @@
 
 SpectralMC uses a **two-phase architecture**: deterministic CPU initialization → GPU compute. This policy ensures bit-exact reproducibility while maintaining GPU performance.
 
-**Related Standards**: [PyTorch Facade](pytorch_facade.md), [Project Patterns](project_patterns.md), [Testing Requirements](testing_requirements.md)
+**Related Standards**: [PyTorch Facade](pytorch_facade.md), [Coding Standards](coding_standards.md), [Testing Requirements](testing_requirements.md)
 
 ---
 
@@ -339,4 +339,4 @@ grep -r 'else.*cpu' src/ tests/
 - **Debug validation**: `__debug__` guards for zero-overhead production
 - **Decision tree**: CPU for determinism/I/O, GPU for compute
 
-See also: [PyTorch Facade](pytorch_facade.md), [Project Patterns](project_patterns.md), [Testing Requirements](testing_requirements.md)
+See also: [PyTorch Facade](pytorch_facade.md), [Coding Standards](coding_standards.md), [Testing Requirements](testing_requirements.md)

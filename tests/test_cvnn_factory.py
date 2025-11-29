@@ -2,14 +2,13 @@
 """
 Unit tests for ``spectralmc.cvnn_factory``.
 
-They require a CUDA device – the absence of one is considered a hard failure
+They require a CUDA device - the absence of one is considered a hard failure
 because production models are expected to run on the GPU.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Dict, List, Tuple
 
 import pytest
 import torch
@@ -18,25 +17,25 @@ from torch import Tensor, nn
 from spectralmc.cvnn_factory import (
     ActivationCfg,
     ActivationKind,
-    CVNNConfig,
     CovBNCfg,
+    CVNNConfig,
     ExplicitWidth,
-    LayerKind,
     LinearCfg,
     NaiveBNCfg,
     ResidualCfg,
     SequentialCfg,
     build_model,
 )
-from spectralmc.models.torch import DType  # ← project’s strongly‑typed dtype enum
+from spectralmc.models.torch import DType  # ← project's strongly-typed dtype enum
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants shared across tests
 # ──────────────────────────────────────────────────────────────────────────────
 _DEVICE_CUDA: torch.device = torch.device("cuda:0")
-assert torch.cuda.is_available(), "These tests require a CUDA‑capable device"
+assert torch.cuda.is_available(), "These tests require a CUDA-capable device"
 
-_DTYPES: Tuple[DType, ...] = (DType.float32, DType.float64)
+_DTYPES: tuple[DType, ...] = (DType.float32, DType.float64)
 
 ATOL: float = 1.0e-5
 RTOL: float = 1.0e-4
@@ -65,8 +64,8 @@ def _rand(
     return out
 
 
-def _assert_state_dict_equal(a: Dict[str, Tensor], b: Dict[str, Tensor]) -> None:
-    """Strict equality (dtype‑ and bit‑exact) of two *state_dict*s."""
+def _assert_state_dict_equal(a: dict[str, Tensor], b: dict[str, Tensor]) -> None:
+    """Strict equality (dtype- and bit-exact) of two *state_dict*s."""
     assert a.keys() == b.keys()
     for k in a:
         t1, t2 = a[k], b[k]
@@ -91,7 +90,7 @@ def _example_cfg(dtype: DType = DType.float32, seed: int = 314159) -> CVNNConfig
             ),
             # Naive BN
             NaiveBNCfg(),
-            # Residual (Linear → Cov‑BN) + zReLU
+            # Residual (Linear → Cov-BN) + zReLU
             ResidualCfg(
                 body=SequentialCfg(
                     layers=[
@@ -110,8 +109,8 @@ def _example_cfg(dtype: DType = DType.float32, seed: int = 314159) -> CVNNConfig
 def _single_train_step(
     cfg: CVNNConfig,
     dtype: DType,
-) -> Dict[str, Tensor]:
-    """Materialise → forward → backward → optimiser step → return state‐dict."""
+) -> dict[str, Tensor]:
+    """Materialise → forward → backward → optimiser step → return state-dict."""
     model: nn.Module = build_model(
         n_inputs=N_IN,
         n_outputs=N_OUT,
@@ -120,7 +119,7 @@ def _single_train_step(
 
     model.train()
 
-    # Simple optimiser – stateless (no parameter momentum) for easier equality.
+    # Simple optimiser - stateless (no parameter momentum) for easier equality.
     opt = torch.optim.SGD(model.parameters(), lr=OPT_LR)
 
     x_r = _rand(
@@ -203,9 +202,9 @@ def test_forward_backward_pass(dtype: DType) -> None:
     loss = (y_r.square().mean() + y_i.square().mean()).to(dtype.to_torch())
     loss.backward()
 
-    grads: List[Tensor] = [p.grad for p in model.parameters() if p.grad is not None]
+    grads: list[Tensor] = [p.grad for p in model.parameters() if p.grad is not None]
     assert grads, "No gradients produced"
-    assert all(torch.isfinite(g).all() for g in grads), "Non‑finite gradient detected"
+    assert all(torch.isfinite(g).all() for g in grads), "Non-finite gradient detected"
 
 
 @pytest.mark.parametrize("dtype", _DTYPES)
@@ -220,15 +219,15 @@ def test_full_reproducibility(dtype: DType) -> None:
 
 
 def test_config_json_roundtrip() -> None:
-    """Serialising and deserialising a config via JSON must be loss‑less."""
+    """Serialising and deserialising a config via JSON must be loss-less."""
     cfg = _example_cfg(dtype=DType.float64, seed=271828)
     json_str = cfg.model_dump_json()
     cfg_round = CVNNConfig.model_validate_json(json_str)
 
-    # Round‑trip must preserve field values exactly
+    # Round-trip must preserve field values exactly
     assert cfg.model_dump(mode="json") == cfg_round.model_dump(mode="json")
 
-    # Sanity – JSON must be valid and contain the top‑level 'layers' key.
+    # Sanity - JSON must be valid and contain the top-level 'layers' key.
     parsed = json.loads(json_str)
     assert "layers" in parsed and parsed["seed"] == 271828
 

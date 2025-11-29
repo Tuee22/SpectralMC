@@ -284,7 +284,12 @@ SpectralMC enforces strict static typing with zero compromises.
 **Core Rules**:
 - ❌ NO `Any` types, `cast()`, or `# type: ignore`
 - ✅ Complete type hints on all functions
-- ✅ Run: `docker compose -f docker/docker-compose.yml exec spectralmc mypy`
+- ✅ Run: `docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-code`
+
+**Code Quality Pipeline** (`poetry run check-code`):
+1. **Ruff** - Linting with auto-fix
+2. **Black** - Code formatting
+3. **MyPy** - Static type checking
 
 **For complete documentation**, see [Coding Standards](documents/engineering/coding_standards.md) - Type Safety section.
 

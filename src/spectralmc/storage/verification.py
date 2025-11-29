@@ -4,16 +4,16 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional, List
 from dataclasses import dataclass
 
 from botocore.exceptions import ClientError
 
-from ..result import Result, Success, Failure
-from .store import AsyncBlockchainModelStore
+from ..result import Failure, Result, Success
 from .chain import ModelVersion
-from .errors import ChainCorruptionError, HeadNotFoundError, VersionNotFoundError
-from .s3_errors import S3OperationError
+from .errors import HeadNotFoundError, VersionNotFoundError
+from .s3_errors import S3OperationError, S3UnknownError
+from .store import AsyncBlockchainModelStore
+
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +30,9 @@ class CorruptionReport:
     """
 
     is_valid: bool
-    corrupted_version: Optional[ModelVersion]
-    corruption_type: Optional[str]
+    corrupted_version: ModelVersion | None
+    corruption_type: str | None
     details: str
-
-
 
 
 async def verify_chain_detailed(store: AsyncBlockchainModelStore) -> CorruptionReport:
@@ -63,7 +61,7 @@ async def verify_chain_detailed(store: AsyncBlockchainModelStore) -> CorruptionR
             pass  # Continue with verification
 
     # Fetch all versions from 0 to HEAD
-    versions: List[ModelVersion] = []
+    versions: list[ModelVersion] = []
     for counter in range(head.counter + 1):
         version_id = f"v{counter:010d}"
         try:
@@ -200,7 +198,6 @@ async def verify_chain(
                     print(f"S3 error: {error}")
         ```
     """
-    from .s3_errors import S3OperationError
 
     # Fetch HEAD
     head_result = await store.get_head()
@@ -220,7 +217,7 @@ async def verify_chain(
             # S3OperationError propagates
             return Failure(error)
 
-        case Success(head):
+        case Success(_):
             pass  # Continue with verification
 
     # Call verify_chain_detailed which does the actual validation
@@ -232,8 +229,6 @@ async def verify_chain(
     except ClientError:
         # If we hit a ClientError during verification, it's an S3 error
         # This can happen if get_version() encounters S3 errors
-        from .s3_errors import S3UnknownError
-
         return Failure(
             S3UnknownError(
                 error_code="VerificationError",
@@ -242,7 +237,7 @@ async def verify_chain(
         )
 
 
-async def find_corruption(store: AsyncBlockchainModelStore) -> Optional[ModelVersion]:
+async def find_corruption(store: AsyncBlockchainModelStore) -> ModelVersion | None:
     """
     Find first corrupted version in chain.
 
@@ -285,9 +280,7 @@ async def verify_version_completeness(
         ValueError: If any required artifact is missing
     """
     if store._s3_client is None:
-        raise RuntimeError(
-            "S3 client not initialized. Use 'async with' context manager."
-        )
+        raise RuntimeError("S3 client not initialized. Use 'async with' context manager.")
 
     version_dir = version.directory_name
     required_files = [

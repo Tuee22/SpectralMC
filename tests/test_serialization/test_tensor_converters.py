@@ -7,7 +7,7 @@ All tests require GPU - missing GPU is a hard failure, not a skip.
 from __future__ import annotations
 
 import torch
-import pytest
+
 
 # Module-level GPU requirement - test file fails immediately without GPU
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
@@ -16,14 +16,13 @@ GPU_DEV: torch.device = torch.device("cuda:0")
 
 from spectralmc.models.torch import (
     AdamOptimizerState,
-    AdamParamState,
     AdamParamGroup,
-    TensorState,
+    AdamParamState,
 )
 from spectralmc.serialization.tensors import (
-    TensorStateConverter,
     AdamOptimizerStateConverter,
     RNGStateConverter,
+    TensorStateConverter,
 )
 
 
@@ -155,9 +154,7 @@ def test_adam_optimizer_state_round_trip() -> None:
 
     # Verify param groups
     assert len(recovered.param_groups) == len(original.param_groups)
-    for i, (orig_group, rec_group) in enumerate(
-        zip(original.param_groups, recovered.param_groups)
-    ):
+    for i, (orig_group, rec_group) in enumerate(zip(original.param_groups, recovered.param_groups)):
         assert rec_group.lr == orig_group.lr
         assert rec_group.betas == orig_group.betas
         assert rec_group.eps == orig_group.eps
@@ -256,9 +253,7 @@ def test_model_checkpoint_round_trip() -> None:
         )
     ]
 
-    optimizer_state = AdamOptimizerState(
-        param_states=param_states, param_groups=param_groups
-    )
+    optimizer_state = AdamOptimizerState(param_states=param_states, param_groups=param_groups)
 
     # RNG states
     cpu_rng = torch.get_rng_state().numpy().tobytes()
@@ -271,16 +266,14 @@ def test_model_checkpoint_round_trip() -> None:
         model_state_dict, optimizer_state, cpu_rng, cuda_rngs, global_step
     )
 
-    rec_model, rec_opt, rec_cpu_rng, rec_cuda_rngs, rec_step = (
-        ModelCheckpointConverter.from_proto(proto)
+    rec_model, rec_opt, rec_cpu_rng, rec_cuda_rngs, rec_step = ModelCheckpointConverter.from_proto(
+        proto
     )
 
     # Verify model state dict
     assert set(rec_model.keys()) == set(model_state_dict.keys())
     for name in model_state_dict:
-        assert torch.allclose(
-            rec_model[name], model_state_dict[name], rtol=1e-6, atol=1e-9
-        )
+        assert torch.allclose(rec_model[name], model_state_dict[name], rtol=1e-6, atol=1e-9)
 
     # Verify optimizer state
     assert len(rec_opt.param_states) == len(optimizer_state.param_states)

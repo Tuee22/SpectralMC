@@ -10,10 +10,9 @@ All tests require GPU - missing GPU is a hard failure, not a skip.
 
 from __future__ import annotations
 
-from typing import Tuple
-
 import cupy as cp
 import torch
+
 
 # Module-level GPU requirement - test file fails immediately without GPU
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
@@ -39,7 +38,7 @@ def test_gpu_compute_capability() -> None:
     """Verify GPU compute capability is detected and supported."""
     # Use torch.cuda module's get_device_capability function
     cuda_module = torch.cuda
-    compute_cap: Tuple[int, int] = cuda_module.get_device_capability(0)
+    compute_cap: tuple[int, int] = cuda_module.get_device_capability(0)
     major, minor = compute_cap
 
     # Maxwell (GTX 970) is 5.2, should work with source build

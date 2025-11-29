@@ -15,116 +15,49 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timezone
-from typing import (
-    Optional,
-    Dict,
-    Callable,
-    TypeVar,
-    ParamSpec,
-    TypeAlias,
-    Protocol,
-    Awaitable,
-    Coroutine,
-)
+from datetime import UTC, datetime
 from types import TracebackType
+from typing import (
+    Callable,
+    Coroutine,
+    ParamSpec,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+)
 
 import aioboto3  # Type stub: stubs/aioboto3/__init__.pyi
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from ..result import Result, Success, Failure
-from .chain import ModelVersion, create_genesis_version, bump_semantic_version
+from ..result import Failure, Result, Success
+from .chain import ModelVersion, bump_semantic_version, create_genesis_version
 from .errors import (
-    NotFastForwardError,
-    VersionNotFoundError,
-    ConflictError,
-    CommitError,
-    HeadNotFoundError,
     AuditLogError,
-    S3Error,
+    CommitError,
+    ConflictError,
+    HeadNotFoundError,
+    VersionNotFoundError,
 )
+from .protocols import (
+    S3ClientProtocol,
+)
+from .s3_errors import S3NetworkError, S3ObjectNotFound, S3OperationError, S3UnknownError
 from .s3_operations import S3Operations
-from .s3_errors import S3OperationError
+
 
 _logger = logging.getLogger(__name__)
 
 # JSON type alias for nested dictionaries
-JsonValue: TypeAlias = (
-    str | int | float | bool | None | Dict[str, "JsonValue"] | list["JsonValue"]
-)
-JsonDict: TypeAlias = Dict[str, JsonValue]
+JsonValue: TypeAlias = str | int | float | bool | None | dict[str, "JsonValue"] | list["JsonValue"]
+JsonDict: TypeAlias = dict[str, JsonValue]
 
 
-# S3 response protocols
+# Additional local Protocol for streaming body (not in shared protocols)
 class _StreamingBodyProtocol(Protocol):
     """Protocol for S3 StreamingBody."""
 
     async def read(self) -> bytes: ...
-
-
-class _S3ResponseProtocol(Protocol):
-    """Protocol for S3 get_object response."""
-
-    def __getitem__(self, key: str) -> object: ...
-    def strip(self) -> str: ...
-    def read(self) -> bytes: ...
-    def endswith(self, suffix: str) -> bool: ...
-
-
-# Async iterator protocol for S3 paginator results
-class _AsyncIteratorProtocol(Protocol):
-    """Protocol for async iterator returned by paginate()."""
-
-    def __aiter__(self) -> "_AsyncIteratorProtocol": ...
-    async def __anext__(self) -> object: ...
-
-
-# S3 paginator protocol
-class _S3PaginatorProtocol(Protocol):
-    """Protocol for S3 paginator returned by get_paginator()."""
-
-    def paginate(self, **kwargs: object) -> _AsyncIteratorProtocol: ...
-
-
-# S3 client protocol (aioboto3 doesn't have proper type stubs)
-class _S3ClientProtocol(Protocol):
-    async def put_object(self, **kwargs: object) -> object: ...
-    async def get_object(self, **kwargs: object) -> _S3ResponseProtocol: ...
-    async def delete_object(self, **kwargs: object) -> object: ...
-    async def list_objects_v2(self, **kwargs: object) -> object: ...
-    async def head_object(self, **kwargs: object) -> object: ...
-    async def create_bucket(self, **kwargs: object) -> object: ...
-    async def delete_bucket(self, **kwargs: object) -> object: ...
-    async def list_buckets(self, **kwargs: object) -> object: ...
-    def get_paginator(self, operation_name: str) -> _S3PaginatorProtocol: ...
-    async def delete_objects(self, **kwargs: object) -> object: ...
-
-
-# Async context manager protocol for S3 client
-class _AsyncContextManager(Protocol):
-    """Protocol for async context manager returned by session.client()."""
-
-    async def __aenter__(self) -> _S3ClientProtocol: ...
-    async def __aexit__(
-        self,
-        exc_type: Optional[type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
-    ) -> bool | None: ...
-
-
-# Session protocol (aioboto3.Session has no type stubs)
-class _SessionProtocol(Protocol):
-    """Protocol for aioboto3.Session."""
-
-    def client(
-        self,
-        service_name: str,
-        endpoint_url: Optional[str] = ...,
-        config: Optional[Config] = ...,
-        **kwargs: object,
-    ) -> _AsyncContextManager: ...
 
 
 # Type variables for retry decorator
@@ -221,9 +154,9 @@ class AsyncBlockchainModelStore:
     def __init__(
         self,
         bucket_name: str = "opt-models",
-        endpoint_url: Optional[str] = None,
-        aws_access_key_id: Optional[str] = None,
-        aws_secret_access_key: Optional[str] = None,
+        endpoint_url: str | None = None,
+        aws_access_key_id: str | None = None,
+        aws_secret_access_key: str | None = None,
         region_name: str = "us-east-1",
     ) -> None:
         """
@@ -238,9 +171,7 @@ class AsyncBlockchainModelStore:
         """
         self.bucket_name = bucket_name
         self.endpoint_url = endpoint_url or os.environ.get("AWS_ENDPOINT_URL")
-        self.aws_access_key_id = aws_access_key_id or os.environ.get(
-            "AWS_ACCESS_KEY_ID"
-        )
+        self.aws_access_key_id = aws_access_key_id or os.environ.get("AWS_ACCESS_KEY_ID")
         self.aws_secret_access_key = aws_secret_access_key or os.environ.get(
             "AWS_SECRET_ACCESS_KEY"
         )
@@ -255,40 +186,38 @@ class AsyncBlockchainModelStore:
         )
 
         # Session and client (initialized in __aenter__)
-        # Note: session type relaxed to object to be compatible with aioboto3 stub
-        # Runtime behavior guaranteed by Protocol structural typing
+        # Typed as object to avoid cross-module Protocol incompatibility with aioboto3 stubs
+        # Runtime behavior verified via hasattr checks; stored for lifecycle management
         self.session: object | None = None
-        self._s3_client: Optional[_S3ClientProtocol] = None
-        self._client_context: Optional[_AsyncContextManager] = (
-            None  # Context manager for client
+        self._s3_client: S3ClientProtocol | None = None
+        self._client_context: object | None = (
+            None  # Context manager for client (object for aioboto3 compat)
         )
         # Functional S3 operations wrapper (initialized in __aenter__)
-        self._s3_ops: Optional[S3Operations] = None
+        self._s3_ops: S3Operations | None = None
 
     async def __aenter__(self) -> AsyncBlockchainModelStore:
         """Enter async context manager."""
-        # Note: Assign to object type to avoid cross-module Protocol incompatibility
-        # Runtime behavior guaranteed by aioboto3 stub Protocol
-        session_obj: object = aioboto3.Session(
+        # Create session - aioboto3.Session returns a session object with .client() method
+        session = aioboto3.Session(
             aws_access_key_id=self.aws_access_key_id,
             aws_secret_access_key=self.aws_secret_access_key,
             region_name=self.region_name,
         )
-        self.session = session_obj
+        self.session = session
 
-        # Session is now non-None, use it via attribute access
-        assert self.session is not None, "Session creation failed"
-        # aioboto3.Session has .client() method - access via getattr for type safety
-        client_method = getattr(self.session, "client")
-        client_context = client_method(
+        # Get client context manager from session
+        # The session.client() method returns an async context manager
+        client_context = session.client(
             "s3",
             endpoint_url=self.endpoint_url,
             config=self.boto_config,
         )
-        # Store context and enter it
         self._client_context = client_context
-        aenter_method = getattr(self._client_context, "__aenter__")
-        self._s3_client = await aenter_method()
+
+        # Enter the context manager to get the S3 client
+        # Use await on the context manager's __aenter__ via the async with protocol
+        self._s3_client = await client_context.__aenter__()
 
         # Initialize functional S3 operations wrapper
         self._s3_ops = S3Operations(self._s3_client)
@@ -297,13 +226,16 @@ class AsyncBlockchainModelStore:
 
     async def __aexit__(
         self,
-        exc_type: Optional[type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> bool | None:
         """Exit async context manager."""
-        if self._client_context:
-            await self._client_context.__aexit__(exc_type, exc_val, exc_tb)
+        client_ctx = self._client_context
+        if client_ctx is not None and hasattr(client_ctx, "__aexit__"):
+            # Runtime check ensures client_ctx has __aexit__ (context manager protocol)
+            aexit_method = client_ctx.__aexit__
+            await aexit_method(exc_type, exc_val, exc_tb)
             self._s3_client = None
             self._client_context = None
         return None
@@ -316,9 +248,7 @@ class AsyncBlockchainModelStore:
     async def _upload_bytes(self, key: str, data: bytes) -> None:
         """Upload bytes to S3 with retry logic."""
         if self._s3_client is None:
-            raise RuntimeError(
-                "S3 client not initialized. Use 'async with' context manager."
-            )
+            raise RuntimeError("S3 client not initialized. Use 'async with' context manager.")
         await self._s3_client.put_object(
             Bucket=self.bucket_name,
             Key=key,
@@ -329,9 +259,7 @@ class AsyncBlockchainModelStore:
     async def _upload_json(self, key: str, data: JsonDict) -> None:
         """Upload JSON to S3 with retry logic."""
         if self._s3_client is None:
-            raise RuntimeError(
-                "S3 client not initialized. Use 'async with' context manager."
-            )
+            raise RuntimeError("S3 client not initialized. Use 'async with' context manager.")
         await self._s3_client.put_object(
             Bucket=self.bucket_name,
             Key=key,
@@ -343,9 +271,7 @@ class AsyncBlockchainModelStore:
     async def _download_bytes(self, key: str) -> bytes:
         """Download bytes from S3 with retry logic."""
         if self._s3_client is None:
-            raise RuntimeError(
-                "S3 client not initialized. Use 'async with' context manager."
-            )
+            raise RuntimeError("S3 client not initialized. Use 'async with' context manager.")
         response = await self._s3_client.get_object(
             Bucket=self.bucket_name,
             Key=key,
@@ -353,9 +279,7 @@ class AsyncBlockchainModelStore:
         # Read the streaming body - extract Body field
         body = response["Body"]
         if not hasattr(body, "read"):
-            raise TypeError(
-                f"Expected streaming body with read() method, got {type(body)}"
-            )
+            raise TypeError(f"Expected streaming body with read() method, got {type(body)}")
         # Runtime check ensures body has read() method (StreamingBody has no stubs)
         data: bytes = await body.read()
         if not isinstance(data, bytes):
@@ -376,9 +300,7 @@ class AsyncBlockchainModelStore:
     async def _delete_object(self, key: str) -> None:
         """Delete object from S3 (used for rollback)."""
         if self._s3_client is None:
-            raise RuntimeError(
-                "S3 client not initialized. Use 'async with' context manager."
-            )
+            raise RuntimeError("S3 client not initialized. Use 'async with' context manager.")
         try:
             await self._s3_client.delete_object(
                 Bucket=self.bucket_name,
@@ -432,7 +354,7 @@ class AsyncBlockchainModelStore:
         # Note: S3 doesn't support append operations natively
         # In production, use Amazon Kinesis Data Firehose or similar
         # For now, we create timestamped log files
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         log_key = f"audit_log/{timestamp}_{version.version_id}.jsonl"
 
         await self._upload_bytes(log_key, log_line.encode("utf-8"))
@@ -476,8 +398,6 @@ class AsyncBlockchainModelStore:
         """
         if self._s3_ops is None:
             # This shouldn't happen if using async context manager correctly
-            from .s3_errors import S3UnknownError
-
             return Failure(
                 S3UnknownError(
                     error_code="NotInitialized",
@@ -489,7 +409,6 @@ class AsyncBlockchainModelStore:
         max_retries = 5
         base_delay = 0.1
         max_delay = 5.0
-        last_network_error: Optional[S3OperationError] = None
 
         for attempt in range(max_retries + 1):
             # Use functional S3Operations to get chain.json
@@ -498,8 +417,6 @@ class AsyncBlockchainModelStore:
             match result:
                 case Failure(error):
                     # Check if it's S3ObjectNotFound (empty chain)
-                    from .s3_errors import S3ObjectNotFound, S3NetworkError
-
                     if isinstance(error, S3ObjectNotFound):
                         # Empty chain is valid state - return immediately
                         return Failure(HeadNotFoundError())
@@ -510,7 +427,6 @@ class AsyncBlockchainModelStore:
                             # Retry with exponential backoff
                             delay = min(base_delay * (2**attempt), max_delay)
                             await asyncio.sleep(delay)
-                            last_network_error = error
                             continue  # Retry
 
                         # Max retries exceeded - return the last network error
@@ -531,8 +447,6 @@ class AsyncBlockchainModelStore:
                 try:
                     parsed = json.loads(data.decode("utf-8"))
                     if not isinstance(parsed, dict):
-                        from .s3_errors import S3UnknownError
-
                         return Failure(
                             S3UnknownError(
                                 error_code="InvalidData",
@@ -549,8 +463,6 @@ class AsyncBlockchainModelStore:
                     commit_message = parsed.get("commit_message")
 
                     if not isinstance(counter, int):
-                        from .s3_errors import S3UnknownError
-
                         return Failure(
                             S3UnknownError(
                                 error_code="InvalidData",
@@ -558,8 +470,6 @@ class AsyncBlockchainModelStore:
                             )
                         )
                     if not isinstance(semantic_version, str):
-                        from .s3_errors import S3UnknownError
-
                         return Failure(
                             S3UnknownError(
                                 error_code="InvalidData",
@@ -567,8 +477,6 @@ class AsyncBlockchainModelStore:
                             )
                         )
                     if not isinstance(parent_hash, str):
-                        from .s3_errors import S3UnknownError
-
                         return Failure(
                             S3UnknownError(
                                 error_code="InvalidData",
@@ -576,8 +484,6 @@ class AsyncBlockchainModelStore:
                             )
                         )
                     if not isinstance(content_hash, str):
-                        from .s3_errors import S3UnknownError
-
                         return Failure(
                             S3UnknownError(
                                 error_code="InvalidData",
@@ -585,8 +491,6 @@ class AsyncBlockchainModelStore:
                             )
                         )
                     if not isinstance(commit_timestamp, str):
-                        from .s3_errors import S3UnknownError
-
                         return Failure(
                             S3UnknownError(
                                 error_code="InvalidData",
@@ -594,8 +498,6 @@ class AsyncBlockchainModelStore:
                             )
                         )
                     if not isinstance(commit_message, str):
-                        from .s3_errors import S3UnknownError
-
                         return Failure(
                             S3UnknownError(
                                 error_code="InvalidData",
@@ -614,8 +516,6 @@ class AsyncBlockchainModelStore:
                     return Success(version)
 
                 except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                    from .s3_errors import S3UnknownError
-
                     return Failure(
                         S3UnknownError(
                             error_code="InvalidJSON",
@@ -662,27 +562,23 @@ class AsyncBlockchainModelStore:
         head_result = await self.get_head()
 
         # Step 3: Build ModelVersion metadata
-        current_head: Optional[ModelVersion] = None
+        current_head: ModelVersion | None = None
         match head_result:
             case Failure(_):
                 # Genesis commit
-                version = create_genesis_version(
-                    content_hash, message or "Genesis version"
-                )
+                version = create_genesis_version(content_hash, message or "Genesis version")
             case Success(head):
                 # Incremental commit
                 current_head = head
                 new_counter = current_head.counter + 1
-                new_semver = bump_semantic_version(
-                    current_head.semantic_version, "patch"
-                )
+                new_semver = bump_semantic_version(current_head.semantic_version, "patch")
 
                 version = ModelVersion(
                     counter=new_counter,
                     semantic_version=new_semver,
                     parent_hash=current_head.content_hash,
                     content_hash=content_hash,
-                    commit_timestamp=datetime.now(timezone.utc).isoformat(),
+                    commit_timestamp=datetime.now(UTC).isoformat(),
                     commit_message=message,
                 )
 
@@ -691,9 +587,7 @@ class AsyncBlockchainModelStore:
         # Step 4: Upload artifacts in parallel
         try:
             await asyncio.gather(
-                self._upload_bytes(
-                    f"versions/{version_dir}/checkpoint.pb", checkpoint_data
-                ),
+                self._upload_bytes(f"versions/{version_dir}/checkpoint.pb", checkpoint_data),
                 self._upload_json(
                     f"versions/{version_dir}/metadata.json",
                     {
@@ -710,7 +604,7 @@ class AsyncBlockchainModelStore:
                     content_hash.encode("utf-8"),
                 ),
             )
-        except (ClientError, IOError, OSError) as e:
+        except (ClientError, OSError) as e:
             # Rollback on upload failure
             await self._rollback_artifacts(version_dir)
             raise CommitError(f"Failed to upload artifacts: {e}")
@@ -718,11 +612,9 @@ class AsyncBlockchainModelStore:
         # Steps 5-7: Fetch chain.json + ETag, verify fast-forward, CAS write
         try:
             # Fetch current chain.json with ETag
-            etag: Optional[str] = None
+            etag: str | None = None
             if self._s3_client is None:
-                raise RuntimeError(
-                    "S3 client not initialized. Use 'async with' context manager."
-                )
+                raise RuntimeError("S3 client not initialized. Use 'async with' context manager.")
 
             try:
                 response = await self._s3_client.get_object(
@@ -738,9 +630,7 @@ class AsyncBlockchainModelStore:
                 # Extract Body field and read
                 body = response["Body"]
                 if not hasattr(body, "read"):
-                    raise TypeError(
-                        f"Expected streaming body with read() method, got {type(body)}"
-                    )
+                    raise TypeError(f"Expected streaming body with read() method, got {type(body)}")
                 # Runtime check ensures body has read() method (StreamingBody has no stubs)
                 chain_data_bytes: bytes = await body.read()
                 if not isinstance(chain_data_bytes, bytes):
@@ -779,7 +669,7 @@ class AsyncBlockchainModelStore:
                 "commit_message": version.commit_message,
             }
 
-            put_kwargs: Dict[str, object] = {
+            put_kwargs: dict[str, object] = {
                 "Bucket": self.bucket_name,
                 "Key": "chain.json",
                 "Body": json.dumps(version_dict, indent=2).encode("utf-8"),
@@ -791,9 +681,7 @@ class AsyncBlockchainModelStore:
                 put_kwargs["IfMatch"] = etag
 
             if self._s3_client is None:
-                raise RuntimeError(
-                    "S3 client not initialized. Use 'async with' context manager."
-                )
+                raise RuntimeError("S3 client not initialized. Use 'async with' context manager.")
             await self._s3_client.put_object(**put_kwargs)
 
         except ClientError as e:
@@ -815,7 +703,7 @@ class AsyncBlockchainModelStore:
             _logger.warning(
                 f"Audit log append failed (non-fatal) for version {version.version_id}: {e}"
             )
-        except (AuditLogError, IOError, OSError) as e:
+        except (AuditLogError, OSError) as e:
             _logger.error(
                 f"Unexpected audit log error for version {version.version_id}: {e}",
                 exc_info=True,
@@ -840,9 +728,7 @@ class AsyncBlockchainModelStore:
         """
         # List all version directories
         if self._s3_client is None:
-            raise RuntimeError(
-                "S3 client not initialized. Use 'async with' context manager."
-            )
+            raise RuntimeError("S3 client not initialized. Use 'async with' context manager.")
 
         try:
             response = await self._s3_client.list_objects_v2(
@@ -860,9 +746,7 @@ class AsyncBlockchainModelStore:
 
             common_prefixes = response["CommonPrefixes"]
             if not isinstance(common_prefixes, list):
-                raise TypeError(
-                    f"Expected list for CommonPrefixes, got {type(common_prefixes)}"
-                )
+                raise TypeError(f"Expected list for CommonPrefixes, got {type(common_prefixes)}")
 
             # Find matching version directory
             for prefix_obj in common_prefixes:
@@ -894,21 +778,15 @@ class AsyncBlockchainModelStore:
                             f"semantic_version must be str, got {type(semantic_version)}"
                         )
                     if not isinstance(parent_hash, str):
-                        raise TypeError(
-                            f"parent_hash must be str, got {type(parent_hash)}"
-                        )
+                        raise TypeError(f"parent_hash must be str, got {type(parent_hash)}")
                     if not isinstance(content_hash, str):
-                        raise TypeError(
-                            f"content_hash must be str, got {type(content_hash)}"
-                        )
+                        raise TypeError(f"content_hash must be str, got {type(content_hash)}")
                     if not isinstance(commit_timestamp, str):
                         raise TypeError(
                             f"commit_timestamp must be str, got {type(commit_timestamp)}"
                         )
                     if not isinstance(commit_message, str):
-                        raise TypeError(
-                            f"commit_message must be str, got {type(commit_message)}"
-                        )
+                        raise TypeError(f"commit_message must be str, got {type(commit_message)}")
 
                     return ModelVersion(
                         counter=counter,

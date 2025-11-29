@@ -8,7 +8,6 @@ Checkpoints are created programmatically for testing purposes.
 from __future__ import annotations
 
 import asyncio
-from typing import List
 
 import pytest
 import torch
@@ -16,18 +15,20 @@ import torch
 from spectralmc.gbm import BlackScholesConfig, SimulationParams
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
-from spectralmc.result import Success, Failure
+from spectralmc.result import Failure, Success
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
-    commit_snapshot,
-    load_snapshot_from_checkpoint,
-    verify_chain,
     InferenceClient,
     PinnedMode,
     TrackingMode,
+    commit_snapshot,
+    load_snapshot_from_checkpoint,
+    verify_chain,
+)
+from spectralmc.storage.errors import (
+    VersionNotFoundError,
 )
 from spectralmc.storage.gc import run_gc
-from spectralmc.storage.errors import ChainCorruptionError, VersionNotFoundError, ConflictError
 
 
 def make_test_snapshot(
@@ -133,7 +134,7 @@ async def test_e2e_sequential_commits(async_store: AsyncBlockchainModelStore) ->
     performing sequential commits (not concurrent). Concurrent conflict
     handling is tested in unit tests for the store layer.
     """
-    successful_commits: List[int] = []
+    successful_commits: list[int] = []
 
     # Perform 5 sequential commits (no concurrency)
     for worker_id in range(5):
@@ -180,7 +181,7 @@ async def test_e2e_inference_client_hot_swap(
 
     # Commit initial version
     snapshot1 = make_test_snapshot(global_step=0)
-    version1 = await commit_snapshot(async_store, snapshot1, "Version 1")
+    await commit_snapshot(async_store, snapshot1, "Version 1")
 
     model_template = torch.nn.Linear(5, 5)
     config_template = make_test_snapshot(0)
@@ -199,7 +200,7 @@ async def test_e2e_inference_client_hot_swap(
 
         # Commit new version
         snapshot2 = make_test_snapshot(global_step=100)
-        version2 = await commit_snapshot(async_store, snapshot2, "Version 2")
+        _version2 = await commit_snapshot(async_store, snapshot2, "Version 2")
 
         # Wait for hot-swap (poll_interval + buffer)
         await asyncio.sleep(1.0)
@@ -210,7 +211,7 @@ async def test_e2e_inference_client_hot_swap(
 
         # Commit another version
         snapshot3 = make_test_snapshot(global_step=200)
-        version3 = await commit_snapshot(async_store, snapshot3, "Version 3")
+        _version3 = await commit_snapshot(async_store, snapshot3, "Version 3")
 
         await asyncio.sleep(1.0)
 
@@ -348,7 +349,7 @@ async def test_e2e_version_history_traversal(
     """Test traversing version history backward through parent links."""
 
     # Create a chain of 10 versions
-    versions: List[str] = []
+    versions: list[str] = []
     for i in range(10):
         snapshot = make_test_snapshot(global_step=i * 10)
         version = await commit_snapshot(async_store, snapshot, f"Step {i}")
@@ -489,8 +490,8 @@ async def test_e2e_empty_chain_operations(
     assert report.bytes_freed == 0
 
     # Load from empty chain should fail
-    model_template = torch.nn.Linear(5, 5)
-    config_template = make_test_snapshot(0)
+    _model_template = torch.nn.Linear(5, 5)
+    _config_template = make_test_snapshot(0)
 
     with pytest.raises(VersionNotFoundError):
         await async_store.get_version("v0000000000")

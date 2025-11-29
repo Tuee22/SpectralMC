@@ -6,22 +6,20 @@ from __future__ import annotations
 import pytest
 import torch
 
+from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.gbm_trainer import GbmCVNNPricerConfig
+from spectralmc.models.numerical import Precision
+from spectralmc.result import Failure, Success
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     GarbageCollector,
     RetentionPolicy,
-    run_gc,
     commit_snapshot,
+    run_gc,
 )
-from spectralmc.gbm_trainer import GbmCVNNPricerConfig
-from spectralmc.gbm import BlackScholesConfig, SimulationParams
-from spectralmc.models.numerical import Precision
-from spectralmc.result import Success, Failure
 
 
-def make_test_config(
-    model: torch.nn.Module, global_step: int = 0
-) -> GbmCVNNPricerConfig:
+def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPricerConfig:
     """Factory to create test configurations (GbmCVNNPricerConfig is frozen)."""
     sim_params = SimulationParams(
         timesteps=100,
@@ -246,9 +244,7 @@ async def test_gc_bytes_freed_nonzero(async_store: AsyncBlockchainModelStore) ->
     report_actual = await gc.collect(dry_run=False)
     assert report_actual.bytes_freed > 0
     # Should be similar to dry run estimate
-    assert (
-        abs(report_dry.bytes_freed - report_actual.bytes_freed) < 100
-    )  # Allow small diff
+    assert abs(report_dry.bytes_freed - report_actual.bytes_freed) < 100  # Allow small diff
 
 
 @pytest.mark.asyncio

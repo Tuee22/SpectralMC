@@ -62,35 +62,24 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
     update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 && \
     update-alternatives --set python /usr/bin/python3.12
 
-# 5) Install pip for Python 3.12
-RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
+# 5) Install pip for Python 3.12, then install Poetry via pip (single command)
+# Poetry virtual environment config is handled by poetry.toml (virtualenvs.create = false)
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 && \
+    python -m pip install --upgrade pip setuptools wheel poetry
 
-# 6) Upgrade pip, setuptools, wheel
-RUN python -m pip install --upgrade pip setuptools wheel
-
-# 7) Clean up apt caches
+# 6) Clean up apt caches
 RUN apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/*
 
-# 8) Install Poetry
-# Install Poetry
-RUN curl -sSL https://install.python-poetry.org | python3.12 -
-
-# Configure Poetry to not use virtual environments
-RUN poetry config virtualenvs.create false
-
-# 9) Copy repo contents
+# 7) Copy repo contents
 COPY ./ /spectralmc
 
-# 10) Work in /spectralmc
+# 8) Work in /spectralmc
 WORKDIR /spectralmc
 
-# 11) install dependencies system-wide
+# 9) Install dependencies system-wide via Poetry
 RUN poetry install --no-interaction
 
-# validate code with mypy
-#RUN mypy /spectralmc/src/spectralmc /spectralmc/tests --strict --no-incremental && rm -rf .mypy_cache
-
-# 11.5) Enforce CLAUDE.md testing policies: Block direct pytest and timeout commands
+# 10) Enforce CLAUDE.md testing policies: Block direct pytest and timeout commands
 # Block direct pytest command (python -m pytest still works for Poetry scripts)
 # Poetry installs to /usr/local/bin, so we override that location
 RUN if [ -f /usr/local/bin/pytest ]; then mv /usr/local/bin/pytest /usr/local/bin/pytest.real; fi && \
@@ -107,10 +96,10 @@ RUN if [ -f /usr/bin/timeout ]; then mv /usr/bin/timeout /usr/bin/timeout.real; 
     echo '#!/bin/sh\nif echo "$*" | grep -qE "(pytest|test-|test_)"; then\n  echo "❌ ERROR: Timeout commands with tests forbidden per CLAUDE.md"\n  echo "✅ USE: poetry run test-all [pytest-args]"\n  echo "📖 Tests complete when they complete - patience required"\n  exit 1\nfi\nexec /usr/bin/timeout.real "$@"' > /usr/bin/timeout && \
     chmod +x /usr/bin/timeout
 
-# 12) Expose port 6006 & 8888
+# 11) Expose port 6006 & 8888
 EXPOSE 6006 8888
 
-# 13) Default command to run Jupyter
+# 12) Default command to run Jupyter
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
 CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", \

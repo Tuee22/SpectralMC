@@ -1,42 +1,41 @@
 # src/spectralmc/gbm.py
 """
-GPU‑accelerated Monte‑Carlo engine for a *Geometric Brownian Motion*
-under Black–Scholes assumptions.
+GPU-accelerated Monte-Carlo engine for a *Geometric Brownian Motion*
+under Black-Scholes assumptions.
 
 Key features
 ------------
-* **Pure‑GPU** workflow – Sobol/Box–Muller normal generation, Numba‑CUDA
+* **Pure-GPU** workflow - Sobol/Box-Muller normal generation, Numba-CUDA
   path simulation and CuPy reductions never leave the device.
-* **Deterministic snapshots** – :class:`BlackScholesConfig` contains
+* **Deterministic snapshots** - :class:`BlackScholesConfig` contains
   *every* mutable degree of freedom so a simulation can be resumed
-  bit‑exactly on any host.  All snapshot tensors are forced onto the
-  CPU to avoid device‑specific artefacts.
-* **Strict typing** – the project‑wide :class:`spectralmc.models.numerical.Precision`
+  bit-exactly on any host.  All snapshot tensors are forced onto the
+  CPU to avoid device-specific artefacts.
+* **Strict typing** - the project-wide :class:`spectralmc.models.numerical.Precision`
   replaces the old ``Literal["float32","float64"]`` helper.  The file is
-  clean under ``mypy --strict`` with **zero** `Any`, casts or ignore
+  clean under ``mypy --strict`` with **zero** `Any`, casts or ignore
   comments.
 
 Public API
 ----------
 `BlackScholes`
-    The single‑GPU Monte‑Carlo engine.
+    The single-GPU Monte-Carlo engine.
 `BlackScholes.Inputs`
-    Per‑contract parameters (Pydantic model).
+    Per-contract parameters (Pydantic model).
 `BlackScholes.SimResults / PricingResults / HostPricingResults`
-    Strongly‑typed outputs returned by :meth:`_simulate`, :meth:`price`
+    Strongly-typed outputs returned by :meth:`_simulate`, :meth:`price`
     and :meth:`price_to_host`, respectively.
 """
 
 from __future__ import annotations
 
 from math import exp, sqrt
-from typing import Annotated, Literal, Optional, TypeAlias, TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated, Literal, TypeAlias
 
 import cupy as cp
-import numpy as np
 from numba import cuda
-from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
 
 if TYPE_CHECKING:
     from numba.cuda import DeviceNDArray
@@ -48,6 +47,7 @@ from spectralmc.async_normals import (
 )
 from spectralmc.models.numerical import Precision
 
+
 # ──────────────────────────────── typing helpers ─────────────────────────────
 PosFloat = Annotated[float, Field(gt=0)]
 NonNegFloat = Annotated[float, Field(ge=0)]
@@ -55,11 +55,11 @@ NonNegFloat = Annotated[float, Field(ge=0)]
 # Valid CUDA thread block sizes (must be power of 2, range [32, 1024])
 ThreadsPerBlock: TypeAlias = Literal[32, 64, 128, 256, 512, 1024]
 
-# ───────────────────────── simulation‑parameter schema ──────────────────────
+# ───────────────────────── simulation-parameter schema ──────────────────────
 
 
 class SimulationParams(BaseModel):
-    """Immutable run‑time parameters for one engine instance."""
+    """Immutable run-time parameters for one engine instance."""
 
     timesteps: int = Field(..., gt=0)
     network_size: int = Field(..., gt=0)
@@ -73,7 +73,7 @@ class SimulationParams(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     @model_validator(mode="after")
-    def validate_gpu_memory(self) -> "SimulationParams":
+    def validate_gpu_memory(self) -> SimulationParams:
         """
         Validate that GPU memory requirements are reasonable.
 
@@ -95,19 +95,17 @@ class SimulationParams(BaseModel):
 
     # ..................................... convenience ......................
     # @property
-    # def cp_dtype(self) -> cp.dtype:  # noqa: D401
+    # def cp_dtype(self) -> cp.dtype:
     #    """Return the equivalent :class:`cupy.dtype`."""
     #    return cp.dtype(self.dtype.value)
 
-    def total_paths(self) -> int:  # noqa: D401
+    def total_paths(self) -> int:
         """Total number of simulated paths."""
         return self.network_size * self.batches_per_mc_run
 
-    def total_blocks(self) -> int:  # noqa: D401
+    def total_blocks(self) -> int:
         """CUDA grid size for the Numba kernel."""
-        return (
-            self.total_paths() + self.threads_per_block - 1
-        ) // self.threads_per_block
+        return (self.total_paths() + self.threads_per_block - 1) // self.threads_per_block
 
 
 # ────────────────────────────── engine configuration ────────────────────────
@@ -115,16 +113,16 @@ class SimulationParams(BaseModel):
 
 class BlackScholesConfig(BaseModel):
     """
-    Complete, **frozen** configuration of a Monte‑Carlo engine.
+    Complete, **frozen** configuration of a Monte-Carlo engine.
 
     Parameters
     ----------
     sim_params
         Numerical parameters & precision.
     simulate_log_return
-        Use a log‑Euler scheme (variance reduction).
+        Use a log-Euler scheme (variance reduction).
     normalize_forwards
-        Normalise each time‑slice to the analytic forward (bias
+        Normalise each time-slice to the analytic forward (bias
         reduction).
     """
 
@@ -139,7 +137,7 @@ class BlackScholesConfig(BaseModel):
 
 
 @cuda.jit
-def SimulateBlackScholes(  # noqa: N802 – CUDA kernel
+def SimulateBlackScholes(
     io: DeviceNDArray,
     timesteps: int,
     dt: float,
@@ -149,7 +147,7 @@ def SimulateBlackScholes(  # noqa: N802 – CUDA kernel
     v: float,
     simulate_log_return: bool,
 ) -> None:
-    """Advance each path *in‑place*.  One CUDA thread ≙ one path."""
+    """Advance each path *in-place*.  One CUDA thread ≙ one path."""
     idx = cuda.grid(1)
     if idx < io.shape[1]:
         sqrt_dt = sqrt(dt)
@@ -173,7 +171,7 @@ def SimulateBlackScholes(  # noqa: N802 – CUDA kernel
 
 
 class BlackScholes:
-    """Single‑GPU Monte‑Carlo pricing engine."""
+    """Single-GPU Monte-Carlo pricing engine."""
 
     # ....................................... nested Pydantic models .........
     class Inputs(BaseModel):
@@ -232,17 +230,13 @@ class BlackScholes:
             dtype=self._sp.dtype,
             skips=self._sp.skip,
         )
-        buffer_cfg = BufferConfig.create(
-            self._sp.buffer_size, ngen_cfg.rows, ngen_cfg.cols
-        )
+        buffer_cfg = BufferConfig.create(self._sp.buffer_size, ngen_cfg.rows, ngen_cfg.cols)
         self._ngen = ConcurrentNormGenerator(buffer_cfg, ngen_cfg)
 
     # ....................................... snapshot interface .............
     def snapshot(self) -> BlackScholesConfig:
         """Return a *deep* copy capturing current RNG skip offset."""
-        sp = self._sp.model_copy(
-            update={"skip": self._ngen.snapshot().skips}, deep=True
-        )
+        sp = self._sp.model_copy(update={"skip": self._ngen.snapshot().skips}, deep=True)
         return BlackScholesConfig(
             sim_params=sp,
             simulate_log_return=self._cfg.simulate_log_return,
@@ -284,9 +278,7 @@ class BlackScholes:
         return self.SimResults(times=times, sims=sims, forwards=forwards, df=df)
 
     # ....................................... pricing .......................
-    def price(
-        self, *, inputs: Inputs, sr: Optional[SimResults] = None
-    ) -> PricingResults:
+    def price(self, *, inputs: Inputs, sr: SimResults | None = None) -> PricingResults:
         """Return CuPy tensors with full MC results (no CPU sync)."""
         sr = sr or self._simulate(inputs)
         with self._cp_stream:
@@ -331,7 +323,7 @@ class BlackScholes:
         )
 
     def price_to_host(self, inputs: Inputs) -> HostPricingResults:
-        """Convenience wrapper – GPU price → CPU scalars."""
+        """Convenience wrapper - GPU price → CPU scalars."""
         return self.get_host_price(self.price(inputs=inputs))
 
 

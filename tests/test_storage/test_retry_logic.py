@@ -4,14 +4,14 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import patch
+
 import pytest
 from botocore.exceptions import ClientError
-from unittest.mock import AsyncMock, patch
 
+from spectralmc.result import Failure, Success
 from spectralmc.storage import AsyncBlockchainModelStore
-from spectralmc.storage.errors import ConflictError
-from spectralmc.storage.store import _S3ResponseProtocol
-from spectralmc.result import Success, Failure
+from spectralmc.storage.protocols import S3ResponseProtocol
 
 
 @pytest.mark.asyncio
@@ -29,9 +29,7 @@ async def test_retry_on_throttling(async_store: AsyncBlockchainModelStore) -> No
     assert async_store._s3_client is not None
     original_get_object = async_store._s3_client.get_object
 
-    async def get_object_with_throttling(
-        *args: object, **kwargs: object
-    ) -> _S3ResponseProtocol:
+    async def get_object_with_throttling(*args: object, **kwargs: object) -> S3ResponseProtocol:
         """Simulate throttling errors that eventually succeed."""
         nonlocal call_count
         call_count += 1
@@ -54,15 +52,13 @@ async def test_retry_on_throttling(async_store: AsyncBlockchainModelStore) -> No
     # First create an object so get_object has something to fetch
     checkpoint = b"test checkpoint"
     content_hash = "test_hash"
-    version = await async_store.commit(checkpoint, content_hash, "Test")
+    _version = await async_store.commit(checkpoint, content_hash, "Test")
 
     # Reset counter
     call_count = 0
 
     # Now test retry logic on get_object
-    with patch.object(
-        async_store._s3_client, "get_object", side_effect=get_object_with_throttling
-    ):
+    with patch.object(async_store._s3_client, "get_object", side_effect=get_object_with_throttling):
         # This should retry 3 times and succeed on 4th attempt
         start_time = asyncio.get_event_loop().time()
 
@@ -100,12 +96,12 @@ async def test_retry_exhaustion(async_store: AsyncBlockchainModelStore) -> None:
     # First create an object so we have something to download
     checkpoint = b"test checkpoint"
     content_hash = "test_hash"
-    version = await async_store.commit(checkpoint, content_hash, "Test")
+    _version = await async_store.commit(checkpoint, content_hash, "Test")
 
     # Create a function that always throttles
     call_count = 0
     assert async_store._s3_client is not None
-    original_get_object = async_store._s3_client.get_object
+    _original_get_object = async_store._s3_client.get_object
 
     async def always_throttle(*args: object, **kwargs: object) -> dict[str, object]:
         """Always return throttling error."""
@@ -117,17 +113,13 @@ async def test_retry_exhaustion(async_store: AsyncBlockchainModelStore) -> None:
         )
 
     # Patch get_object to always throttle
-    with patch.object(
-        async_store._s3_client, "get_object", side_effect=always_throttle
-    ):
+    with patch.object(async_store._s3_client, "get_object", side_effect=always_throttle):
         # Test _download_bytes directly (has single retry decorator)
         with pytest.raises(ClientError, match="Service unavailable"):
             await async_store._download_bytes("chain.json")
 
         # Default max_retries is 5, so we expect 6 total calls (1 initial + 5 retries)
-        assert (
-            call_count == 6
-        ), f"Expected 6 calls (1 initial + 5 retries), got {call_count}"
+        assert call_count == 6, f"Expected 6 calls (1 initial + 5 retries), got {call_count}"
 
 
 @pytest.mark.asyncio
@@ -141,7 +133,7 @@ async def test_no_retry_on_conflict(async_store: AsyncBlockchainModelStore) -> N
     # Create genesis commit
     checkpoint1 = b"checkpoint 1"
     hash1 = "hash1"
-    version1 = await async_store.commit(checkpoint1, hash1, "First")
+    _version1 = await async_store.commit(checkpoint1, hash1, "First")
 
     # Get current ETag
     assert async_store._s3_client is not None
@@ -156,7 +148,7 @@ async def test_no_retry_on_conflict(async_store: AsyncBlockchainModelStore) -> N
     # Commit again to change ETag
     checkpoint2 = b"checkpoint 2"
     hash2 = "hash2"
-    version2 = await async_store.commit(checkpoint2, hash2, "Second")
+    _version2 = await async_store.commit(checkpoint2, hash2, "Second")
 
     # Track put_object calls
     call_count = 0
@@ -169,12 +161,10 @@ async def test_no_retry_on_conflict(async_store: AsyncBlockchainModelStore) -> N
         call_count += 1
         return await original_put_object(*args, **kwargs)
 
-    with patch.object(
-        async_store._s3_client, "put_object", side_effect=track_put_calls
-    ):
+    with patch.object(async_store._s3_client, "put_object", side_effect=track_put_calls):
         # Try to write with stale ETag
+        assert async_store._s3_client is not None
         with pytest.raises(ClientError, match="PreconditionFailed"):
-            assert async_store._s3_client is not None
             await async_store._s3_client.put_object(
                 Bucket=async_store.bucket_name,
                 Key="chain.json",
@@ -183,6 +173,4 @@ async def test_no_retry_on_conflict(async_store: AsyncBlockchainModelStore) -> N
             )
 
         # Should fail immediately without retry (call_count == 1)
-        assert (
-            call_count == 1
-        ), f"PreconditionFailed should not be retried, got {call_count} calls"
+        assert call_count == 1, f"PreconditionFailed should not be retried, got {call_count} calls"

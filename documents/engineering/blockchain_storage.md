@@ -479,6 +479,5 @@ docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/test_in
 ## Related Documentation
 
 - [Testing Requirements](testing_requirements.md) - Test output handling and anti-patterns
-- [Coding Standards](coding_standards.md) - Type safety and implementation standards
-- [Functional Programming](functional_programming.md) - Result types and error handling
+- [Coding Standards](coding_standards.md) - Type safety, Result types, ADTs, and error handling
 - [Main Project Guide](../../CLAUDE.md) - Quick reference

@@ -2,20 +2,18 @@
 """
 tests.test_async_normals
 ========================
-End‑to‑end tests for `spectralmc.async_normals` with **zero ignores**.
+End-to-end tests for `spectralmc.async_normals` with **zero ignores**.
 The CuPy stub package under *stubs/* provides every symbol touched,
-so the suite type‑checks under `mypy --strict`.
+so the suite type-checks under `mypy --strict`.
 
 Test matrix
 -----------
-* _NormGenerator – enqueue/get, dtype, synchronisation metrics.
-* Concurrent generator – checkpoint reproducibility, idle‑time tracking.
-* Validation (CPU‑only) – Pydantic schema errors for bad payloads.
+* _NormGenerator - enqueue/get, dtype, synchronisation metrics.
+* Concurrent generator - checkpoint reproducibility, idle-time tracking.
+* Validation (CPU-only) - Pydantic schema errors for bad payloads.
 """
 
 from __future__ import annotations
-
-from typing import List
 
 import cupy as cp
 import pytest
@@ -24,6 +22,7 @@ from pydantic import ValidationError
 from spectralmc import async_normals
 from spectralmc.async_normals import BufferConfig
 from spectralmc.models.numerical import Precision
+
 
 # --------------------------------------------------------------------------- #
 # Fixtures                                                                    #
@@ -46,7 +45,7 @@ def precision(request: pytest.FixtureRequest) -> Precision:
 def _collect(
     gen: async_normals.ConcurrentNormGenerator,
     n: int,
-) -> List[cp.ndarray]:
+) -> list[cp.ndarray]:
     """Collect *n* matrices from a generator."""
     return [gen.get_matrix() for _ in range(n)]
 
@@ -57,7 +56,7 @@ def _collect(
 
 
 def test_private_norm_generator(precision: Precision) -> None:
-    """Smoke‑test the private single‑stream generator."""
+    """Smoke-test the private single-stream generator."""
     rows, cols = 4, 6
     gen = async_normals._NormGenerator(rows, cols, dtype=precision.to_cupy())
     gen.enqueue(123)
@@ -93,9 +92,7 @@ def test_checkpoint_reproducibility(precision: Precision) -> None:
         dtype=precision,
         skips=0,
     )
-    gen0 = async_normals.ConcurrentNormGenerator(
-        BufferConfig.create(buffer, rows, cols), cfg0
-    )
+    gen0 = async_normals.ConcurrentNormGenerator(BufferConfig.create(buffer, rows, cols), cfg0)
 
     initial = _collect(gen0, 10)
     snap = gen0.snapshot()
@@ -125,9 +122,7 @@ def test_diagnostics(precision: Precision) -> None:
         dtype=precision,
         skips=0,
     )
-    gen = async_normals.ConcurrentNormGenerator(
-        BufferConfig.create(2, cfg.rows, cfg.cols), cfg
-    )
+    gen = async_normals.ConcurrentNormGenerator(BufferConfig.create(2, cfg.rows, cfg.cols), cfg)
 
     t0 = gen.get_time_spent_synchronizing()
     _ = gen.get_matrix()
@@ -145,7 +140,7 @@ def test_diagnostics(precision: Precision) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Validation tests (CPU‑only)                                                 #
+# Validation tests (CPU-only)                                                 #
 # --------------------------------------------------------------------------- #
 
 

@@ -3,18 +3,16 @@
 
 from __future__ import annotations
 
-from typing import Optional
+import torch
 
 # CRITICAL: Import facade BEFORE torch for deterministic algorithms
-import spectralmc.models.torch as sm_torch  # noqa: E402
-import torch  # noqa: E402
-
-from spectralmc.gbm_trainer import GbmCVNNPricerConfig, ComplexValuedModel  # noqa: E402
+from spectralmc.gbm_trainer import ComplexValuedModel, GbmCVNNPricerConfig
 from spectralmc.models.torch import AdamOptimizerState
-from spectralmc.serialization.tensors import ModelCheckpointConverter
+from spectralmc.proto import tensors_pb2
 from spectralmc.serialization import compute_sha256
-from spectralmc.storage.store import AsyncBlockchainModelStore
+from spectralmc.serialization.tensors import ModelCheckpointConverter
 from spectralmc.storage.chain import ModelVersion
+from spectralmc.storage.store import AsyncBlockchainModelStore
 
 
 def create_checkpoint_from_snapshot(
@@ -113,8 +111,6 @@ async def load_snapshot_from_checkpoint(
     checkpoint_bytes = await store.load_checkpoint(version)
 
     # Deserialize protobuf
-    from spectralmc.proto import tensors_pb2
-
     checkpoint_proto = tensors_pb2.ModelCheckpointProto()
     checkpoint_proto.ParseFromString(checkpoint_bytes)
 

@@ -94,9 +94,5 @@ class S3UnknownError:
 # Union type for all S3 errors - enables exhaustive pattern matching
 # Note: Named S3OperationError to avoid conflict with exception-based S3Error in errors.py
 S3OperationError = (
-    S3BucketNotFound
-    | S3ObjectNotFound
-    | S3AccessDenied
-    | S3NetworkError
-    | S3UnknownError
+    S3BucketNotFound | S3ObjectNotFound | S3AccessDenied | S3NetworkError | S3UnknownError
 )

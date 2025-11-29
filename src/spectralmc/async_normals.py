@@ -2,18 +2,18 @@
 """
 spectralmc.async_normals
 ========================
-Latency‑hiding generation of standard‑normal matrices that live on the
-GPU, with deterministic checkpoint/restore and *zero* static‑typing
+Latency-hiding generation of standard-normal matrices that live on the
+GPU, with deterministic checkpoint/restore and *zero* static-typing
 compromises.
 
 Design overview
 ---------------
-1. **Snapshot fidelity** – you can pause, serialise the state, and later
+1. **Snapshot fidelity** - you can pause, serialise the state, and later
    resume (even with a different buffer size) without breaking the random
    sequence.
-2. **Latency hiding** – a configurable pool of CUDA streams means the host
+2. **Latency hiding** - a configurable pool of CUDA streams means the host
    seldom blocks waiting for kernels to finish.
-3. **Strict typing** – the module passes `mypy --strict` without ignores,
+3. **Strict typing** - the module passes `mypy --strict` without ignores,
    casts, or Any.  Precision is serialised via
    `spectralmc.models.numerical.Precision`; internally we only keep the
    raw `cp.dtype`.
@@ -46,13 +46,14 @@ from __future__ import annotations
 
 from itertools import cycle
 from time import time
-from typing import Annotated, List, Optional
+from typing import Annotated
 
 import cupy as cp
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 from spectralmc.models.numerical import Precision
+
 
 __all__: list[str] = [
     "BufferConfig",
@@ -101,7 +102,7 @@ class BufferConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     @classmethod
-    def create(cls, size: int, matrix_rows: int, matrix_cols: int) -> "BufferConfig":
+    def create(cls, size: int, matrix_rows: int, matrix_cols: int) -> BufferConfig:
         """Construct BufferConfig with validation against matrix dimensions.
 
         Parameters
@@ -138,17 +139,17 @@ class ConcurrentNormGeneratorConfig(BaseModel):
     Attributes
     ----------
     rows
-        Matrix height (> 0).
+        Matrix height (> 0).
     cols
-        Matrix width (> 0).
+        Matrix width (> 0).
     seed
-        Base seed for the global NumPy RNG (> 0).  Each worker draws its own
+        Base seed for the global NumPy RNG (> 0).  Each worker draws its own
         CuPy seed from this generator.
     dtype
         Requested numeric precision as `Precision.float32` or
         `Precision.float64`.
     skips
-        How many matrices have already been produced (≥ 0).  Used to advance
+        How many matrices have already been produced (≥ 0).  Used to advance
         the NumPy RNG when restoring from a checkpoint.
     """
 
@@ -162,12 +163,12 @@ class ConcurrentNormGeneratorConfig(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Internal single‑stream generator                                            #
+# Internal single-stream generator                                            #
 # --------------------------------------------------------------------------- #
 
 
 class _NormGenerator:
-    """Generate standard‑normal matrices on a dedicated CUDA stream."""
+    """Generate standard-normal matrices on a dedicated CUDA stream."""
 
     def __init__(self, rows: int, cols: int, *, dtype: cp.dtype) -> None:
         """Validate shapes, store dtype, and allocate the CUDA stream."""
@@ -178,14 +179,14 @@ class _NormGenerator:
         self._dtype: cp.dtype = _validate_cupy_dtype(dtype)
 
         self._stream: cp.cuda.Stream = cp.cuda.Stream()
-        self._generated: Optional[cp.ndarray] = None
-        self._event: Optional[cp.cuda.Event] = None
+        self._generated: cp.ndarray | None = None
+        self._event: cp.cuda.Event | None = None
         self._sync_time: float = 0.0
 
     # ---------------- asynchronous pipeline --------------------------- #
 
     def enqueue(self, seed: int) -> None:
-        """Launch a kernel that fills the next matrix (non‑blocking)."""
+        """Launch a kernel that fills the next matrix (non-blocking)."""
         if self._generated is not None:
             raise RuntimeError("previous matrix not yet consumed")
         if seed <= 0:
@@ -194,15 +195,13 @@ class _NormGenerator:
         self._event = cp.cuda.Event(disable_timing=True)
         with self._stream:
             rng = cp.random.default_rng(seed)
-            self._generated = rng.standard_normal(
-                (self._rows, self._cols), dtype=self._dtype
-            )
+            self._generated = rng.standard_normal((self._rows, self._cols), dtype=self._dtype)
             self._event.record()
 
     def get_matrix(self, next_seed: int) -> cp.ndarray:
         """Synchronise, return the ready matrix, then queue another."""
         if self._generated is None:  # pragma: no cover
-            raise RuntimeError("no matrix enqueued – call enqueue() first")
+            raise RuntimeError("no matrix enqueued - call enqueue() first")
 
         t0 = time()
         self._stream.synchronize()
@@ -215,17 +214,14 @@ class _NormGenerator:
     # ---------------- diagnostics ------------------------------------- #
 
     def get_time_spent_synchronizing(self) -> float:
-        """Total host‑side synchronisation latency (seconds)."""
+        """Total host-side synchronisation latency (seconds)."""
         return self._sync_time
 
     def is_ready(self) -> bool:
         """True iff the current matrix has finished on the GPU."""
-        return (
-            self._event is not None
-            and int(cp.cuda.runtime.eventQuery(self._event.ptr)) == 0
-        )
+        return self._event is not None and int(cp.cuda.runtime.eventQuery(self._event.ptr)) == 0
 
-    # ---------------- read‑only props --------------------------------- #
+    # ---------------- read-only props --------------------------------- #
 
     @property
     def dtype(self) -> cp.dtype:
@@ -239,15 +235,13 @@ class _NormGenerator:
 
 
 class ConcurrentNormGenerator:
-    """Latency‑hiding pool of `_NormGenerator` workers."""
+    """Latency-hiding pool of `_NormGenerator` workers."""
 
     # ------------------------------------------------------------------ #
     # Construction                                                       #
     # ------------------------------------------------------------------ #
 
-    def __init__(
-        self, buffer: BufferConfig, config: ConcurrentNormGeneratorConfig
-    ) -> None:
+    def __init__(self, buffer: BufferConfig, config: ConcurrentNormGeneratorConfig) -> None:
 
         # Static parameters
         self._rows: int = config.rows
@@ -259,7 +253,7 @@ class ConcurrentNormGenerator:
         self._served: int = config.skips
         self._np_rng = np.random.default_rng(self._base_seed)
         if self._served:
-            self._np_rng.integers(0, _SEED_LIMIT, size=self._served)  # fast‑forward
+            self._np_rng.integers(0, _SEED_LIMIT, size=self._served)  # fast-forward
 
         # Build worker pool
         def _make() -> _NormGenerator:
@@ -268,12 +262,12 @@ class ConcurrentNormGenerator:
             gen.enqueue(seed)
             return gen
 
-        self._pool: List[_NormGenerator] = [_make() for _ in range(buffer.size)]
+        self._pool: list[_NormGenerator] = [_make() for _ in range(buffer.size)]
         self._it = cycle(self._pool)
 
-        # Idle‑time diagnostics
+        # Idle-time diagnostics
         self._idle_accum: float = 0.0
-        self._idle_start: Optional[float] = None
+        self._idle_start: float | None = None
         self._update_idle_state()
 
     # ------------------------------------------------------------------ #
@@ -318,7 +312,7 @@ class ConcurrentNormGenerator:
     # ------------------------------------------------------------------ #
 
     def get_time_spent_synchronizing(self) -> float:
-        """Aggregate host‑side synchronisation latency (seconds)."""
+        """Aggregate host-side synchronisation latency (seconds)."""
         return sum(gen.get_time_spent_synchronizing() for gen in self._pool)
 
     def get_idle_time(self) -> float:
@@ -330,7 +324,7 @@ class ConcurrentNormGenerator:
             else self._idle_accum
         )
 
-    # ---------------- read‑only props --------------------------------- #
+    # ---------------- read-only props --------------------------------- #
 
     @property
     def dtype(self) -> cp.dtype:

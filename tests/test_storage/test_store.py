@@ -5,10 +5,9 @@ from __future__ import annotations
 
 import pytest
 
-from spectralmc.result import Success, Failure
+from spectralmc.result import Failure, Success
 from spectralmc.storage import AsyncBlockchainModelStore
-from spectralmc.storage.chain import ModelVersion
-from spectralmc.storage.errors import VersionNotFoundError, HeadNotFoundError
+from spectralmc.storage.errors import VersionNotFoundError
 
 
 @pytest.mark.asyncio
@@ -47,7 +46,7 @@ async def test_commit_incremental(async_store: AsyncBlockchainModelStore) -> Non
     # First commit
     checkpoint1 = b"checkpoint 1"
     hash1 = "hash1"
-    version1 = await async_store.commit(checkpoint1, hash1, "First")
+    _version1 = await async_store.commit(checkpoint1, hash1, "First")
 
     # Second commit
     checkpoint2 = b"checkpoint 2"

@@ -5,19 +5,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional, Callable, Any
 from dataclasses import dataclass
 
-# CRITICAL: Import facade BEFORE torch for deterministic algorithms
-import spectralmc.models.torch as sm_torch  # noqa: E402
-import torch  # noqa: E402
+import torch
 
-from ..result import Result, Success, Failure  # noqa: E402
-from .store import AsyncBlockchainModelStore
+# CRITICAL: Import facade BEFORE torch for deterministic algorithms
+from ..gbm_trainer import GbmCVNNPricerConfig
+from ..result import Failure, Success
 from .chain import ModelVersion
 from .checkpoint import load_snapshot_from_checkpoint
-from .errors import HeadNotFoundError, VersionNotFoundError, StorageError
-from ..gbm_trainer import GbmCVNNPricerConfig
+from .errors import StorageError, VersionNotFoundError
+from .store import AsyncBlockchainModelStore
+
 
 logger = logging.getLogger(__name__)
 
@@ -150,9 +149,9 @@ class InferenceClient:
         self.max_consecutive_failures = max_consecutive_failures
 
         # Runtime state
-        self._current_version: Optional[ModelVersion] = None
-        self._current_snapshot: Optional[GbmCVNNPricerConfig] = None
-        self._polling_task: Optional[asyncio.Task[None]] = None
+        self._current_version: ModelVersion | None = None
+        self._current_snapshot: GbmCVNNPricerConfig | None = None
+        self._polling_task: asyncio.Task[None] | None = None
         self._shutdown_event = asyncio.Event()
         self._consecutive_failures: int = 0
 
@@ -175,9 +174,9 @@ class InferenceClient:
 
     async def __aexit__(
         self,
-        exc_type: Optional[type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[object],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object | None,
     ) -> None:
         """Exit async context manager, stop client."""
         await self.stop()
@@ -203,9 +202,7 @@ class InferenceClient:
                 head_result = await self.store.get_head()
                 match head_result:
                     case Success(version):
-                        logger.info(
-                            f"Tracking mode: loading latest version {version.counter}"
-                        )
+                        logger.info(f"Tracking mode: loading latest version {version.counter}")
                     case Failure(error):
                         raise ValueError(
                             f"Cannot start tracking mode: no versions in store ({error})"
@@ -276,7 +273,7 @@ class InferenceClient:
         # Return snapshot (atomic reference)
         return self._current_snapshot
 
-    def get_current_version(self) -> Optional[ModelVersion]:
+    def get_current_version(self) -> ModelVersion | None:
         """Get currently loaded version metadata."""
         return self._current_version
 
@@ -288,12 +285,10 @@ class InferenceClient:
             try:
                 # Wait for poll interval or shutdown
                 try:
-                    await asyncio.wait_for(
-                        self._shutdown_event.wait(), timeout=self.poll_interval
-                    )
+                    await asyncio.wait_for(self._shutdown_event.wait(), timeout=self.poll_interval)
                     # Shutdown signaled
                     break
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # Poll interval elapsed
                     pass
 
@@ -330,7 +325,7 @@ class InferenceClient:
                             )
                             break
 
-            except (VersionNotFoundError, StorageError, OSError, IOError) as e:
+            except (VersionNotFoundError, StorageError, OSError) as e:
                 self._consecutive_failures += 1
                 logger.error(
                     f"Unexpected error in polling loop (attempt {self._consecutive_failures}/{self.max_consecutive_failures}): {e}",
@@ -394,9 +389,7 @@ class InferenceClient:
                 if counter == head.counter:
                     return head
             case Failure(error):
-                raise ValueError(
-                    f"Version {counter} not found: store is empty ({error})"
-                )
+                raise ValueError(f"Version {counter} not found: store is empty ({error})")
 
         # Otherwise, fetch by version ID
         # Version ID format: v{counter:010d}

@@ -4,7 +4,7 @@
 
 All tests in SpectralMC must be fully typed, deterministic, and pass mypy strict mode. Tests are executed via `poetry run test-all`. All tests require GPU - silent CPU fallbacks are strictly forbidden.
 
-**Related Standards**: [Type Safety](type_safety.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [PyTorch Facade](pytorch_facade.md)
+**Related Standards**: [Coding Standards](coding_standards.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [PyTorch Facade](pytorch_facade.md)
 
 ---
 
@@ -66,6 +66,46 @@ docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/
 ```
 
 **Why**: `poetry run test-all` enforces test output redirection and ensures complete output capture (see CLAUDE.md testing policies).
+
+---
+
+## Code Quality Checks
+
+**CRITICAL**: Run code quality checks via `poetry run check-code`:
+
+```bash
+# ✅ CORRECT - Via Poetry script (runs Ruff → Black → MyPy)
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-code
+
+# Additional type safety variants:
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run typecheck      # MyPy only
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-types    # AST checker
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run type-check-all # MyPy + AST
+```
+
+### check-code Pipeline
+
+The `check-code` command runs three tools in sequence with fail-fast behavior:
+
+1. **Ruff** - Linting with auto-fix (`ruff check --fix`)
+2. **Black** - Code formatting (modifies files in place)
+3. **MyPy** - Static type checking
+
+If any tool fails, the pipeline exits immediately with the error code.
+
+### AST-Based Type Safety
+
+Beyond mypy's `strict` mode, SpectralMC enforces additional type safety via AST analysis:
+
+- **TYP001**: No `Any` type - imports or usage forbidden
+- **TYP002**: No `cast()` - type narrowing must use isinstance or protocols
+- **TYP003**: No `type: ignore` - all type errors must be fixed, not suppressed
+
+Run AST checker:
+```bash
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-types
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-types --fix  # Auto-fix
+```
 
 ---
 

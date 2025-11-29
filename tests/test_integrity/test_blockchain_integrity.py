@@ -4,21 +4,20 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
-from spectralmc.result import Success, Failure
-from spectralmc.storage.chain import ModelVersion
+from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.gbm_trainer import GbmCVNNPricerConfig
+from spectralmc.models.numerical import Precision
+from spectralmc.result import Failure, Success
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
+    commit_snapshot,
+    find_corruption,
     verify_chain,
     verify_chain_detailed,
-    find_corruption,
-    commit_snapshot,
 )
-from spectralmc.storage.errors import ChainCorruptionError
-from spectralmc.gbm_trainer import GbmCVNNPricerConfig
-from spectralmc.gbm import BlackScholesConfig, SimulationParams
-from spectralmc.models.numerical import Precision
-import torch
+from spectralmc.storage.chain import ModelVersion
 
 
 def test_content_hash_integrity() -> None:
@@ -158,9 +157,7 @@ def test_hash_length_consistency() -> None:
 # ============================================================================
 
 
-def make_test_config(
-    model: torch.nn.Module, global_step: int = 0
-) -> GbmCVNNPricerConfig:
+def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPricerConfig:
     """Factory to create test configurations."""
     sim_params = SimulationParams(
         timesteps=100,
@@ -327,14 +324,10 @@ async def test_detect_invalid_genesis_counter(
     # Tamper with counter in metadata
     import json
 
-    version_dir = "v0000000000_1.0.0_"  # Starts with this
-
     # List objects to find exact version dir
     assert async_store._s3_client is not None
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
-    async for page in paginator.paginate(
-        Bucket=async_store.bucket_name, Prefix="versions/"
-    ):
+    async for page in paginator.paginate(Bucket=async_store.bucket_name, Prefix="versions/"):
         if isinstance(page, dict) and "Contents" in page:
             contents = page["Contents"]
             assert isinstance(contents, list)

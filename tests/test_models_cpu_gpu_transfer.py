@@ -1,23 +1,24 @@
 # tests/test_models_cpu_gpu_transfer.py
-"""Functional‑style integration tests for the CPU ↔ GPU tensor copier."""
+"""Functional-style integration tests for the CPU ↔ GPU tensor copier."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Hashable, List
 
 import pytest
-from spectralmc.models.torch import Device, DType  # façade first
 import torch
-import spectralmc.models.cpu_gpu_transfer as cpu_gpu_transfer
+
+from spectralmc.models import cpu_gpu_transfer
 from spectralmc.models.cpu_gpu_transfer import TransferDestination
+from spectralmc.models.torch import Device, DType  # façade first
+
 
 ###############################################################################
 # Utilities
 ###############################################################################
 
 
-def _flatten(tree: cpu_gpu_transfer.TensorTree) -> List[torch.Tensor]:
+def _flatten(tree: cpu_gpu_transfer.TensorTree) -> list[torch.Tensor]:
     match tree:
         case torch.Tensor() as t:
             return [t]
@@ -29,20 +30,18 @@ def _flatten(tree: cpu_gpu_transfer.TensorTree) -> List[torch.Tensor]:
             return []
 
 
-# Fail fast if no CUDA – satisfies user requirement
+# Fail fast if no CUDA - satisfies user requirement
 assert torch.cuda.is_available(), "CUDA device required but none detected."
 
 ###############################################################################
-# CPU‑only tests                                                              #
+# CPU-only tests                                                              #
 ###############################################################################
 
 
 def test_already_on_destination_raises() -> None:
     """Test that transferring to same device raises ValueError."""
     with pytest.raises(ValueError):
-        cpu_gpu_transfer.move_tensor_tree(
-            [torch.ones(1), 0], dest=TransferDestination.CPU
-        )
+        cpu_gpu_transfer.move_tensor_tree([torch.ones(1), 0], dest=TransferDestination.CPU)
 
 
 def test_cuda_requested_but_not_available(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,7 +51,7 @@ def test_cuda_requested_but_not_available(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 ###############################################################################
-# GPU‑dependent tests                                                         #
+# GPU-dependent tests                                                         #
 ###############################################################################
 
 
@@ -65,8 +64,8 @@ def test_cpu_to_cuda_and_back_roundtrip() -> None:
 
     to_cuda = cpu_gpu_transfer.move_tensor_tree(original, dest=TransferDestination.CUDA)
 
-    src: List[torch.Tensor] = _flatten(original)
-    dst: List[torch.Tensor] = _flatten(to_cuda)
+    src: list[torch.Tensor] = _flatten(original)
+    dst: list[torch.Tensor] = _flatten(to_cuda)
 
     assert all(
         torch.equal(s, d.cpu())
@@ -76,12 +75,10 @@ def test_cpu_to_cuda_and_back_roundtrip() -> None:
         for s, d in zip(src, dst)
     )
 
-    back = cpu_gpu_transfer.move_tensor_tree(
-        to_cuda, dest=TransferDestination.CPU_PINNED
-    )
+    back = cpu_gpu_transfer.move_tensor_tree(to_cuda, dest=TransferDestination.CPU_PINNED)
 
-    src2: List[torch.Tensor] = _flatten(to_cuda)
-    dst2: List[torch.Tensor] = _flatten(back)
+    src2: list[torch.Tensor] = _flatten(to_cuda)
+    dst2: list[torch.Tensor] = _flatten(back)
 
     assert all(torch.equal(s.cpu(), d) and d.is_pinned() for s, d in zip(src2, dst2))
 
@@ -93,9 +90,7 @@ def test_cpu_to_cuda_and_back_roundtrip() -> None:
         (TransferDestination.CPU_PINNED, True),
     ],
 )
-def test_gpu_to_cpu_pin_memory_respected(
-    dest: TransferDestination, expected_pinned: bool
-) -> None:
+def test_gpu_to_cpu_pin_memory_respected(dest: TransferDestination, expected_pinned: bool) -> None:
     res = cpu_gpu_transfer.move_tensor_tree(
         torch.randn(4, 4, device="cuda"),
         dest=dest,

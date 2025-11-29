@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import asyncio
+
 import pytest
 import torch
 
+from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.gbm_trainer import GbmCVNNPricerConfig
+from spectralmc.models.numerical import Precision
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     InferenceClient,
@@ -14,14 +18,9 @@ from spectralmc.storage import (
     TrackingMode,
     commit_snapshot,
 )
-from spectralmc.gbm_trainer import GbmCVNNPricerConfig
-from spectralmc.gbm import BlackScholesConfig, SimulationParams
-from spectralmc.models.numerical import Precision
 
 
-def make_test_config(
-    model: torch.nn.Module, global_step: int = 0
-) -> GbmCVNNPricerConfig:
+def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPricerConfig:
     """Factory to create test configurations (GbmCVNNPricerConfig is frozen)."""
     sim_params = SimulationParams(
         timesteps=100,
@@ -60,11 +59,11 @@ async def test_pinned_mode_basic(async_store: AsyncBlockchainModelStore) -> None
     # Create 2 versions
     model1 = torch.nn.Linear(5, 5)
     config1 = make_test_config(model1, global_step=100)
-    v1 = await commit_snapshot(async_store, config1, "V1")
+    _v1 = await commit_snapshot(async_store, config1, "V1")
 
     model2 = torch.nn.Linear(5, 5)
     config2 = make_test_config(model2, global_step=200)
-    v2 = await commit_snapshot(async_store, config2, "V2")
+    _v2 = await commit_snapshot(async_store, config2, "V2")
 
     # Pin to version 0
     template = make_test_config(torch.nn.Linear(5, 5))

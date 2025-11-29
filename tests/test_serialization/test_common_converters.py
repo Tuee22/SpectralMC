@@ -3,14 +3,12 @@
 
 from __future__ import annotations
 
-import pytest
-
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import Device, DType
 from spectralmc.serialization.common import (
-    PrecisionConverter,
     DeviceConverter,
     DTypeConverter,
+    PrecisionConverter,
 )
 
 

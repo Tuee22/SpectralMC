@@ -1,7 +1,7 @@
 # tests/conftest.py
 """Global PyTest fixtures for the test-suite.
 
-CuPy is imported unconditionally—if it is not installed the test session
+CuPy is imported unconditionally-if it is not installed the test session
 will fail immediately, making the missing dependency obvious.
 
 All tests require GPU - missing GPU is a hard failure, not a skip.
@@ -9,15 +9,21 @@ All tests require GPU - missing GPU is a hard failure, not a skip.
 
 from __future__ import annotations
 
-import spectralmc.models.torch
-
 import gc
 import warnings
 from typing import Generator
 
+
+# CRITICAL: Import facade BEFORE torch for deterministic algorithms
+# isort: off
+import spectralmc.models.torch  # noqa: F401
+import torch
+
+# isort: on
+
 import cupy as cp
 import pytest
-import torch
+
 
 # Module-level GPU requirement - test suite fails immediately without GPU
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
@@ -69,6 +75,8 @@ import asyncio
 import uuid
 from typing import AsyncGenerator
 
+import botocore.exceptions
+
 from spectralmc.storage import AsyncBlockchainModelStore
 
 
@@ -108,9 +116,9 @@ async def async_store() -> AsyncGenerator[AsyncBlockchainModelStore, None]:
         assert store._s3_client is not None
         try:
             await store._s3_client.create_bucket(Bucket=bucket_name)
-        except Exception as e:
+        except botocore.exceptions.ClientError as e:
             # Bucket might already exist, that's ok
-            if "BucketAlreadyOwnedByYou" not in str(e):
+            if e.response["Error"]["Code"] != "BucketAlreadyOwnedByYou":
                 raise
 
         yield store
@@ -132,6 +140,6 @@ async def async_store() -> AsyncGenerator[AsyncBlockchainModelStore, None]:
 
             # Delete bucket
             await store._s3_client.delete_bucket(Bucket=bucket_name)
-        except Exception:
-            # Best-effort cleanup - don't fail test if cleanup fails
+        except botocore.exceptions.ClientError:
+            # Best-effort cleanup - don't fail test if S3 cleanup fails
             pass

@@ -2,17 +2,17 @@
 """
 sobol_sampler.py
 ================
-Quasi‑random sampling based on the Sobol low‑discrepancy sequence, with
+Quasi-random sampling based on the Sobol low-discrepancy sequence, with
 automatic Pydantic validation and **strict static typing**.
 
-Why this module is *float64‑only*
+Why this module is *float64-only*
 ---------------------------------
-* **SciPy’s implementation** of Sobol (`scipy.stats.qmc.Sobol`) always
+* **SciPy's implementation** of Sobol (`scipy.stats.qmc.Sobol`) always
   produces `numpy.float64` values.
-* **Python’s default floating‑point type** is already a C `double`
+* **Python's default floating-point type** is already a C `double`
   (`float64`), so no conversion is needed when passing values to user
   code.
-* **Pydantic models accept Python floats** as‑is and do their own
+* **Pydantic models accept Python floats** as-is and do their own
   validation; they do not benefit from a separate “precision” knob.
 
 Adding a precision flag would therefore provide no additional
@@ -22,8 +22,8 @@ as `np.float64` to make this design decision obvious.
 
 Public API
 ----------
-* :class:`BoundSpec` – inclusive lower/upper bound pair for one axis.
-* :class:`SobolSampler` – generic sampler parameterised by a Pydantic
+* :class:`BoundSpec` - inclusive lower/upper bound pair for one axis.
+* :class:`SobolSampler` - generic sampler parameterised by a Pydantic
   model.
 
 Both classes pass **``mypy --strict``** without ignores, casts, or Any.
@@ -31,12 +31,13 @@ Both classes pass **``mypy --strict``** without ignores, casts, or Any.
 
 from __future__ import annotations
 
-from typing import Annotated, Dict, Generic, List, Type, TypeVar
+from typing import Annotated, Generic, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from scipy.stats.qmc import Sobol
+
 
 __all__: list[str] = ["BoundSpec", "SobolConfig", "SobolSampler"]
 
@@ -63,9 +64,7 @@ class SobolConfig(BaseModel):
     """
 
     seed: Annotated[int, Field(ge=0, description="Non-negative seed for Sobol engine")]
-    skip: Annotated[
-        int, Field(ge=0, description="Number of initial points to skip")
-    ] = 0
+    skip: Annotated[int, Field(ge=0, description="Number of initial points to skip")] = 0
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -83,7 +82,7 @@ class BoundSpec(BaseModel):
     Raises
     ------
     ValueError
-        If ``lower`` ≥ ``upper`` after validation.
+        If ``lower`` ≥ ``upper`` after validation.
     """
 
     lower: float
@@ -96,7 +95,7 @@ class BoundSpec(BaseModel):
     # ------------------------------------------------------------------ #
 
     @model_validator(mode="after")
-    def _validate(self) -> "BoundSpec":  # noqa: D401
+    def _validate(self) -> BoundSpec:
         """Ensure the lower bound is strictly less than the upper bound."""
         if self.lower >= self.upper:
             raise ValueError("`lower` must be strictly less than `upper`.")
@@ -119,8 +118,8 @@ class SobolSampler(Generic[PointT]):
 
     Notes
     -----
-    * All internal computations are in **float64** – the native precision
-      of both SciPy’s Sobol engine and Python floats.
+    * All internal computations are in **float64** - the native precision
+      of both SciPy's Sobol engine and Python floats.
     * The class holds no mutable state aside from the SciPy engine; if you
       need checkpoints, serialise ``skip`` and reconstruct later.
     """
@@ -131,14 +130,14 @@ class SobolSampler(Generic[PointT]):
 
     def __init__(
         self,
-        pydantic_class: Type[PointT],
-        dimensions: Dict[str, BoundSpec],
+        pydantic_class: type[PointT],
+        dimensions: dict[str, BoundSpec],
         *,
         config: SobolConfig,
     ) -> None:
 
         # Field names in deterministic order
-        self._fields: List[str] = list(pydantic_class.model_fields)
+        self._fields: list[str] = list(pydantic_class.model_fields)
         if set(self._fields) != set(dimensions.keys()):
             raise ValueError("dimension keys do not match model fields")
 
@@ -150,10 +149,8 @@ class SobolSampler(Generic[PointT]):
             [dimensions[f].upper for f in self._fields], dtype=np.float64
         )
 
-        self._model: Type[PointT] = pydantic_class
-        self._sampler: Sobol = Sobol(
-            d=len(self._fields), scramble=True, seed=config.seed
-        )
+        self._model: type[PointT] = pydantic_class
+        self._sampler: Sobol = Sobol(d=len(self._fields), scramble=True, seed=config.seed)
         if config.skip:
             self._sampler.fast_forward(config.skip)
 
@@ -170,11 +167,11 @@ class SobolSampler(Generic[PointT]):
     # Public API                                                         #
     # ------------------------------------------------------------------ #
 
-    def sample(self, n_samples: int) -> List[PointT]:
+    def sample(self, n_samples: int) -> list[PointT]:
         """Return a list of Sobol points.
 
         Args:
-            n_samples: Non‑negative number of points.  ``0`` returns ``[]``.
+            n_samples: Non-negative number of points.  ``0`` returns ``[]``.
 
         Returns
         -------
@@ -187,7 +184,7 @@ class SobolSampler(Generic[PointT]):
             If ``n_samples`` is negative.
         """
         if n_samples < 0:
-            raise ValueError("`n_samples` must be non‑negative")
+            raise ValueError("`n_samples` must be non-negative")
         if n_samples == 0:
             return []
 

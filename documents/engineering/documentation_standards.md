@@ -4,7 +4,7 @@
 
 SpectralMC requires comprehensive documentation for all modules, functions, and classes. Documentation serves as executable specification and must be maintained alongside code.
 
-**Related Standards**: [Type Safety](type_safety.md), [Pydantic Patterns](pydantic_patterns.md)
+**Related Standards**: [Coding Standards](coding_standards.md), [Pydantic Patterns](pydantic_patterns.md)
 
 ---
 
@@ -621,4 +621,4 @@ Before committing Mermaid diagrams, verify:
 - **Math notation**: reStructuredText or inline LaTeX
 - **Examples**: Doctest format or code blocks
 
-See also: [Type Safety](type_safety.md), [Code Formatting](code_formatting.md), [Docker Build Philosophy](docker_build_philosophy.md)
+See also: [Coding Standards](coding_standards.md), [Docker Build Philosophy](docker_build_philosophy.md)

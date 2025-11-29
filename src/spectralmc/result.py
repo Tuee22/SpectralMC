@@ -26,7 +26,8 @@ Usage:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Generic, TypeVar, NoReturn
+from typing import Callable, Generic, NoReturn, TypeVar
+
 
 T = TypeVar("T")
 E = TypeVar("E")

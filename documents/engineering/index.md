@@ -40,32 +40,28 @@ Violating these guidelines can result in:
    - Black formatting requirements and configuration
    - mypy strict mode enforcement (zero tolerance for `Any`, `cast`, `type: ignore`)
    - Custom `.pyi` type stubs for third-party libraries
+   - **Result types and ADTs** for functional error handling
+   - **No exception swallowing doctrine** - all exceptions must be handled or propagated
+   - **Pattern matching** with exhaustive error handling
    - **5 implementation anti-patterns** to avoid
    - **Dependency deprecation management** with zero-tolerance policy
 
-2. **[Functional Programming](functional_programming.md)** ⭐ New
-   - Algebraic Data Types (ADTs) for errors and domain states
-   - Result[T, E] pattern for expected errors
-   - Pattern matching with exhaustive error handling
-   - **No legacy APIs policy** - pure functional patterns only
-   - Error transformation and `_raise()` helper for system boundaries
-
 ### Development Patterns
 
-3. **[Pydantic Patterns](pydantic_patterns.md)**
+2. **[Pydantic Patterns](pydantic_patterns.md)**
    - Model validation and serialization
    - Configuration classes with nested validation
    - `ConfigDict(extra="forbid")` requirement
    - Type-safe usage with Pydantic models
 
-4. **[PyTorch Facade](pytorch_facade.md)**
+3. **[PyTorch Facade](pytorch_facade.md)**
    - Facade pattern for guaranteed reproducibility
    - Deterministic settings and thread safety
    - Device and dtype management
    - Complex-valued neural networks (`(real, imag)` tensor pair pattern)
    - ComplexValuedModel protocol for type-safe duck typing
 
-5. **[Immutability Doctrine](immutability_doctrine.md)**
+4. **[Immutability Doctrine](immutability_doctrine.md)**
    - Never bypass immutability guarantees
    - Forbidden patterns (`object.__setattr__()`, `__dict__` manipulation)
    - Functional update patterns (`dataclasses.replace()`)
@@ -73,14 +69,14 @@ Violating these guidelines can result in:
 
 ### Documentation
 
-6. **[Documentation Standards](documentation_standards.md)**
+5. **[Documentation Standards](documentation_standards.md)**
    - Module documentation requirements
    - Google-style docstrings for functions and classes
    - Technical whitepaper organization
 
 ### Testing & Compute Policy
 
-7. **[Testing Requirements](testing_requirements.md)** ⭐ Comprehensive Guide
+6. **[Testing Requirements](testing_requirements.md)** ⭐ Comprehensive Guide
    - Test structure and type safety
    - **GPU required** - all tests require GPU, no silent CPU fallbacks
    - Deterministic testing requirements
@@ -88,7 +84,7 @@ Violating these guidelines can result in:
    - **Test output handling** best practices
    - **Blockchain storage test coverage**
 
-8. **[CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)**
+7. **[CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)**
    - Two-phase architecture (CPU init → GPU compute)
    - Acceptable CPU usage patterns
    - GPU compute requirements and enforcement
@@ -97,21 +93,21 @@ Violating these guidelines can result in:
 
 ### Infrastructure
 
-9. **[Docker Build Philosophy](docker_build_philosophy.md)**
+8. **[Docker Build Philosophy](docker_build_philosophy.md)**
    - Dual build strategy (binary vs source)
    - Poetry-first dependency management
    - Layer optimization for build cache
    - BUILD_FROM_SOURCE flag usage
 
-10. **[GPU Build Troubleshooting](gpu_build_troubleshooting.md)**
-    - Legacy GPU support (GTX 970, compute capability < 6.0)
-    - Source build configuration
-    - Common build errors and solutions
-    - Validation and testing
+9. **[GPU Build Guide](gpu_build.md)**
+    - Legacy GPU support (GTX 970, compute capability 5.2)
+    - Source build configuration for sm_52
+    - Critical version constraints (CUDA 11.8, PyTorch 2.4.1)
+    - Common build errors and troubleshooting
 
 ### Model Versioning
 
-11. **[Blockchain Storage](blockchain_storage.md)** ⭐ Production Model Versioning
+10. **[Blockchain Storage](blockchain_storage.md)** ⭐ Production Model Versioning
     - S3-based blockchain model versioning system
     - Atomic commits with 10-step CAS protocol
     - InferenceClient (pinned/tracking modes)
@@ -125,19 +121,17 @@ Violating these guidelines can result in:
 
 ### Type Safety
 - **Primary**: [Coding Standards](coding_standards.md) - Complete type safety requirements
-- **Related**: [Functional Programming](functional_programming.md) - ADT type safety with pattern matching
 - **Related**: [Pydantic Patterns](pydantic_patterns.md) - Runtime type validation
 - **Related**: [PyTorch Facade](pytorch_facade.md) - Type-safe device and dtype helpers
 
 ### Immutability
 - **Primary**: [Immutability Doctrine](immutability_doctrine.md) - Immutable data structures
-- **Related**: [Functional Programming](functional_programming.md) - Frozen dataclasses for ADTs
+- **Related**: [Coding Standards](coding_standards.md) - Frozen dataclasses for ADTs
 - **Related**: [Pydantic Patterns](pydantic_patterns.md) - `frozen=True` for Pydantic models
 
 ### Error Handling
-- **Primary**: [Functional Programming](functional_programming.md) - Result types, ADTs, pattern matching
+- **Primary**: [Coding Standards](coding_standards.md) - Result types, ADTs, pattern matching, no exception swallowing
 - **Related**: [Testing Requirements](testing_requirements.md) - Testing error cases
-- **Related**: [Coding Standards](coding_standards.md) - Type safety for error handling
 
 ### PyTorch Patterns
 - **Primary**: [PyTorch Facade](pytorch_facade.md) - Deterministic execution, complex-valued networks
@@ -183,10 +177,11 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
 - ❌ `object.__setattr__()` on frozen dataclasses
 - ❌ `__dict__` manipulation on immutable objects
 
-**Error Handling** (see [Functional Programming](functional_programming.md)):
+**Error Handling** (see [Coding Standards](coding_standards.md)):
 - ❌ Exceptions for expected errors (use Result types)
 - ❌ Returning `None` to indicate errors
 - ❌ Mutable error state
+- ❌ Exception swallowing (`except: pass`, `except Exception: pass`)
 
 **GPU/CPU** (see [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)):
 - ❌ Implicit GPU/CPU transfers (`.cuda()`, `.cpu()`, `.to(device)`)
@@ -207,11 +202,12 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
 - ✅ Explicit type annotations on all functions
 - ✅ mypy strict mode clean
 
-**Functional Programming** (see [Functional Programming](functional_programming.md)):
+**Functional Error Handling** (see [Coding Standards](coding_standards.md)):
 - ✅ Result[T, E] for expected errors
 - ✅ ADTs with `@dataclass(frozen=True)`
 - ✅ Pattern matching with exhaustive error handling
 - ✅ `assert_never()` for exhaustiveness checks
+- ✅ Specific exception types when catching
 
 **Documentation** (see [Documentation Standards](documentation_standards.md)):
 - ✅ Google-style docstrings on public APIs
@@ -245,9 +241,14 @@ Following these standards ensures that SpectralMC maintains:
 
 All code must pass `mypy --strict` and `black --check` before being committed. The custom type stubs in `stubs/` ensure complete type coverage for all dependencies, while the CPU/GPU compute policy guarantees reproducible, deterministic execution with GPU performance.
 
-### Recent Changes (2025-11-28)
+### Recent Changes (2025-11-29)
+
+- **Consolidated**: Merged `functional_programming.md` into [Coding Standards](coding_standards.md) - now SSoT for all coding standards including error handling
+- **Added**: "No Exception Swallowing Doctrine" section in [Coding Standards](coding_standards.md)
+- **Removed**: `functional_programming.md` - content now in [Coding Standards](coding_standards.md)
+
+### Previous Changes (2025-11-28)
 
 - **Consolidated**: Merged `code_formatting.md`, `type_safety.md`, and `type_stubs.md` into single [Coding Standards](coding_standards.md) SSoT document
-- **Added**: New [Functional Programming](functional_programming.md) document covering ADTs, Result types, pattern matching, and no legacy APIs policy
 - **Enhanced**: [PyTorch Facade](pytorch_facade.md) now includes complex-valued network patterns and ComplexValuedModel protocol
-- **Removed**: `project_patterns.md` - content distributed to [PyTorch Facade](pytorch_facade.md) and [Functional Programming](functional_programming.md)
+- **Removed**: `project_patterns.md` - content distributed to [PyTorch Facade](pytorch_facade.md)

@@ -34,3 +34,17 @@ def stream(stream: Union[int, Device, Stream, None] = ...) -> _StreamContext: ..
 #  SpectralMC helper – GPU name query
 # --------------------------------------------------------------------------- #
 def get_device_name(device: int | Device | None = ...) -> str: ...
+
+# --------------------------------------------------------------------------- #
+#  Device properties and capabilities
+# --------------------------------------------------------------------------- #
+class _CudaDeviceProperties:
+    """Properties of a CUDA device."""
+
+    total_memory: int
+    name: str
+    major: int
+    minor: int
+
+def get_device_properties(device: int | Device | None = ...) -> _CudaDeviceProperties: ...
+def get_device_capability(device: int | Device | None = ...) -> tuple[int, int]: ...

@@ -40,9 +40,7 @@ class ChecksumError(StorageError):
     def __init__(self, expected: str, actual: str) -> None:
         self.expected = expected
         self.actual = actual
-        super().__init__(
-            f"Checksum mismatch: expected {expected[:8]}, got {actual[:8]}"
-        )
+        super().__init__(f"Checksum mismatch: expected {expected[:8]}, got {actual[:8]}")
 
 
 class VersionNotFoundError(StorageError):

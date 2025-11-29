@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import List, Optional
 
-from ..result import Result, Success, Failure
-from .store import AsyncBlockchainModelStore
+from ..result import Failure, Success
 from .chain import ModelVersion
-from .errors import HeadNotFoundError
+from .store import AsyncBlockchainModelStore
+
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +27,9 @@ class RetentionPolicy:
         protect_tags: List of version counters to always protect (e.g., production releases)
     """
 
-    keep_versions: Optional[int] = None  # None = keep all
+    keep_versions: int | None = None  # None = keep all
     keep_min_versions: int = 3  # Always keep at least this many
-    protect_tags: List[int] = field(
-        default_factory=list
-    )  # Always protect these version counters
+    protect_tags: list[int] = field(default_factory=list)  # Always protect these version counters
 
 
 @dataclass(frozen=True)
@@ -46,8 +43,8 @@ class GCReport:
         dry_run: Whether this was a dry run
     """
 
-    deleted_versions: List[int]
-    protected_versions: List[int]
+    deleted_versions: list[int]
+    protected_versions: list[int]
     bytes_freed: int
     dry_run: bool
 
@@ -80,9 +77,7 @@ class GarbageCollector:
         ```
     """
 
-    def __init__(
-        self, store: AsyncBlockchainModelStore, policy: RetentionPolicy
-    ) -> None:
+    def __init__(self, store: AsyncBlockchainModelStore, policy: RetentionPolicy) -> None:
         """
         Initialize garbage collector.
 
@@ -122,7 +117,7 @@ class GarbageCollector:
                 pass  # Continue with GC logic
 
         # Collect all version metadata
-        versions: List[ModelVersion] = []
+        versions: list[ModelVersion] = []
         for counter in range(head.counter + 1):
             version_id = f"v{counter:010d}"
             version = await self.store.get_version(version_id)
@@ -160,8 +155,8 @@ class GarbageCollector:
         )
 
     def _plan_deletion(
-        self, versions: List[ModelVersion]
-    ) -> tuple[List[ModelVersion], List[ModelVersion]]:
+        self, versions: list[ModelVersion]
+    ) -> tuple[list[ModelVersion], list[ModelVersion]]:
         """
         Plan which versions to delete and which to protect.
 
@@ -206,9 +201,7 @@ class GarbageCollector:
             Approximate bytes freed
         """
         if self.store._s3_client is None:
-            raise RuntimeError(
-                "S3 client not initialized. Use 'async with' context manager."
-            )
+            raise RuntimeError("S3 client not initialized. Use 'async with' context manager.")
 
         version_dir = version.directory_name
         prefix = f"versions/{version_dir}/"
@@ -219,9 +212,7 @@ class GarbageCollector:
 
         paginator = self.store._s3_client.get_paginator("list_objects_v2")
         # paginator.paginate returns an async iterator
-        async for page in paginator.paginate(
-            Bucket=self.store.bucket_name, Prefix=prefix
-        ):
+        async for page in paginator.paginate(Bucket=self.store.bucket_name, Prefix=prefix):
             # Runtime validation of page structure
             if not isinstance(page, dict):
                 continue
@@ -261,9 +252,7 @@ class GarbageCollector:
             Approximate size in bytes
         """
         if self.store._s3_client is None:
-            raise RuntimeError(
-                "S3 client not initialized. Use 'async with' context manager."
-            )
+            raise RuntimeError("S3 client not initialized. Use 'async with' context manager.")
 
         version_dir = version.directory_name
         prefix = f"versions/{version_dir}/"
@@ -271,9 +260,7 @@ class GarbageCollector:
         total_size = 0
         paginator = self.store._s3_client.get_paginator("list_objects_v2")
         # paginator.paginate returns an async iterator
-        async for page in paginator.paginate(
-            Bucket=self.store.bucket_name, Prefix=prefix
-        ):
+        async for page in paginator.paginate(Bucket=self.store.bucket_name, Prefix=prefix):
             # Runtime validation of page structure
             if not isinstance(page, dict):
                 continue
@@ -296,9 +283,9 @@ class GarbageCollector:
 
 async def run_gc(
     store: AsyncBlockchainModelStore,
-    keep_versions: Optional[int] = None,
+    keep_versions: int | None = None,
     keep_min_versions: int = 3,
-    protect_tags: Optional[List[int]] = None,
+    protect_tags: list[int] | None = None,
     dry_run: bool = True,
 ) -> GCReport:
     """

@@ -4,7 +4,7 @@
 
 SpectralMC uses a custom PyTorch facade (`spectralmc.models.torch`) to ensure guaranteed reproducibility of training across different environments. This facade **must** be imported before any direct PyTorch imports.
 
-**Related Standards**: [Type Safety](type_safety.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)
+**Related Standards**: [Coding Standards](coding_standards.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)
 
 ---
 

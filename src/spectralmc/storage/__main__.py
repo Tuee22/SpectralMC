@@ -38,28 +38,33 @@ Examples:
 
 from __future__ import annotations
 
+import argparse
+import asyncio
+import json
+import sys
+from typing import Never, NoReturn
+
 # IMPORTANT: Import torch façade first to set deterministic flags
 import spectralmc.models.torch  # noqa: F401
 
-import asyncio
-import sys
-import argparse
-import json
-from typing import NoReturn, Never
-
-from ..result import Result, Success, Failure
-from .store import AsyncBlockchainModelStore
-from .verification import verify_chain, verify_chain_detailed, find_corruption
+from ..result import Failure, Success
+from .errors import (
+    ChainCorruptionError,
+    HeadNotFoundError,
+    StorageError,
+    VersionNotFoundError,
+)
 from .gc import run_gc
-from .tensorboard_writer import log_blockchain_to_tensorboard
-from .errors import ChainCorruptionError, VersionNotFoundError, HeadNotFoundError, StorageError
 from .s3_errors import (
-    S3BucketNotFound,
-    S3ObjectNotFound,
     S3AccessDenied,
+    S3BucketNotFound,
     S3NetworkError,
+    S3ObjectNotFound,
     S3UnknownError,
 )
+from .store import AsyncBlockchainModelStore
+from .tensorboard_writer import log_blockchain_to_tensorboard
+from .verification import find_corruption, verify_chain
 
 
 def assert_never(value: Never) -> Never:
@@ -139,7 +144,7 @@ async def cmd_verify(bucket_name: str, detailed: bool = False) -> int:
                         file=sys.stderr,
                     )
                 else:
-                    print(f"✗ Chain corruption detected:", file=sys.stderr)
+                    print("✗ Chain corruption detected:", file=sys.stderr)
                     print(f"  Type: {report.corruption_type}", file=sys.stderr)
                     print(f"  Details: {report.details}", file=sys.stderr)
                 return 1
@@ -150,7 +155,10 @@ async def cmd_verify(bucket_name: str, detailed: bool = False) -> int:
                 return 2
 
             case Failure(S3ObjectNotFound(bucket, key, msg)):
-                print(f"✗ Error: Object not found in bucket {bucket}: {key}", file=sys.stderr)
+                print(
+                    f"✗ Error: Object not found in bucket {bucket}: {key}",
+                    file=sys.stderr,
+                )
                 print(f"  {msg}", file=sys.stderr)
                 return 2
 
@@ -161,7 +169,7 @@ async def cmd_verify(bucket_name: str, detailed: bool = False) -> int:
                 return 2
 
             case Failure(S3NetworkError(msg, retry_count)):
-                print(f"✗ Error: Network error:", file=sys.stderr)
+                print("✗ Error: Network error:", file=sys.stderr)
                 print(f"  {msg}", file=sys.stderr)
                 print(f"  Retries attempted: {retry_count}", file=sys.stderr)
                 return 2
@@ -194,23 +202,27 @@ async def cmd_find_corruption(bucket_name: str) -> int:
             if corrupted is None:
                 print(f"✓ No corruption found in bucket: {bucket_name}")
                 return 0
-            else:
-                print(
-                    json.dumps(
-                        {
-                            "corrupted": True,
-                            "version_counter": corrupted.counter,
-                            "version_id": corrupted.version_id,
-                            "semantic_version": corrupted.semantic_version,
-                            "content_hash": corrupted.content_hash,
-                            "commit_timestamp": corrupted.commit_timestamp,
-                        },
-                        indent=2,
-                    )
+            print(
+                json.dumps(
+                    {
+                        "corrupted": True,
+                        "version_counter": corrupted.counter,
+                        "version_id": corrupted.version_id,
+                        "semantic_version": corrupted.semantic_version,
+                        "content_hash": corrupted.content_hash,
+                        "commit_timestamp": corrupted.commit_timestamp,
+                    },
+                    indent=2,
                 )
-                return 1
+            )
+            return 1
 
-    except (ChainCorruptionError, VersionNotFoundError, StorageError, HeadNotFoundError) as e:
+    except (
+        ChainCorruptionError,
+        VersionNotFoundError,
+        StorageError,
+        HeadNotFoundError,
+    ) as e:
         print(f"✗ Error finding corruption: {e}", file=sys.stderr)
         return 2
 
@@ -298,9 +310,7 @@ async def cmd_inspect(bucket_name: str, version_id: str) -> int:
         return 2
 
 
-async def cmd_gc_preview(
-    bucket_name: str, keep_versions: int, protect_tags: str = ""
-) -> int:
+async def cmd_gc_preview(bucket_name: str, keep_versions: int, protect_tags: str = "") -> int:
     """
     Preview garbage collection (dry run).
 
@@ -375,9 +385,7 @@ async def cmd_gc_run(
                 print(f"Will delete {len(preview_report.deleted_versions)} versions:")
                 print(f"  Versions to delete: {preview_report.deleted_versions}")
                 print(f"  Versions to keep: {preview_report.protected_versions}")
-                print(
-                    f"  Space to free: {round(preview_report.bytes_freed / (1024 * 1024), 2)} MB"
-                )
+                print(f"  Space to free: {round(preview_report.bytes_freed / (1024 * 1024), 2)} MB")
                 print()
 
                 response = input("Proceed with deletion? [y/N] ")
@@ -390,10 +398,8 @@ async def cmd_gc_run(
                 store, keep_versions=keep_versions, protect_tags=tags, dry_run=False
             )
 
-            print(f"✓ Garbage collection completed:")
-            print(
-                f"  Deleted {len(report.deleted_versions)} versions: {report.deleted_versions}"
-            )
+            print("✓ Garbage collection completed:")
+            print(f"  Deleted {len(report.deleted_versions)} versions: {report.deleted_versions}")
             print(f"  Freed {round(report.bytes_freed / (1024 * 1024), 2)} MB")
 
             return 0
@@ -403,9 +409,7 @@ async def cmd_gc_run(
         return 2
 
 
-async def cmd_tensorboard_log(
-    bucket_name: str, log_dir: str = "runs/blockchain_models"
-) -> int:
+async def cmd_tensorboard_log(bucket_name: str, log_dir: str = "runs/blockchain_models") -> int:
     """
     Log blockchain to TensorBoard.
 
@@ -422,12 +426,12 @@ async def cmd_tensorboard_log(
 
             await log_blockchain_to_tensorboard(store, log_dir=log_dir)
 
-            print(f"✓ Blockchain logged to TensorBoard")
+            print("✓ Blockchain logged to TensorBoard")
             print(f"  View with: tensorboard --logdir={log_dir}")
 
             return 0
 
-    except (VersionNotFoundError, StorageError, HeadNotFoundError, IOError, OSError) as e:
+    except (VersionNotFoundError, StorageError, HeadNotFoundError, OSError) as e:
         print(f"✗ Error logging to TensorBoard: {e}", file=sys.stderr)
         return 2
 
@@ -450,15 +454,11 @@ def main() -> NoReturn:
     )
 
     # find-corruption command
-    find_parser = subparsers.add_parser(
-        "find-corruption", help="Find first corrupted version"
-    )
+    find_parser = subparsers.add_parser("find-corruption", help="Find first corrupted version")
     find_parser.add_argument("bucket_name", help="S3 bucket name")
 
     # list-versions command
-    list_parser = subparsers.add_parser(
-        "list-versions", help="List all versions in blockchain"
-    )
+    list_parser = subparsers.add_parser("list-versions", help="List all versions in blockchain")
     list_parser.add_argument("bucket_name", help="S3 bucket name")
 
     # inspect command
@@ -485,9 +485,7 @@ def main() -> NoReturn:
         "gc-run", help="Run garbage collection (delete old versions)"
     )
     gc_run_parser.add_argument("bucket_name", help="S3 bucket name")
-    gc_run_parser.add_argument(
-        "keep_versions", type=int, help="Number of recent versions to keep"
-    )
+    gc_run_parser.add_argument("keep_versions", type=int, help="Number of recent versions to keep")
     gc_run_parser.add_argument(
         "--protect-tags",
         default="",
@@ -498,9 +496,7 @@ def main() -> NoReturn:
     )
 
     # tensorboard-log command
-    tb_log_parser = subparsers.add_parser(
-        "tensorboard-log", help="Log blockchain to TensorBoard"
-    )
+    tb_log_parser = subparsers.add_parser("tensorboard-log", help="Log blockchain to TensorBoard")
     tb_log_parser.add_argument("bucket_name", help="S3 bucket name")
     tb_log_parser.add_argument(
         "--log-dir",
@@ -525,9 +521,7 @@ def main() -> NoReturn:
         )
     elif args.command == "gc-run":
         exit_code = asyncio.run(
-            cmd_gc_run(
-                args.bucket_name, args.keep_versions, args.protect_tags, args.confirm
-            )
+            cmd_gc_run(args.bucket_name, args.keep_versions, args.protect_tags, args.confirm)
         )
     elif args.command == "tensorboard-log":
         exit_code = asyncio.run(cmd_tensorboard_log(args.bucket_name, args.log_dir))

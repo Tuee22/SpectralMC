@@ -7,11 +7,10 @@ exhaustive pattern matching and eliminating unhandled exceptions.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List
-
 from botocore.exceptions import ClientError
 
 from ..result import Failure, Result, Success
+from .protocols import S3ClientProtocol
 from .s3_errors import (
     S3AccessDenied,
     S3BucketNotFound,
@@ -21,33 +20,9 @@ from .s3_errors import (
     S3UnknownError,
 )
 
-if TYPE_CHECKING:
-    # Protocol for S3 client - defined in store.py
-    from typing import AsyncIterator, Protocol
 
-    class _S3ResponseProtocol(Protocol):
-        """Protocol for S3 get_object response."""
-
-        def __getitem__(self, key: str) -> object: ...
-
-    class _PaginatorProtocol(Protocol):
-        """Protocol for S3 paginator."""
-
-        def paginate(self, **kwargs: object) -> AsyncIterator[object]: ...
-
-    class _S3ClientProtocol(Protocol):
-        """Protocol for async S3 client."""
-
-        async def put_object(self, **kwargs: object) -> object: ...
-        async def get_object(self, **kwargs: object) -> _S3ResponseProtocol: ...
-        async def delete_object(self, **kwargs: object) -> object: ...
-        async def list_objects_v2(self, **kwargs: object) -> object: ...
-        def get_paginator(self, operation: str) -> _PaginatorProtocol: ...
-
-    S3Client = _S3ClientProtocol
-else:
-    from typing import Any as _ClientType
-    S3Client = _ClientType
+# Re-export for backwards compatibility
+S3Client = S3ClientProtocol
 
 
 class S3Operations:
@@ -85,9 +60,7 @@ class S3Operations:
         """
         self._client = s3_client
 
-    async def get_object(
-        self, bucket: str, key: str
-    ) -> Result[bytes, S3OperationError]:
+    async def get_object(self, bucket: str, key: str) -> Result[bytes, S3OperationError]:
         """Get object from S3.
 
         Args:
@@ -143,9 +116,7 @@ class S3Operations:
         except ClientError as e:
             return Failure(self._classify_error(e, bucket, key, "PutObject"))
 
-    async def delete_object(
-        self, bucket: str, key: str
-    ) -> Result[None, S3OperationError]:
+    async def delete_object(self, bucket: str, key: str) -> Result[None, S3OperationError]:
         """Delete object from S3.
 
         Args:
@@ -168,7 +139,7 @@ class S3Operations:
 
     async def list_objects(
         self, bucket: str, prefix: str = ""
-    ) -> Result[List[str], S3OperationError]:
+    ) -> Result[list[str], S3OperationError]:
         """List object keys in S3 bucket with optional prefix.
 
         Args:
@@ -180,7 +151,7 @@ class S3Operations:
             Failure(S3OperationError) for all error cases
         """
         try:
-            keys: List[str] = []
+            keys: list[str] = []
             # Use pagination to handle large listings
             paginator = self._client.get_paginator("list_objects_v2")
             async for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
@@ -222,9 +193,7 @@ class S3Operations:
                 return S3ObjectNotFound(bucket_name=bucket, key=key, message=message)
 
             case "AccessDenied" | "Forbidden" | "InvalidAccessKeyId" | "SignatureDoesNotMatch":
-                return S3AccessDenied(
-                    bucket_name=bucket, operation=operation, message=message
-                )
+                return S3AccessDenied(bucket_name=bucket, operation=operation, message=message)
 
             case "RequestTimeout" | "ServiceUnavailable" | "SlowDown" | "InternalError":
                 return S3NetworkError(message=message, retry_count=0)

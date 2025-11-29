@@ -3,14 +3,16 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from botocore.exceptions import ClientError
-from unittest.mock import AsyncMock, patch
 
+from spectralmc.result import Failure, Success
 from spectralmc.storage import AsyncBlockchainModelStore
-from spectralmc.storage.errors import ConflictError, CommitError
-from spectralmc.storage.store import _S3ResponseProtocol, JsonDict
-from spectralmc.result import Success, Failure
+from spectralmc.storage.errors import CommitError, ConflictError
+from spectralmc.storage.protocols import S3ResponseProtocol
+from spectralmc.storage.store import JsonDict
 
 
 @pytest.mark.asyncio
@@ -42,7 +44,7 @@ async def test_rollback_on_cas_failure(async_store: AsyncBlockchainModelStore) -
     # Simulate concurrent modification by committing again
     checkpoint2 = b"checkpoint 2"
     hash2 = "hash2"
-    version2 = await async_store.commit(checkpoint2, hash2, "Second")
+    _version2 = await async_store.commit(checkpoint2, hash2, "Second")
 
     # Get new ETag (should be different)
     response = await async_store._s3_client.get_object(
@@ -58,9 +60,7 @@ async def test_rollback_on_cas_failure(async_store: AsyncBlockchainModelStore) -
     # We'll patch the commit method to simulate reading stale ETag
     original_get_object = async_store._s3_client.get_object
 
-    async def get_object_with_stale_etag(
-        *args: object, **kwargs: object
-    ) -> _S3ResponseProtocol:
+    async def get_object_with_stale_etag(*args: object, **kwargs: object) -> S3ResponseProtocol:
         """Return stale ETag to simulate race condition."""
         result = await original_get_object(*args, **kwargs)
         if kwargs.get("Key") == "chain.json":
@@ -68,14 +68,12 @@ async def test_rollback_on_cas_failure(async_store: AsyncBlockchainModelStore) -
             # This is safe because we control the mock, cast allows mutation
             from typing import cast as typing_cast
 
-            mutable_result = typing_cast(dict[str, object], result)
+            mutable_result = typing_cast("dict[str, object]", result)
             mutable_result["ETag"] = f'"{etag1}"'
         return result
 
     # Patch get_object to return stale ETag
-    with patch.object(
-        async_store._s3_client, "get_object", side_effect=get_object_with_stale_etag
-    ):
+    with patch.object(async_store._s3_client, "get_object", side_effect=get_object_with_stale_etag):
         checkpoint3 = b"checkpoint 3"
         hash3 = "hash3"
 
@@ -132,9 +130,7 @@ async def test_rollback_on_upload_failure(
             )
         await original_upload_json(key, data)
 
-    with patch.object(
-        async_store, "_upload_json", side_effect=upload_json_with_failure
-    ):
+    with patch.object(async_store, "_upload_json", side_effect=upload_json_with_failure):
         # Commit should fail
         with pytest.raises(CommitError, match="Failed to upload artifacts"):
             await async_store.commit(checkpoint, content_hash, "Should fail on upload")
@@ -144,9 +140,7 @@ async def test_rollback_on_upload_failure(
     assert async_store._s3_client is not None
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
     all_objects = []
-    async for page in paginator.paginate(
-        Bucket=async_store.bucket_name, Prefix="versions/"
-    ):
+    async for page in paginator.paginate(Bucket=async_store.bucket_name, Prefix="versions/"):
         if isinstance(page, dict) and "Contents" in page:
             contents = page["Contents"]
             assert isinstance(contents, list)
@@ -157,7 +151,5 @@ async def test_rollback_on_upload_failure(
 
     # Verify chain.json doesn't exist (genesis never succeeded)
     with pytest.raises(ClientError) as exc_info:
-        await async_store._s3_client.head_object(
-            Bucket=async_store.bucket_name, Key="chain.json"
-        )
+        await async_store._s3_client.head_object(Bucket=async_store.bucket_name, Key="chain.json")
     assert exc_info.value.response["Error"]["Code"] == "404"

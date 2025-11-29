@@ -4,7 +4,7 @@
 
 SpectralMC uses a **dual-mode Docker build strategy** to support both modern GPUs (binary packages) and legacy Maxwell GPUs like the GTX 970 (source builds). This document explains the build philosophy, Poetry-first dependency management, and layer optimization strategies.
 
-**Related Standards**: [Code Formatting](code_formatting.md), [Type Safety](type_safety.md)
+**Related Standards**: [Coding Standards](coding_standards.md), [GPU Build Guide](gpu_build.md)
 
 ---
 
@@ -59,36 +59,47 @@ BUILD_FROM_SOURCE=true docker compose up --build -d
 
 SpectralMC uses **Poetry** as the single source of truth for all Python dependencies. This ensures consistency across development, testing, and production environments.
 
-### Installation Pattern
+### The Only pip Command
 
-**Critical Rule**: Install pip **once** at the beginning, then use **only Poetry** for all subsequent dependencies.
+There is exactly **one** pip command in SpectralMC Dockerfiles:
 
 ```dockerfile
-# ✅ CORRECT Pattern
-# Step 1: Install pip once
-RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
-
-# Step 2: Upgrade pip and install Poetry via pip
-RUN python -m pip install --upgrade pip setuptools wheel poetry
-
-# Step 3: Configure Poetry
-RUN poetry config virtualenvs.create false
-
-# Step 4: All subsequent dependencies via Poetry
-RUN poetry install --no-interaction --no-root
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 && \
+    python -m pip install --upgrade pip setuptools wheel poetry
 ```
 
-**Forbidden patterns**:
-- ❌ Installing Poetry via curl script: `curl -sSL https://install.python-poetry.org | python3.12 -`
-- ❌ Using pip after Poetry is installed
-- ❌ Mixing pip and Poetry for dependencies
+This single command:
+1. Installs pip via bootstrap script
+2. Upgrades pip, setuptools, and wheel
+3. Installs Poetry
 
-### Why Poetry via pip?
+After this line, **only Poetry commands** are used for all dependencies.
 
-1. **Consistency**: Same installation method for all Python packages
-2. **Simplicity**: No external script download, less network dependency
-3. **Reproducibility**: pip install is more deterministic than curl script
-4. **Docker Best Practice**: Minimize external dependencies in builds
+### Virtual Environment Configuration
+
+Poetry's virtual environment behavior is controlled by `poetry.toml` at the repository root:
+
+```toml
+[virtualenvs]
+create = false
+```
+
+This file is automatically used by Poetry in the Docker build context. **Do NOT add `poetry config` commands to Dockerfiles** - the `poetry.toml` file is the single source of truth for this configuration.
+
+### Forbidden Patterns
+
+- ❌ `curl -sSL https://install.python-poetry.org | python3 -` (external script)
+- ❌ `pip install <package>` after Poetry is installed
+- ❌ `poetry config virtualenvs.create false` (handled by poetry.toml)
+- ❌ Multiple `pip install` commands
+- ❌ Separate RUN commands for pip and Poetry installation
+
+### Why This Pattern?
+
+1. **Single Layer**: pip + Poetry in one RUN command = fewer Docker layers
+2. **No External Scripts**: Poetry's official installer is unnecessary complexity
+3. **poetry.toml as SSoT**: Virtual environment config in one place, not scattered across Dockerfiles
+4. **Reproducibility**: pip install is deterministic and cached well by Docker
 
 ---
 
@@ -268,45 +279,6 @@ SpectralMC's Dockerfile is organized to **maximize Docker build cache hits** and
 
 ---
 
-## Complete Dockerfile Example
-
-**Note**: SpectralMC now uses **two separate Dockerfiles**:
-- `docker/Dockerfile` - Binary builds (CUDA 12.8.1)
-- `docker/Dockerfile.source` - Source builds (CUDA 11.8.0)
-
-Here's the key sections showing the Poetry-first pattern (from `docker/Dockerfile`):
-
-```dockerfile
-# Layer 3: Poetry Installation via pip
-RUN python -m pip install --upgrade pip setuptools wheel poetry && \
-    poetry config virtualenvs.create false
-
-# Layer 4: Copy dependency manifest (NOT poetry.lock)
-COPY pyproject.toml ./
-
-# Layer 5: Install dependencies via Poetry
-RUN poetry install --no-interaction --no-root
-
-# Layer 6-10: PyTorch installation (conditional on BUILD_FROM_SOURCE)
-ARG BUILD_FROM_SOURCE=false
-
-RUN if [ "$BUILD_FROM_SOURCE" = "true" ]; then \
-        echo "=== Building PyTorch from source (sm_52) ===" && \
-        git clone --branch v2.4.1 --recursive https://github.com/pytorch/pytorch.git && \
-        cd pytorch && python setup.py bdist_wheel && \
-        pip install --force-reinstall dist/*.whl; \
-    else \
-        echo "=== Installing PyTorch binary ===" && \
-        pip install torch==2.1.2+cu118 --index-url https://download.pytorch.org/whl/cu118; \
-    fi
-
-# Layer 11+: Application code
-COPY ./ /spectralmc/
-RUN poetry install --no-interaction
-```
-
----
-
 ## Troubleshooting
 
 ### Build fails with "poetry.lock not found"
@@ -344,7 +316,8 @@ BUILD_FROM_SOURCE=true docker compose up --build -d
   - `docker/Dockerfile` for binary builds (CUDA 12.8.1, PyTorch 2.7.1+cu128)
   - `docker/Dockerfile.source` for source builds (CUDA 11.8.0, PyTorch 2.4.1)
 - **Dockerfile selection**: docker-compose.yml uses shell parameter expansion based on BUILD_FROM_SOURCE
-- **Poetry-first**: Install via pip (binary) or curl script (source), use only Poetry for dependencies
+- **Poetry installation**: Single pip command installs pip + Poetry together
+- **poetry.toml as SSoT**: Virtual environment configuration lives in `poetry.toml`, not in Dockerfiles
 - **No poetry.lock in Docker**: Regenerated from pyproject.toml
 - **Layer optimization**: Each Dockerfile optimized for its use case
 - **BUILD_FROM_SOURCE flag**: Selects which Dockerfile to use
@@ -352,4 +325,4 @@ BUILD_FROM_SOURCE=true docker compose up --build -d
 - **Source build**: 2-4 hours first time (supports GTX 970 sm_52), cached thereafter
 - **Code changes**: ~2-5 minutes rebuild time (both modes)
 
-See also: [Type Safety](type_safety.md), [Testing Requirements](testing_requirements.md)
+See also: [Coding Standards](coding_standards.md), [Testing Requirements](testing_requirements.md), [GPU Build Guide](gpu_build.md)
