@@ -2,7 +2,7 @@
 
 This guide documents how to build SpectralMC with GPU support, with special focus on legacy GPU compatibility (GTX 970 / Maxwell architecture).
 
-**Last Updated**: 2025-11-29
+**Last Updated**: 2025-11-30
 
 **Related Standards**: [Docker Build Philosophy](docker_build_philosophy.md), [Coding Standards](coding_standards.md)
 
@@ -10,15 +10,45 @@ This guide documents how to build SpectralMC with GPU support, with special focu
 
 ## Table of Contents
 
+- [Quick Start (GTX 970)](#quick-start-gtx-970)
 - [Build Strategy Overview](#build-strategy-overview)
 - [Why Two Dockerfiles?](#why-two-dockerfiles)
 - [The GTX 970 Compatibility Problem](#the-gtx-970-compatibility-problem)
-- [Dockerfile.source Architecture](#dockerfilesource-architecture)
 - [Critical Version Constraints](#critical-version-constraints)
+- [Dockerfile.source Architecture](#dockerfilesource-architecture)
 - [Build Commands](#build-commands)
 - [Validation](#validation)
 - [Troubleshooting](#troubleshooting)
 - [Key Learnings](#key-learnings)
+- [Hardware Reference](#hardware-reference)
+
+---
+
+## Quick Start (GTX 970)
+
+For users building SpectralMC on NVIDIA GeForce GTX 970 (Maxwell architecture, compute capability 5.2):
+
+**Single Command Build**:
+```bash
+cd docker && docker compose build spectralmc
+```
+
+**Build Characteristics**:
+- **Build time**: 2-4 hours (first build only)
+- **Cached builds**: ~30 seconds for code changes
+- **PyTorch**: 2.4.0a0+gitee1b680 (built from git tag v2.4.1)
+- **CUDA**: 11.8
+- **NumPy**: 2.0+ compatible
+- **LAPACK**: OpenBLAS integration
+
+**Validation Results** (Nov 30, 2025):
+- Total tests: **227/227 passing (100%)**
+- GPU tests: 11/11 passing
+- CPU tests: 216/216 passing
+- LAPACK/OpenBLAS: Working
+- Test execution time: ~4 minutes
+
+**Next Steps**: See [Validation](#validation) for detailed verification steps.
 
 ---
 
@@ -105,6 +135,32 @@ We use **CUDA 11.8** as the last version with full Maxwell support.
 
 ---
 
+## Critical Version Constraints
+
+### DO NOT CHANGE These Versions
+
+| Component | Required Version | Breaking Change |
+|-----------|------------------|-----------------|
+| CUDA | 11.8 | 12.1+ removes sm_52 support |
+| PyTorch | 2.4.1 | 2.8+ removes sm_52 source code |
+| Base Image | `nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04` | Must match CUDA 11.8 |
+
+### Why Not Upgrade?
+
+**Q: Why not use PyTorch 2.7.0 like the binary Dockerfile?**
+
+A: PyTorch 2.8+ removed the sm_52 CUDA kernel source code entirely. While 2.7.x still has it, we use 2.4.1 as the proven, validated version that works with our dependency stack.
+
+**Q: Why not use CUDA 12.x?**
+
+A: CUDA 12.1+ removed Maxwell architecture support. CUDA 11.8 is the last version that fully supports sm_52.
+
+**Q: Can I use a newer PyTorch for GTX 970?**
+
+A: Only if that version still contains sm_52 source code AND you're willing to revalidate the entire test suite. PyTorch 2.4.1 is proven to work.
+
+---
+
 ## Dockerfile.source Architecture
 
 ### Layer Strategy
@@ -178,32 +234,6 @@ USE_LAPACK=1
 
 ---
 
-## Critical Version Constraints
-
-### DO NOT CHANGE These Versions
-
-| Component | Required Version | Breaking Change |
-|-----------|------------------|-----------------|
-| CUDA | 11.8 | 12.1+ removes sm_52 support |
-| PyTorch | 2.4.1 | 2.8+ removes sm_52 source code |
-| Base Image | `nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04` | Must match CUDA 11.8 |
-
-### Why Not Upgrade?
-
-**Q: Why not use PyTorch 2.7.0 like the binary Dockerfile?**
-
-A: PyTorch 2.8+ removed the sm_52 CUDA kernel source code entirely. While 2.7.x still has it, we use 2.4.1 as the proven, validated version that works with our dependency stack.
-
-**Q: Why not use CUDA 12.x?**
-
-A: CUDA 12.1+ removed Maxwell architecture support. CUDA 11.8 is the last version that fully supports sm_52.
-
-**Q: Can I use a newer PyTorch for GTX 970?**
-
-A: Only if that version still contains sm_52 source code AND you're willing to revalidate the entire test suite. PyTorch 2.4.1 is proven to work.
-
----
-
 ## Build Commands
 
 ### GTX 970 / Legacy GPU Build
@@ -272,7 +302,9 @@ GPU tensor test: PASSED
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
 ```
 
-**Expected**: 228/228 tests passing (100%)
+**Expected** (as of Nov 30, 2025): 227/227 tests passing (100%)
+- 11/11 GPU tests passing
+- 216/216 CPU tests passing
 
 ### 3. Verify CuPy
 
@@ -288,6 +320,57 @@ print(f'CuPy GPU test: PASSED')
 ---
 
 ## Troubleshooting
+
+### Quick Troubleshooting Flowchart
+
+Use this flowchart to quickly identify and resolve GPU build issues:
+
+```mermaid
+flowchart TB
+  Start{Docker Build Status?}
+  NoGPU[Issue 1 - nvidia-smi not found]
+  OOM[Issue 2 - Out of Memory]
+  TestOOM[Issue 3 - CUDA OOM in tests]
+  NoKernel[Issue 4 - No kernel image]
+  CPUOnly[Issue 5 - Defaults to CPU-only]
+
+  Start -->|GPU not detected| NoGPU
+  Start -->|Build crashes| OOM
+  Start -->|Tests fail| TestOOM
+  Start -->|Runtime error| NoKernel
+  Start -->|Quick build no CUDA| CPUOnly
+
+  NoGPU --> DockerBuildKit{Using BuildKit?}
+  DockerBuildKit -->|Yes| DisableBuildKit[Set DOCKER_BUILDKIT=0]
+  DockerBuildKit -->|No| CheckNvidiaDocker[Install nvidia-docker2]
+  DisableBuildKit --> RebuildAfterBuildKit[Rebuild with docker compose build]
+  CheckNvidiaDocker --> RebuildAfterDocker[Rebuild after nvidia-docker2 install]
+
+  OOM --> CheckRAM{System RAM?}
+  CheckRAM -->|Less than 16GB| ReduceJobs[Edit Dockerfile.source - Set MAX_JOBS=2]
+  CheckRAM -->|16GB or more| AddSwap[Add 16GB swap file]
+  ReduceJobs --> RebuildAfterRAM[Rebuild with --no-cache]
+  AddSwap --> RebuildAfterSwap[Rebuild with --no-cache]
+
+  TestOOM --> CheckVRAM{GPU VRAM?}
+  CheckVRAM -->|2GB| ReduceBatch2GB[Edit test_gbm.py - Set BATCHES=2^16]
+  CheckVRAM -->|4GB| KeepDefault[Keep default 2^17 - Should work]
+  CheckVRAM -->|8GB or more| IncreaseBatch[Optional: Increase to 2^18]
+  ReduceBatch2GB --> RerunTests[Rerun tests]
+  KeepDefault --> CheckOtherIssues[Check for other GPU memory issues]
+  IncreaseBatch --> RerunTestsFaster[Rerun tests - Faster convergence]
+
+  NoKernel --> CheckBuild{Source build ran?}
+  CheckBuild -->|No| RebuildSource[Rebuild with source Dockerfile]
+  CheckBuild -->|Yes| CheckArch[Verify TORCH_CUDA_ARCH_LIST matches GPU capability]
+  CheckArch --> ManualSourceBuild[Manual source build if mismatch]
+
+  CPUOnly --> ForceBuild[Use Dockerfile.source]
+  ForceBuild --> UseNoBuildKit[Use DOCKER_BUILDKIT=0]
+  UseNoBuildKit --> RebuildFromSource[Rebuild - 2-4 hours for source build]
+```
+
+**See detailed solutions below for each issue.**
 
 ### Build Fails: Out of Memory During Compilation
 
@@ -459,7 +542,7 @@ docker compose exec spectralmc python -c "import torch; print(torch.cuda.get_arc
 
 # Run tests
 docker compose exec spectralmc poetry run test-all
-# Expected: 228 passed
+# Expected: 227 passed
 
 # Check PyTorch version
 docker compose exec spectralmc python -c "import torch; print(torch.__version__, torch.version.cuda)"

@@ -63,53 +63,8 @@ SpectralMC uses blockchain-based versioning with S3 storage for production ML mo
 - InferenceClient (pinned/tracking modes)
 - Chain verification and garbage collection
 
-#### S3 Storage Structure
-
-```
-my-model-bucket/
-├── chain.json                    # HEAD pointer with ETag
-└── versions/
-    ├── v0000000000_1.0.0_abcd1234/
-    │   ├── checkpoint.pb         # Serialized model
-    │   ├── metadata.json         # Version info
-    │   └── content_hash.txt      # SHA256
-    └── v0000000001_1.0.1_ef567890/
-        ├── checkpoint.pb
-        ├── metadata.json
-        └── content_hash.txt
-```
-
-**Commit a model**:
-```python
-from spectralmc.storage import AsyncBlockchainModelStore, commit_snapshot
-
-async with AsyncBlockchainModelStore("my-model-bucket") as store:
-    version = await commit_snapshot(store, config, message="Trained 1000 epochs")
-```
-
-**Load a model**:
-```python
-from spectralmc.storage import load_snapshot_from_checkpoint
-
-async with AsyncBlockchainModelStore("my-model-bucket") as store:
-    head_result = await store.get_head()
-    snapshot = await load_snapshot_from_checkpoint(store, head, model_template, config_template)
-```
-
-#### CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `verify my-model-bucket` | Verify blockchain integrity |
-| `list-versions my-model-bucket` | List all versions |
-| `inspect my-model-bucket v0000000042` | Inspect specific version |
-| `gc-preview my-model-bucket 10` | Preview garbage collection |
-| `gc-run my-model-bucket 10 --yes` | Run garbage collection |
-| `tensorboard-log my-model-bucket --log-dir runs/` | Log to TensorBoard |
-
-Usage: `python -m spectralmc.storage <command>`
-
 **For complete documentation**, see [Blockchain Storage](documents/engineering/blockchain_storage.md):
+- S3 storage structure and CLI commands
 - Storage architecture and 10-step atomic commit protocol
 - InferenceClient modes (pinned vs tracking)
 - Chain verification algorithm
@@ -135,147 +90,29 @@ Usage: `python -m spectralmc.storage <command>`
 # Start services (SpectralMC, MinIO, TensorBoard)
 cd docker && docker compose up -d
 
-# View logs
-docker compose -f docker/docker-compose.yml logs -f spectralmc
-
 # Execute commands inside container
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run mypy src/spectralmc --strict
-docker compose -f docker/docker-compose.yml exec spectralmc python -m pytest tests/
-
-# Stop services
-docker compose -f docker/docker-compose.yml down
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-code
 ```
 
-### Test Output Handling
-
-**CRITICAL - Output Truncation Issue**:
-
-The Bash tool truncates output at 30,000 characters. Test suites may produce large output that WILL BE TRUNCATED, making it impossible to properly analyze failures.
-
-#### Required Test Execution Workflow
-
-Follow this workflow for all test execution to ensure complete output capture:
-
-```mermaid
-flowchart TB
-  Start[Start Test Execution]
-  RunTest[Run docker compose exec with output redirect]
-  WaitComplete[Wait for test completion - No timeout]
-  ReadOutput[Read complete output from /tmp file]
-  AnalyzeAll[Analyze ALL failures in output]
-
-  Start --> RunTest
-  RunTest --> WaitComplete
-  WaitComplete --> ReadOutput
-  ReadOutput --> AnalyzeAll
-
-  RunTest -.->|WRONG - Truncates| DirectBash[Direct Bash without redirect]
-  RunTest -.->|WRONG - Kills tests| WithTimeout[Using timeout parameter]
-  RunTest -.->|WRONG - Cant see output| Background[run_in_background=True]
-```
-
-**REQUIRED Pattern for Test Analysis**:
-
-Always redirect test output to files in /tmp/, then read the complete output:
-
-```bash
-# Step 1: Run tests with output redirection
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all > /tmp/test-output.txt 2>&1
-
-# Step 2: Read complete output using Read tool
-# Read /tmp/test-output.txt
-
-# Step 3: Analyze ALL failures, not just visible ones
-```
-
-**For Specific Test Categories**:
-```bash
-# Run specific test file
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_gbm.py > /tmp/test-gbm.txt 2>&1
-
-# Run storage tests
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_storage/ > /tmp/test-storage.txt 2>&1
-
-# Type checking
-docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc --strict > /tmp/mypy-output.txt 2>&1
-```
-
-**Why This Matters**:
-- Bash tool output truncation at 30K chars is HARD LIMIT
-- Test suites can produce 100KB+ of output
-- Truncated output hides most failures, making diagnosis impossible
-- File-based approach ensures complete output is always available
-- Read tool has no size limits for files
-
-### Test Execution Requirements
-
-**Forbidden**:
-- ❌ `Bash(command="...test...", timeout=60000)` - Truncates output, kills tests mid-run
-- ❌ `Bash(command="...test...", run_in_background=True)` - Can't see failures in real-time
-- ❌ Reading only partial output with `head -n 100` or similar truncation
-- ❌ Checking test status before completion (polling BashOutput prematurely)
-
-**Required**:
-- ✅ No timeout parameter on test commands
-- ✅ Wait for complete test execution (GPU tests can take several minutes)
-- ✅ Review ALL stdout/stderr output before drawing conclusions
-- ✅ Let tests complete naturally, read full results
+**For complete Docker workflows**, see [Docker Build Philosophy](documents/engineering/docker_build_philosophy.md).
 
 ## 🎮 GPU Support
 
-SpectralMC builds PyTorch from source to support legacy GPUs including GTX 970 (Maxwell, sm_52).
+SpectralMC supports both modern and legacy GPUs through a dual-build strategy.
 
-### Usage
-```bash
-# Build from source (supports all GPUs including GTX 970)
-docker compose -f docker/docker-compose.yml up --build -d
-```
+**Status**: ✅ PRODUCTION READY - 227/227 tests passing (100%, validated Nov 30, 2025)
+- 11/11 GPU tests passing
+- 216/216 CPU tests passing
+- LAPACK/OpenBLAS support working (validated Nov 30, 2025)
 
-### Source Build Details
+**GPU Compatibility**:
+- **Modern GPUs** (GTX 1060+, RTX series): Binary wheels, 10-15 min build
+- **Legacy GPUs** (GTX 970/980, Maxwell sm_52): Source build, 2-4 hours first build
 
-**Build characteristics**:
-- Compiles PyTorch 2.4.1 from source with CUDA 11.8
-- Build time: 2-4 hours (first build only, cached afterward)
-- Supports: All NVIDIA GPUs including Maxwell (sm_52) and Kepler (sm_35)
-- Examples: GTX 970, GTX 980, GTX 1060, RTX 2070, RTX 3080
-- No dependency on PyPI wheel availability
-
-**Why source builds?**
-- Binary PyTorch wheels dropped support for compute capability < 6.0
-- GTX 970 requires sm_52 support
-- Source builds guarantee reproducibility (no PyPI wheel changes)
-
-### GPU Memory Configuration
-Tests are configured for **4GB VRAM minimum**:
-- `test_gbm.py` uses 131,072 batches (~1.3GB GPU RAM)
-- Larger GPUs can increase `_BATCHES_PER_RUN` for faster convergence
-- Smaller GPUs (<4GB) should reduce batch size further
-
-### GTX 970 Validation Status
-
-**Status**: ✅ PRODUCTION READY for source builds (validated 2025-11-26, updated 2025-11-28)
-
-The NVIDIA GeForce GTX 970 (compute capability 5.2, sm_52) is fully validated and production-ready for all SpectralMC GPU workloads when using source builds.
-
-**Configuration**:
-- PyTorch 2.4.1 (source build with sm_52 support)
-- CUDA 11.8
-- CuPy 13.x (NumPy 2.0 compatible)
-- NumPy 2.x
-
-**Test Results**: 228/228 passing (100%)
-- ✅ All GPU-accelerated workloads (GBM simulation, CVNN training, Monte Carlo sampling)
-- ✅ All GPU-specific tests pass
-- ✅ CuPy interoperability via DLPack works correctly
-- ✅ LAPACK/OpenBLAS support enabled (implemented as of Nov 26, 2025)
-
-**Build Approach**:
-- Source-only builds (no binary fallback)
-- Eliminates PyPI wheel dependency issues
-- Reproducible builds from git tags
-
-See `GTX_970_COMPATIBILITY_INVESTIGATION.md` for complete validation details and Nov 28, 2025 binary fallback removal decision.
+**For complete GPU documentation**, see:
+- [GPU Build Guide](documents/engineering/gpu_build.md) - GTX 970 compatibility and build instructions
+- [Docker Build Philosophy](documents/engineering/docker_build_philosophy.md) - Dual-build strategy
 
 ## Type Safety - Quick Reference
 
@@ -305,15 +142,15 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all 
 
 # Run specific test file
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_gbm.py > /tmp/test-gbm.txt 2>&1
-
-# Run with coverage
-docker compose -f docker/docker-compose.yml exec spectralmc pytest tests --cov=spectralmc --cov-report=term-missing > /tmp/test-coverage.txt 2>&1
-
-# Type checking
-docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc --strict > /tmp/mypy.txt 2>&1
 ```
 
 **IMPORTANT**: Always redirect output to /tmp/ files and read complete output with Read tool.
+
+**For complete testing documentation**, see [Testing Requirements](documents/engineering/testing_requirements.md):
+- Test output handling and workflows
+- Test execution requirements
+- GPU testing requirements
+- 13 testing anti-patterns to avoid
 
 ### Test Configuration
 
@@ -321,17 +158,6 @@ docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc 
 - **GPU required**: All tests assume GPU is available - missing GPU causes test failure
 - **No fallbacks**: Silent CPU fallbacks are forbidden - `pytest.skip("CUDA not available")` is not allowed
 - **Fixtures**: Global GPU memory cleanup in `tests/conftest.py`
-
-### Test Files
-
-- `test_async_normals.py` - Async normal distribution generation
-- `test_cvnn.py` - Complex-valued neural network tests
-- `test_cvnn_factory.py` - CVNN factory tests
-- `test_gbm.py` - Geometric Brownian Motion tests
-- `test_gbm_trainer.py` - GBM trainer tests
-- `test_models_cpu_gpu_transfer.py` - CPU/GPU transfer tests
-- `test_models_torch.py` - PyTorch model tests
-- `test_sobol_sampler.py` - Sobol sampler tests
 
 ## Anti-Patterns - Quick Reference
 
