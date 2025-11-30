@@ -6,6 +6,10 @@
 
 Immutability is a contract, not a suggestion. Bypassing immutability protections creates runtime bugs that cannot be caught by static analysis.
 
+**Related Standards**:
+- [Purity Doctrine](purity_doctrine.md) - Immutability is one aspect of purity
+- [Coding Standards](coding_standards.md) - Frozen dataclasses for ADTs
+
 ---
 
 ## Forbidden Patterns
@@ -287,6 +291,7 @@ fi
 - **Python Data Model**: `__setattr__` special method
 - **Functional Programming**: Immutability principles
 - **SpectralMC Engineering Standards**: `documents/engineering/index.md`
+- [Purity Doctrine](purity_doctrine.md) - Complete purity standards (immutability is one aspect)
 
 ---
 

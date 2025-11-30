@@ -13,7 +13,8 @@ SpectralMC uses the **Effect Interpreter pattern** to separate the description o
 - **Type Safety**: Invalid effect combinations prevented at compile time via ADTs
 
 **Related Standards**:
-- [Coding Standards](coding_standards.md) - Basic ADT patterns and Result types
+- [Purity Doctrine](purity_doctrine.md) - Pure functions, no `for`/`if`/`raise`
+- [Coding Standards](coding_standards.md) - Result types and ADT patterns (SSoT)
 - [Immutability Doctrine](immutability_doctrine.md) - Frozen dataclasses
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) - Device placement rules
 - [Reproducibility Proofs](reproducibility_proofs.md) - Determinism guarantees
@@ -116,35 +117,56 @@ U = TypeVar("U")
 class TensorTransfer:
     """Request to transfer tensor between devices.
 
+    Note: Only constructible via tensor_transfer() factory function,
+    which returns Result[TensorTransfer, InvalidTransferError].
+
     Attributes:
         kind: Discriminator for pattern matching. Always "TensorTransfer".
         source_device: Device to transfer from.
         target_device: Device to transfer to.
         tensor_id: Opaque identifier for the tensor or TensorTree.
 
-    Raises:
-        ValueError: If source_device equals target_device (illegal state).
-
     Example:
-        >>> effect = TensorTransfer(
-        ...     source_device=Device.cuda,
-        ...     target_device=Device.cpu,
-        ...     tensor_id="model_weights",
-        ... )
-        >>> match effect:
-        ...     case TensorTransfer(source_device=src, target_device=dst):
-        ...         print(f"Transfer {src} -> {dst}")
+        >>> match tensor_transfer(Device.cuda, Device.cpu, "model_weights"):
+        ...     case Success(effect):
+        ...         print(f"Transfer {effect.source_device} -> {effect.target_device}")
+        ...     case Failure(error):
+        ...         print(f"Invalid: {error.device}")
     """
     kind: Literal["TensorTransfer"] = "TensorTransfer"
     source_device: Device = Device.cuda
     target_device: Device = Device.cpu
     tensor_id: str = ""
 
-    def __post_init__(self) -> None:
-        if self.source_device == self.target_device:
-            raise ValueError(
-                f"Invalid transfer: source and target are both {self.source_device}"
-            )
+
+@dataclass(frozen=True)
+class InvalidTransferError:
+    """Error when source and target device are identical."""
+    device: Device
+
+
+def tensor_transfer(
+    source: Device, target: Device, tensor_id: str = ""
+) -> Result[TensorTransfer, InvalidTransferError]:
+    """Create TensorTransfer, returning Failure if devices are identical.
+
+    This is the ONLY way to construct a TensorTransfer. Direct construction
+    is private (no validation). Use this factory to ensure valid transfers.
+
+    Example:
+        >>> match tensor_transfer(Device.cuda, Device.cpu, "weights"):
+        ...     case Success(effect):
+        ...         # Valid transfer
+        ...         pass
+        ...     case Failure(error):
+        ...         # Invalid: same device
+        ...         pass
+    """
+    return (
+        Failure(InvalidTransferError(device=source))
+        if source == target
+        else Success(TensorTransfer(source_device=source, target_device=target, tensor_id=tensor_id))
+    )
 
 
 @dataclass(frozen=True)
@@ -775,24 +797,44 @@ def flat_map_effect(
 
 ## Making Illegal States Unrepresentable
 
-The Effect ADT design uses type-level constraints to prevent invalid effect combinations at compile time.
+The Effect ADT design uses type-level constraints and factory functions to prevent invalid effect combinations.
 
 ### Device Transfer Validation
 
-Transfers to the same device are prevented by `__post_init__` validation:
+Transfers to the same device are prevented by factory functions returning Result:
 
 ```python
 @dataclass(frozen=True)
 class TensorTransfer:
+    """Only constructible via tensor_transfer() factory."""
     source_device: Device
     target_device: Device
 
-    def __post_init__(self) -> None:
-        if self.source_device == self.target_device:
-            raise ValueError(f"Invalid transfer: same device {self.source_device}")
 
-# This raises ValueError at construction time:
-TensorTransfer(source_device=Device.cpu, target_device=Device.cpu)
+@dataclass(frozen=True)
+class InvalidTransferError:
+    device: Device
+
+
+def tensor_transfer(
+    source: Device, target: Device
+) -> Result[TensorTransfer, InvalidTransferError]:
+    """Create TensorTransfer, returning Failure if devices are identical."""
+    return (
+        Failure(InvalidTransferError(device=source))
+        if source == target
+        else Success(TensorTransfer(source_device=source, target_device=target))
+    )
+
+
+# Usage - must handle Result:
+match tensor_transfer(Device.cpu, Device.cpu):
+    case Success(transfer):
+        # Valid transfer - use it
+        pass
+    case Failure(error):
+        # Invalid transfer - handle error
+        print(f"Cannot transfer to same device: {error.device}")
 ```
 
 ### Training Phase State Machine
@@ -1022,7 +1064,8 @@ flowchart TB
 
 ## Related Documentation
 
-- [Coding Standards](coding_standards.md) - Basic ADT patterns and Result types
+- [Purity Doctrine](purity_doctrine.md) - Pure functions, factory patterns for validation
+- [Coding Standards](coding_standards.md) - Result types and ADT patterns (SSoT)
 - [Reproducibility Proofs](reproducibility_proofs.md) - How effects enable provable reproducibility
 - [Immutability Doctrine](immutability_doctrine.md) - Frozen dataclass requirements
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) - Device placement rules

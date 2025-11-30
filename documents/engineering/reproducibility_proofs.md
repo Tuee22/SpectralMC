@@ -11,6 +11,7 @@ SpectralMC achieves **provable reproducibility** through pure functional program
 **Key Insight**: Reproducibility is not just "tested" behavior - it is a **type property** enforced by the architecture.
 
 **Related Standards**:
+- [Purity Doctrine](purity_doctrine.md) - Pure functions enabling reproducibility
 - [Effect Interpreter](effect_interpreter.md) - Effect ADT patterns enabling reproducibility
 - [PyTorch Facade](pytorch_facade.md) - Determinism configuration
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) - Device placement rules
@@ -486,6 +487,7 @@ When implementing new features, verify:
 
 ## Related Documentation
 
+- [Purity Doctrine](purity_doctrine.md) - Pure functions enabling reproducibility
 - [Effect Interpreter](effect_interpreter.md) - Effect ADT patterns
 - [PyTorch Facade](pytorch_facade.md) - Determinism implementation details
 - [Coding Standards](coding_standards.md) - Type safety requirements

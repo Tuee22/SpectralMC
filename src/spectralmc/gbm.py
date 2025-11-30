@@ -45,6 +45,13 @@ from spectralmc.async_normals import (
     ConcurrentNormGenerator,
     ConcurrentNormGeneratorConfig,
 )
+from spectralmc.effects import (
+    EffectSequence,
+    GenerateNormals,
+    SimulatePaths,
+    StreamSync,
+    sequence_effects,
+)
 from spectralmc.models.numerical import Precision
 
 
@@ -241,6 +248,53 @@ class BlackScholes:
             sim_params=sp,
             simulate_log_return=self._cfg.simulate_log_return,
             normalize_forwards=self._cfg.normalize_forwards,
+        )
+
+    # ....................................... effect builders .................
+    def build_simulation_effects(self, inputs: Inputs) -> EffectSequence[list[object]]:
+        """Build pure effect sequence describing a complete simulation.
+
+        This method produces an immutable effect description that can be:
+        - Inspected and tested without GPU hardware
+        - Serialized for reproducibility tracking
+        - Composed with other effects in larger workflows
+
+        The actual execution happens when the interpreter processes these effects.
+
+        Args:
+            inputs: Contract parameters (spot, strike, rate, dividend, vol, expiry).
+
+        Returns:
+            EffectSequence describing: normal generation → path simulation → stream sync.
+
+        Example:
+            >>> effects = bs.build_simulation_effects(inputs)
+            >>> # Pure description - no side effects yet
+            >>> result = await interpreter.interpret_sequence(effects)
+        """
+        ngen_snapshot = self._ngen.snapshot()
+        return sequence_effects(
+            GenerateNormals(
+                rows=self._sp.timesteps,
+                cols=self._sp.total_paths(),
+                seed=ngen_snapshot.seed,
+                skip=ngen_snapshot.skips,
+            ),
+            SimulatePaths(
+                spot=inputs.X0,
+                strike=inputs.K,
+                rate=inputs.r,
+                dividend=inputs.d,
+                vol=inputs.v,
+                expiry=inputs.T,
+                timesteps=self._sp.timesteps,
+                batches=self._sp.total_paths(),
+                simulate_log_return=self._cfg.simulate_log_return,
+                normalize_forwards=self._cfg.normalize_forwards,
+                input_normals_id="generated_normals",
+            ),
+            StreamSync(stream_type="numba"),
+            StreamSync(stream_type="cupy"),
         )
 
     # ....................................... internals ......................

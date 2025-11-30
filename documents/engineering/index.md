@@ -67,16 +67,23 @@ Violating these guidelines can result in:
    - Functional update patterns (`dataclasses.replace()`)
    - Blockchain integrity and correctness guarantees
 
+5. **[Purity Doctrine](purity_doctrine.md)** - Pure Functions SSoT
+   - No `for` loops (use comprehensions)
+   - No `if` statements (use conditional expressions or `match`/`case`)
+   - No side effects (use Effect ADTs)
+   - No `raise` for errors (use Result types)
+   - Factory functions for constructor validation
+
 ### Documentation
 
-5. **[Documentation Standards](documentation_standards.md)**
+6. **[Documentation Standards](documentation_standards.md)**
    - Module documentation requirements
    - Google-style docstrings for functions and classes
    - Technical whitepaper organization
 
 ### Testing & Compute Policy
 
-6. **[Testing Requirements](testing_requirements.md)** ⭐ Comprehensive Guide
+7. **[Testing Requirements](testing_requirements.md)** ⭐ Comprehensive Guide
    - Test structure and type safety
    - **GPU required** - all tests require GPU, no silent CPU fallbacks
    - Deterministic testing requirements
@@ -84,7 +91,7 @@ Violating these guidelines can result in:
    - **Test output handling** best practices
    - **Blockchain storage test coverage**
 
-7. **[CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)**
+8. **[CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)**
    - Two-phase architecture (CPU init → GPU compute)
    - Acceptable CPU usage patterns
    - GPU compute requirements and enforcement
@@ -93,13 +100,13 @@ Violating these guidelines can result in:
 
 ### Infrastructure
 
-8. **[Docker Build Philosophy](docker_build_philosophy.md)**
+9. **[Docker Build Philosophy](docker_build_philosophy.md)**
    - Dual build strategy (binary vs source)
    - Poetry-first dependency management
    - Layer optimization for build cache
    - BUILD_FROM_SOURCE flag usage
 
-9. **[GPU Build Guide](gpu_build.md)**
+10. **[GPU Build Guide](gpu_build.md)**
     - Legacy GPU support (GTX 970, compute capability 5.2)
     - Source build configuration for sm_52
     - Critical version constraints (CUDA 11.8, PyTorch 2.4.1)
@@ -107,7 +114,7 @@ Violating these guidelines can result in:
 
 ### Model Versioning
 
-10. **[Blockchain Storage](blockchain_storage.md)** ⭐ Production Model Versioning
+11. **[Blockchain Storage](blockchain_storage.md)** ⭐ Production Model Versioning
     - S3-based blockchain model versioning system
     - Atomic commits with 10-step CAS protocol
     - InferenceClient (pinned/tracking modes)
@@ -117,7 +124,7 @@ Violating these guidelines can result in:
 
 ### Functional Architecture
 
-11. **[Effect Interpreter](effect_interpreter.md)** ⭐ Effect System Doctrine
+12. **[Effect Interpreter](effect_interpreter.md)** ⭐ Effect System Doctrine
     - Effect ADT hierarchy (GPU, Training, Storage, RNG effects)
     - Effect Interpreter protocol and implementation
     - Effect composition (sequential, parallel, monadic)
@@ -125,7 +132,7 @@ Violating these guidelines can result in:
     - Mock interpreters for pure testing
     - Migration strategy from current architecture
 
-12. **[Reproducibility Proofs](reproducibility_proofs.md)** ⭐ Determinism Guarantees
+13. **[Reproducibility Proofs](reproducibility_proofs.md)** ⭐ Determinism Guarantees
     - Provable reproducibility through pure code
     - Effect sequencing via PyTorch Facade
     - RNG as explicit effect (state threading)
@@ -144,8 +151,15 @@ Violating these guidelines can result in:
 
 ### Immutability
 - **Primary**: [Immutability Doctrine](immutability_doctrine.md) - Immutable data structures
+- **Related**: [Purity Doctrine](purity_doctrine.md) - Immutability as aspect of purity
 - **Related**: [Coding Standards](coding_standards.md) - Frozen dataclasses for ADTs
 - **Related**: [Pydantic Patterns](pydantic_patterns.md) - `frozen=True` for Pydantic models
+
+### Purity
+- **Primary**: [Purity Doctrine](purity_doctrine.md) - Pure functions, no side effects
+- **Related**: [Immutability Doctrine](immutability_doctrine.md) - No mutation
+- **Related**: [Coding Standards](coding_standards.md) - Result types, ADTs
+- **Related**: [Effect Interpreter](effect_interpreter.md) - Side effects as ADTs
 
 ### Error Handling
 - **Primary**: [Coding Standards](coding_standards.md) - Result types, ADTs, pattern matching, no exception swallowing
@@ -162,7 +176,8 @@ Violating these guidelines can result in:
 - **Related**: [Docker Build Philosophy](docker_build_philosophy.md) - Build-time performance optimizations
 
 ### Functional Programming
-- **Primary**: [Coding Standards](coding_standards.md) - Basic ADTs, Result types
+- **Primary**: [Purity Doctrine](purity_doctrine.md) - Pure functions, expressions over statements
+- **Primary**: [Coding Standards](coding_standards.md) - Result types, ADTs (definitions)
 - **Advanced**: [Effect Interpreter](effect_interpreter.md) - Effect ADTs, interpreter pattern, composition
 - **Related**: [Immutability Doctrine](immutability_doctrine.md) - Frozen dataclasses
 
@@ -206,6 +221,13 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
 - ❌ `object.__setattr__()` on frozen dataclasses
 - ❌ `__dict__` manipulation on immutable objects
 
+**Purity** (see [Purity Doctrine](purity_doctrine.md)):
+- ❌ `for` loops (use comprehensions)
+- ❌ `if` statements (use conditional expressions or `match`/`case`)
+- ❌ `while` loops (use comprehensions or recursion)
+- ❌ `raise` for expected errors (use Result types)
+- ❌ Side effects in pure functions (`print()`, `logger.*()`)
+
 **Error Handling** (see [Coding Standards](coding_standards.md)):
 - ❌ Exceptions for expected errors (use Result types)
 - ❌ Returning `None` to indicate errors
@@ -230,6 +252,12 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
 **Type Safety** (see [Coding Standards](coding_standards.md)):
 - ✅ Explicit type annotations on all functions
 - ✅ mypy strict mode clean
+
+**Purity** (see [Purity Doctrine](purity_doctrine.md)):
+- ✅ Comprehensions instead of `for` loops
+- ✅ Conditional expressions or `match`/`case` instead of `if` statements
+- ✅ Factory functions returning `Result` for validation
+- ✅ Side effects isolated to Effect Interpreter
 
 **Functional Error Handling** (see [Coding Standards](coding_standards.md)):
 - ✅ Result[T, E] for expected errors
@@ -261,7 +289,9 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
 Following these standards ensures that SpectralMC maintains:
 
 - **Strict type safety** with zero tolerance for `Any`, `cast`, or `type: ignore`
+- **Pure functions** with expressions over statements, no `for`/`if`/`while`
 - **Functional error handling** with Result types and ADTs (no legacy exception-based APIs)
+- **Immutability** with frozen dataclasses and functional updates
 - **Reproducible execution** through the PyTorch facade pattern and CPU initialization
 - **GPU-centric compute** with deterministic CPU initialization for reproducibility
 - **Comprehensive documentation** for all modules and functions
@@ -272,10 +302,11 @@ All code must pass `mypy --strict` and `black --check` before being committed. T
 
 ### Recent Changes (2025-11-30)
 
+- **Added**: [Purity Doctrine](purity_doctrine.md) - New SSoT for pure functions, expressions over statements
 - **Added**: [Effect Interpreter](effect_interpreter.md) - New SSoT for effect system doctrine
 - **Added**: [Reproducibility Proofs](reproducibility_proofs.md) - New SSoT for determinism guarantees
-- **Updated**: [Documentation Standards](documentation_standards.md) - SSoT principles, ADT patterns, effect documentation
-- **Updated**: Cross-reference guide with Functional Programming and Reproducibility sections
+- **Updated**: Cross-reference guide with Purity, Functional Programming, and Reproducibility sections
+- **Updated**: Quick Reference with Purity forbidden/required patterns
 
 ### Previous Changes (2025-11-29)
 

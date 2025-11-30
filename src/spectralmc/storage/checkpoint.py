@@ -6,6 +6,13 @@ from __future__ import annotations
 import torch
 
 # CRITICAL: Import facade BEFORE torch for deterministic algorithms
+from spectralmc.effects import (
+    CommitVersion,
+    EffectSequence,
+    ReadObject,
+    WriteObject,
+    sequence_effects,
+)
 from spectralmc.gbm_trainer import ComplexValuedModel, GbmCVNNPricerConfig
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.proto import tensors_pb2
@@ -143,8 +150,93 @@ async def load_snapshot_from_checkpoint(
     )
 
 
+def build_commit_effects(
+    bucket: str,
+    snapshot: GbmCVNNPricerConfig,
+    message: str = "",
+    parent_counter: int | None = None,
+) -> EffectSequence[list[object]]:
+    """Build pure effect sequence describing a checkpoint commit.
+
+    This method produces an immutable effect description that can be:
+    - Inspected and tested without S3/network access
+    - Serialized for reproducibility tracking
+    - Composed with other effects in larger workflows
+
+    The actual execution happens when the interpreter processes these effects.
+
+    Args:
+        bucket: S3 bucket name for checkpoint storage.
+        snapshot: GbmCVNNPricerConfig from GbmCVNNPricer.snapshot().
+        message: Optional commit message.
+        parent_counter: Version counter of parent (for chain linkage).
+
+    Returns:
+        EffectSequence describing: write checkpoint → commit version.
+
+    Example:
+        >>> effects = build_commit_effects(
+        ...     bucket="my-models",
+        ...     snapshot=trainer.snapshot(),
+        ...     message="Epoch 10 complete",
+        ...     parent_counter=9,
+        ... )
+        >>> # Pure description - no side effects yet
+        >>> result = await interpreter.interpret_sequence(effects)
+    """
+    _checkpoint_bytes, content_hash = create_checkpoint_from_snapshot(snapshot)
+
+    return sequence_effects(
+        WriteObject(
+            bucket=bucket,
+            key=f"checkpoints/{content_hash}/checkpoint.pb",
+            content_hash=content_hash,
+        ),
+        CommitVersion(
+            parent_counter=parent_counter,
+            checkpoint_hash=content_hash,
+            message=message,
+        ),
+    )
+
+
+def build_load_effects(
+    bucket: str,
+    version_key: str,
+) -> EffectSequence[list[object]]:
+    """Build pure effect sequence describing a checkpoint load.
+
+    This method produces an immutable effect description that can be:
+    - Inspected and tested without S3/network access
+    - Serialized for reproducibility tracking
+    - Composed with other effects in larger workflows
+
+    The actual execution happens when the interpreter processes these effects.
+
+    Args:
+        bucket: S3 bucket name for checkpoint storage.
+        version_key: Key path to the checkpoint within the bucket.
+
+    Returns:
+        EffectSequence describing: read checkpoint from storage.
+
+    Example:
+        >>> effects = build_load_effects(
+        ...     bucket="my-models",
+        ...     version_key="v0000000042_1.0.0_abcd1234/checkpoint.pb",
+        ... )
+        >>> # Pure description - no side effects yet
+        >>> result = await interpreter.interpret_sequence(effects)
+    """
+    return sequence_effects(
+        ReadObject(bucket=bucket, key=version_key),
+    )
+
+
 __all__ = [
     "create_checkpoint_from_snapshot",
     "commit_snapshot",
     "load_snapshot_from_checkpoint",
+    "build_commit_effects",
+    "build_load_effects",
 ]

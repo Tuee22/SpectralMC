@@ -82,6 +82,25 @@ from torch import (
 from torch.utils.tensorboard import SummaryWriter
 
 # CRITICAL: Import facade BEFORE torch for deterministic algorithms
+from spectralmc.effects import (
+    BackwardPass,
+    CaptureRNGState,
+    CommitVersion,
+    ComputeFFT,
+    ComputeLoss,
+    DLPackTransfer,
+    EffectSequence,
+    ForwardPass,
+    GenerateNormals,
+    LogMetrics,
+    OptimizerStep,
+    ReadMetadata,
+    SimulatePaths,
+    StreamSync,
+    UpdateMetadata,
+    WriteObject,
+    sequence_effects,
+)
 from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
 from spectralmc.models.cpu_gpu_transfer import module_state_device_dtype
 from spectralmc.models.numerical import Precision
@@ -430,6 +449,222 @@ class GbmCVNNPricer:
         return loss, grad_norm
 
     # ------------------------------------------------------------------ #
+    # Effect builders                                                    #
+    # ------------------------------------------------------------------ #
+
+    def build_training_step_effects(
+        self, batch_idx: int, config: TrainingConfig
+    ) -> EffectSequence[list[object]]:
+        """Build pure effect sequence describing a single training step.
+
+        This method produces an immutable effect description that can be:
+        - Inspected and tested without GPU hardware
+        - Serialized for reproducibility tracking
+        - Composed with other effects in larger workflows
+
+        The actual execution happens when the interpreter processes these effects.
+
+        Registry ID naming convention:
+            - "normals_{batch_idx}" - Generated normal random matrix
+            - "paths_{batch_idx}" - Simulated price paths
+            - "fft_{batch_idx}" - FFT of price paths
+            - "targets_{batch_idx}" - DLPack-transferred targets tensor
+            - "pred_{batch_idx}" - Model predictions
+            - "loss_{batch_idx}" - Computed loss tensor
+
+        Args:
+            batch_idx: Index of this batch within the training run.
+            config: Training hyperparameters.
+
+        Returns:
+            EffectSequence describing: data generation → forward → backward → optimizer → sync.
+
+        Example:
+            >>> effects = trainer.build_training_step_effects(batch_idx=0, config=config)
+            >>> # Pure description - no side effects yet
+            >>> result = await interpreter.interpret_sequence(effects)
+        """
+        mc_snapshot = self._context.mc_engine.snapshot()
+        ngen_snapshot = self._context.mc_engine._ngen.snapshot()
+
+        # Compute current sobol skip for this batch
+        current_skip = ngen_snapshot.skips + (batch_idx * config.batch_size)
+
+        # Note: Market parameters (spot, rate, dividend, vol, expiry) come from
+        # Sobol-sampled contracts at runtime. The effect description uses placeholder
+        # values that will be overridden by the interpreter when processing actual
+        # contracts from the sampler.
+        return sequence_effects(
+            # Phase 1: Monte Carlo data generation
+            GenerateNormals(
+                rows=mc_snapshot.sim_params.timesteps,
+                cols=mc_snapshot.sim_params.total_paths(),
+                seed=ngen_snapshot.seed,
+                skip=current_skip,
+            ),
+            # Phase 2: Simulate GBM paths using Numba kernel
+            # Market params are placeholders; real values come from Sobol sampler
+            SimulatePaths(
+                spot=100.0,
+                rate=0.05,
+                dividend=0.0,
+                vol=0.2,
+                expiry=1.0,
+                timesteps=mc_snapshot.sim_params.timesteps,
+                batches=mc_snapshot.sim_params.total_paths(),
+                simulate_log_return=mc_snapshot.simulate_log_return,
+                normalize_forwards=mc_snapshot.normalize_forwards,
+                input_normals_id=f"normals_{batch_idx}",
+            ),
+            StreamSync(stream_type="cupy"),
+            # Phase 3: FFT of price paths
+            ComputeFFT(
+                input_tensor_id=f"paths_{batch_idx}",
+                axis=1,
+            ),
+            # Phase 4: Transfer FFT result from CuPy to PyTorch via DLPack
+            DLPackTransfer(
+                source_tensor_id=f"fft_{batch_idx}",
+                source_framework="cupy",
+                target_framework="torch",
+                output_tensor_id=f"targets_{batch_idx}",
+            ),
+            StreamSync(stream_type="torch"),
+            # Phase 5: Training step (forward/backward/optimizer)
+            ForwardPass(
+                model_id="cvnn",
+                input_tensor_id=f"batch_{batch_idx}",
+                output_tensor_id=f"pred_{batch_idx}",
+            ),
+            ComputeLoss(
+                pred_tensor_id=f"pred_{batch_idx}",
+                target_tensor_id=f"targets_{batch_idx}",
+                loss_type="mse",
+                output_tensor_id=f"loss_{batch_idx}",
+            ),
+            BackwardPass(loss_tensor_id=f"loss_{batch_idx}"),
+            OptimizerStep(optimizer_id="adam"),
+            StreamSync(stream_type="torch"),
+            # Phase 6: Update metadata for tracking
+            UpdateMetadata(key="global_step", operation="increment"),
+            UpdateMetadata(key="sobol_skip", operation="add", value=config.batch_size),
+            # Phase 7: Log metrics (optional, uses registered TensorBoard writer)
+            LogMetrics(
+                metrics=(),  # Populated by interpreter from loss value
+                step=batch_idx,
+            ),
+            # Phase 8: RNG state capture for reproducibility
+            CaptureRNGState(rng_type="torch_cuda"),
+        )
+
+    def build_epoch_effects(self, config: TrainingConfig) -> EffectSequence[list[object]]:
+        """Build pure effect sequence describing a complete training epoch.
+
+        An epoch consists of config.num_batches training steps executed sequentially.
+
+        Args:
+            config: Training hyperparameters.
+
+        Returns:
+            EffectSequence containing all training steps for one epoch.
+        """
+        step_effects = [
+            effect
+            for i in range(config.num_batches)
+            for effect in self.build_training_step_effects(i, config).effects
+        ]
+        return sequence_effects(*step_effects)
+
+    def build_training_effects(
+        self,
+        config: TrainingConfig,
+        *,
+        num_epochs: int = 1,
+        checkpoint_bucket: str | None = None,
+        checkpoint_interval: int | None = None,
+    ) -> EffectSequence[list[object]]:
+        """Build pure effect sequence describing a complete training run.
+
+        This method produces an immutable effect description representing
+        the entire training process as a data structure. The training run
+        includes optional periodic checkpointing.
+
+        Args:
+            config: Training hyperparameters.
+            num_epochs: Number of training epochs to run.
+            checkpoint_bucket: S3 bucket for checkpoints (enables checkpointing if set).
+            checkpoint_interval: Checkpoint every N epochs (requires checkpoint_bucket).
+
+        Returns:
+            EffectSequence describing the complete training run.
+
+        Example:
+            >>> effects = trainer.build_training_effects(
+            ...     config,
+            ...     num_epochs=10,
+            ...     checkpoint_bucket="my-models",
+            ...     checkpoint_interval=5,
+            ... )
+            >>> # Pure description of entire training - no side effects yet
+            >>> result = await interpreter.interpret_sequence(effects)
+        """
+        all_effects: list[object] = []
+
+        for epoch in range(num_epochs):
+            # Add epoch training effects
+            epoch_effects = self.build_epoch_effects(config)
+            all_effects.extend(epoch_effects.effects)
+
+            # Add checkpoint effects if configured
+            if (
+                checkpoint_bucket is not None
+                and checkpoint_interval is not None
+                and (epoch + 1) % checkpoint_interval == 0
+            ):
+                checkpoint_effects = [
+                    CaptureRNGState(rng_type="torch_cuda"),
+                    WriteObject(
+                        bucket=checkpoint_bucket,
+                        key=f"epoch_{epoch + 1}/checkpoint.pb",
+                    ),
+                    CommitVersion(
+                        parent_counter=epoch,
+                        message=f"Epoch {epoch + 1}",
+                    ),
+                ]
+                all_effects.extend(checkpoint_effects)
+
+        # Type safety: sequence_effects expects Effect, but we've collected objects
+        # Cast back to the proper tuple for the EffectSequence
+        from spectralmc.effects.types import Effect
+
+        typed_effects: list[Effect] = []
+        for e in all_effects:
+            if isinstance(
+                e,
+                (
+                    GenerateNormals,
+                    SimulatePaths,
+                    ComputeFFT,
+                    DLPackTransfer,
+                    StreamSync,
+                    ForwardPass,
+                    BackwardPass,
+                    OptimizerStep,
+                    ComputeLoss,
+                    LogMetrics,
+                    UpdateMetadata,
+                    ReadMetadata,
+                    CaptureRNGState,
+                    WriteObject,
+                    CommitVersion,
+                ),
+            ):
+                typed_effects.append(e)
+
+        return sequence_effects(*typed_effects)
+
+    # ------------------------------------------------------------------ #
     # Blockchain storage integration                                     #
     # ------------------------------------------------------------------ #
 
@@ -507,6 +742,70 @@ class GbmCVNNPricer:
             except RuntimeError:
                 # No event loop running - safe to use asyncio.run()
                 asyncio.run(_do_commit())
+
+        except (CommitError, NotFastForwardError, ConflictError, StorageError) as e:
+            _logger.error(
+                f"Failed to commit to blockchain at step {self._global_step}: {e}",
+                exc_info=True,
+            )
+            # Don't raise - training should continue even if commit fails
+
+    async def _async_commit_to_blockchain(
+        self,
+        blockchain_store: AsyncBlockchainModelStore,
+        adam: optim.Optimizer,
+        commit_message_template: str,
+        loss: float,
+        batch: int,
+    ) -> None:
+        """
+        Async commit current trainer snapshot to blockchain storage.
+
+        Native async version of _commit_to_blockchain for use in train_via_effects().
+        Handles errors gracefully to avoid interrupting training.
+
+        Args:
+            blockchain_store: AsyncBlockchainModelStore instance
+            adam: Current Adam optimizer (for snapshotting state)
+            commit_message_template: Template string for commit message
+            loss: Current training loss
+            batch: Current batch/step number
+        """
+        try:
+            # Snapshot optimizer state before committing
+            # NOTE: Explicit .cpu() calls acceptable per CPU/GPU policy for checkpoint I/O.
+            state_dict = adam.state_dict()
+            for param_id in state_dict["state"]:
+                for key in state_dict["state"][param_id]:
+                    val = state_dict["state"][param_id][key]
+                    if isinstance(val, torch.Tensor):
+                        state_dict["state"][param_id][key] = val.cpu()
+            self._optimizer_state = AdamOptimizerState.from_torch(state_dict)
+
+            # Create snapshot
+            snapshot = self.snapshot()
+
+            # Format commit message
+            commit_message = commit_message_template.format(
+                step=self._global_step,
+                loss=loss,
+                batch=batch,
+            )
+
+            # Execute async commit
+            # NOTE: Function-level import required to break circular dependency:
+            # storage.__init__ -> inference.py -> gbm_trainer.py -> storage
+            from spectralmc.storage import commit_snapshot
+
+            version = await commit_snapshot(
+                blockchain_store,
+                snapshot,
+                commit_message,
+            )
+            _logger.info(
+                f"Committed version {version.counter}: {version.content_hash[:8]}... "
+                f"(step={self._global_step}, loss={loss:.6f})"
+            )
 
         except (CommitError, NotFastForwardError, ConflictError, StorageError) as e:
             _logger.error(
@@ -660,6 +959,195 @@ class GbmCVNNPricer:
             )
 
         # ── Return immutable training result ────────────────────────── #
+        updated_config = self.snapshot()
+        return TrainingResult(
+            updated_config=updated_config,
+            final_loss=final_loss,
+            total_batches=config.num_batches,
+            final_grad_norm=final_grad_norm,
+        )
+
+    async def train_via_effects(
+        self,
+        config: TrainingConfig,
+        *,
+        logger: StepLogger | None = None,
+        blockchain_store: AsyncBlockchainModelStore | None = None,
+        auto_commit: bool = False,
+        commit_interval: int | None = None,
+        commit_message_template: str = "Training checkpoint at step {step}",
+    ) -> TrainingResult:
+        """
+        Run effect-driven training for *config.num_batches* steps.
+
+        This method executes training through the Effect Interpreter pattern,
+        where all side effects are described as pure effect ADTs and then
+        interpreted by the SpectralMCInterpreter.
+
+        Benefits:
+        - Reproducibility: Complete execution trace as immutable data
+        - Testability: Effect sequences can be inspected/tested without GPU
+        - Composability: Effects compose without coupling to execution details
+
+        Args:
+            config: Training hyperparameters (num_batches, batch_size, learning_rate)
+            logger: Optional callback executed after each step
+            blockchain_store: Optional AsyncBlockchainModelStore for automatic commits
+            auto_commit: If True, commit snapshot after training completes (requires blockchain_store)
+            commit_interval: If set, commit every N batches during training (requires blockchain_store)
+            commit_message_template: Template for commit messages (can use {step}, {loss}, {batch})
+
+        Returns:
+            TrainingResult with updated config and training metrics
+
+        Example:
+            >>> result = await trainer.train_via_effects(config)
+            >>> print(f"Final loss: {result.final_loss:.6f}")
+        """
+        from spectralmc.effects import (
+            GPUInterpreter,
+            MetadataInterpreter,
+            MonteCarloInterpreter,
+            RNGInterpreter,
+            SpectralMCInterpreter,
+            StorageInterpreter,
+            TrainingInterpreter,
+        )
+        from spectralmc.result import Failure, Success
+
+        # Validate blockchain parameters
+        if (auto_commit or commit_interval is not None) and blockchain_store is None:
+            raise ValueError(
+                "auto_commit or commit_interval requires blockchain_store to be provided"
+            )
+
+        # Initialize interpreters
+        gpu_interp = GPUInterpreter(
+            torch_stream=self._context.torch_stream,
+            cupy_stream=self._context.cupy_stream,
+        )
+        training_interp = TrainingInterpreter()
+        mc_interp = MonteCarloInterpreter()
+        storage_interp = StorageInterpreter(bucket="")  # Not used for training
+        rng_interp = RNGInterpreter()
+        metadata_interp = MetadataInterpreter()
+
+        # Create master interpreter
+        interpreter = SpectralMCInterpreter(
+            gpu=gpu_interp,
+            training=training_interp,
+            montecarlo=mc_interp,
+            storage=storage_interp,
+            rng=rng_interp,
+            metadata=metadata_interp,
+        )
+
+        # Register model and optimizer
+        adam = optim.Adam(self._cvnn.parameters(), lr=config.learning_rate)
+        if self._optimizer_state is not None:
+            adam.load_state_dict(self._optimizer_state.to_torch())
+
+        training_interp.register_model("cvnn", self._cvnn)
+        training_interp.register_optimizer("adam", adam)
+
+        # Initialize metadata
+        metadata_interp.register("global_step", self._global_step)
+        metadata_interp.register("sobol_skip", self._sobol_skip)
+
+        self._cvnn.train()
+
+        # Track final metrics
+        final_loss = 0.0
+        final_grad_norm = 0.0
+
+        # Execute training steps via effects
+        for batch_idx in range(config.num_batches):
+            tic = time.perf_counter()
+
+            # Build effect sequence for this step
+            effects = self.build_training_step_effects(batch_idx, config)
+
+            # Execute via interpreter
+            result = await interpreter.interpret_sequence(effects)
+
+            match result:
+                case Failure(error):
+                    raise RuntimeError(f"Effect execution failed: {error}")
+                case Success(_):
+                    pass
+
+            # Get loss from registry for logging
+            loss_tensor = training_interp._tensor_registry.get(f"loss_{batch_idx}")
+            if loss_tensor is not None and hasattr(loss_tensor, "item"):
+                final_loss = float(loss_tensor.item())
+
+            # Compute grad norm
+            final_grad_norm = float(
+                torch.nn.utils.clip_grad_norm_(self._cvnn.parameters(), float("inf"))
+            )
+
+            # Logging
+            current_global_step = self._global_step + batch_idx + 1
+            if logger is not None:
+                logger(
+                    StepMetrics(
+                        step=self._global_step + batch_idx,
+                        batch_time=time.perf_counter() - tic,
+                        loss=final_loss,
+                        grad_norm=final_grad_norm,
+                        lr=float(adam.param_groups[0]["lr"]),
+                        optimizer=adam,
+                        model=self._cvnn,
+                    )
+                )
+
+            # Periodic blockchain commit
+            if (
+                blockchain_store is not None
+                and commit_interval is not None
+                and current_global_step % commit_interval == 0
+            ):
+                _logger.info(f"Periodic commit at step {current_global_step}")
+                await self._async_commit_to_blockchain(
+                    blockchain_store,
+                    adam,
+                    commit_message_template,
+                    final_loss,
+                    batch=current_global_step,
+                )
+
+        # Update internal state from metadata
+        global_step_val = metadata_interp._registry.get("global_step")
+        sobol_skip_val = metadata_interp._registry.get("sobol_skip")
+
+        if isinstance(global_step_val, int):
+            self._global_step = global_step_val
+        if isinstance(sobol_skip_val, int):
+            self._sobol_skip = sobol_skip_val
+
+        # Snapshot optimizer state
+        # NOTE: Explicit .cpu() calls acceptable per CPU/GPU policy for checkpoint I/O.
+        state_dict = adam.state_dict()
+        for param_id in state_dict["state"]:
+            for key in state_dict["state"][param_id]:
+                val = state_dict["state"][param_id][key]
+                if isinstance(val, torch.Tensor):
+                    state_dict["state"][param_id][key] = val.cpu()
+        self._optimizer_state = AdamOptimizerState.from_torch(state_dict)
+
+        # Final blockchain commit
+        if blockchain_store is not None and auto_commit:
+            final_global_step = self._global_step + config.num_batches
+            _logger.info(f"Final commit after training at step {final_global_step}")
+            await self._async_commit_to_blockchain(
+                blockchain_store,
+                adam,
+                commit_message_template,
+                final_loss,
+                batch=config.num_batches,
+            )
+
+        # Return immutable training result
         updated_config = self.snapshot()
         return TrainingResult(
             updated_config=updated_config,

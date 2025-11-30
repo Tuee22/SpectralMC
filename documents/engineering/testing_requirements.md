@@ -4,7 +4,19 @@
 
 All tests in SpectralMC must be fully typed, deterministic, and pass mypy strict mode. Tests are executed via `poetry run test-all`. All tests require GPU - silent CPU fallbacks are strictly forbidden.
 
-**Related Standards**: [Coding Standards](coding_standards.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [PyTorch Facade](pytorch_facade.md)
+**Related Standards**: [Purity Doctrine](purity_doctrine.md), [Coding Standards](coding_standards.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [PyTorch Facade](pytorch_facade.md)
+
+### Test Code Purity Exception
+
+Test code is **exempt** from certain purity requirements defined in the [Purity Doctrine](purity_doctrine.md):
+
+| Allowed in Tests | Why |
+|-----------------|-----|
+| `assert` statements | pytest requires them |
+| `pytest.raises()` | Testing exception behavior |
+| `for` loops in setup/teardown | Test infrastructure |
+
+Test code should still follow purity for the **code under test** - only test infrastructure may use these constructs.
 
 ---
 
@@ -337,10 +349,25 @@ tests/
 ├── test_gbm_trainer.py        # GBM trainer tests
 ├── test_models_torch.py       # PyTorch model tests
 ├── test_sobol_sampler.py      # Sobol sampler tests
-└── test_storage/              # Storage system tests
-    ├── test_chain.py
-    ├── test_store.py
-    └── test_verification.py
+├── test_storage/              # Storage system tests (14 files)
+│   ├── test_atomic_cas.py         # Atomic CAS operations
+│   ├── test_audit_log.py          # Audit logging
+│   ├── test_chain.py              # Blockchain chain operations
+│   ├── test_cli.py                # CLI commands
+│   ├── test_context_manager.py    # Async context manager
+│   ├── test_e2e_storage.py        # End-to-end storage tests
+│   ├── test_fast_forward.py       # Fast-forward merges
+│   ├── test_gc.py                 # Garbage collection
+│   ├── test_inference_client.py   # Inference client modes
+│   ├── test_retry_logic.py        # S3 retry logic
+│   ├── test_rollback.py           # Rollback operations
+│   ├── test_store.py              # Core store operations
+│   ├── test_tensorboard.py        # TensorBoard logging
+│   └── test_training_integration.py  # Training integration
+└── test_effects/              # Effect system tests
+    ├── test_effect_types.py       # Effect ADT validation
+    ├── test_mock_interpreter.py   # MockInterpreter tests
+    └── test_composition.py        # Effect composition tests
 ```
 
 **File naming**: `test_<module_name>.py` matches `src/spectralmc/<module_name>.py`

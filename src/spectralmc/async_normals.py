@@ -52,6 +52,13 @@ import cupy as cp
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
+from spectralmc.effects import (
+    CaptureRNGState,
+    EffectSequence,
+    GenerateNormals,
+    StreamSync,
+    sequence_effects,
+)
 from spectralmc.models.numerical import Precision
 
 
@@ -305,6 +312,35 @@ class ConcurrentNormGenerator:
             seed=self._base_seed,
             dtype=Precision.from_cupy(self._dtype),
             skips=self._served,
+        )
+
+    def build_generation_effects(self) -> EffectSequence[list[object]]:
+        """Build pure effect sequence describing normal matrix generation.
+
+        This method produces an immutable effect description that can be:
+        - Inspected and tested without GPU hardware
+        - Serialized for reproducibility tracking
+        - Composed with other effects in larger workflows
+
+        The actual execution happens when the interpreter processes these effects.
+
+        Returns:
+            EffectSequence describing: RNG capture → normal generation → stream sync.
+
+        Example:
+            >>> effects = gen.build_generation_effects()
+            >>> # Pure description - no side effects yet
+            >>> result = await interpreter.interpret_sequence(effects)
+        """
+        return sequence_effects(
+            CaptureRNGState(rng_type="numpy"),
+            GenerateNormals(
+                rows=self._rows,
+                cols=self._cols,
+                seed=self._base_seed,
+                skip=self._served,
+            ),
+            StreamSync(stream_type="cupy"),
         )
 
     # ------------------------------------------------------------------ #

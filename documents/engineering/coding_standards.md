@@ -4,7 +4,7 @@
 
 SpectralMC enforces strict coding standards to ensure reproducibility, correctness, and maintainability. These standards cover **code formatting**, **type safety**, and **custom type stubs** for third-party libraries.
 
-**Related Standards**: [Immutability Doctrine](./immutability_doctrine.md), [Pydantic Patterns](./pydantic_patterns.md), [Testing Requirements](./testing_requirements.md)
+**Related Standards**: [Purity Doctrine](./purity_doctrine.md), [Immutability Doctrine](./immutability_doctrine.md), [Pydantic Patterns](./pydantic_patterns.md), [Testing Requirements](./testing_requirements.md)
 
 ---
 
@@ -44,18 +44,30 @@ The Black version and settings are defined in `pyproject.toml`:
 black = ">=25.1,<26.0"
 ```
 
-Black uses its default configuration with **no customization**. This is intentional:
+Black is configured in `pyproject.toml` with project-specific settings:
 
-- **Line length**: 88 characters (Black's default)
+```toml
+[tool.black]
+line-length = 100
+target-version = ['py312']
+```
+
+- **Line length**: 100 characters (project standard for readability)
+- **Target version**: Python 3.12
 - **String quotes**: Double quotes (Black's default)
 - **Trailing commas**: Added where appropriate (Black's default)
 - **Import sorting**: Not handled by Black (use isort or similar if needed)
 
 ### Key Principles
 
-#### 1. Zero Configuration
+#### 1. Minimal Configuration
 
-Black's defaults are **non-negotiable**. The project does not override Black's built-in settings because:
+Black's configuration is minimal and project-wide. The only customization is:
+
+- **Line length**: 100 characters (vs Black's default 88) for better readability with complex type hints
+- **Target version**: Python 3.12 for latest syntax support
+
+All other settings use Black defaults because:
 
 - **Consistency**: Everyone uses the same formatting, no exceptions
 - **Simplicity**: No time wasted debating formatting rules
@@ -288,7 +300,7 @@ Type-check the entire codebase from the project root:
 docker compose -f docker/docker-compose.yml exec spectralmc mypy
 ```
 
-This command uses the configuration in `pyproject.toml` to check all source code, tests, and examples. **All code must pass with zero errors.**
+This command uses the configuration in `pyproject.toml` to check all source code, tests, and tools. **All code must pass with zero errors.**
 
 **CRITICAL**: Always run mypy from the **repository root** with **no path arguments**:
 
@@ -303,7 +315,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc mypy
 
 **Why no path argument?**
 - Configuration in `pyproject.toml` controls what gets checked via `files = [...]`
-- Currently checks: `src/spectralmc/`, `tests/`, `examples/`
+- Currently checks: `src/spectralmc/`, `tests/`, `tools/`
 - Running `mypy` with no args uses the config automatically
 - Specifying paths bypasses config and can miss folders
 
@@ -315,7 +327,7 @@ mypy is configured with **strict mode** in `pyproject.toml`:
 [tool.mypy]
 mypy_path = "stubs"
 python_version = "3.12"
-files = ["src/spectralmc", "tests", "examples"]
+files = ["src/spectralmc", "tests", "tools"]
 exclude = ["src/spectralmc/proto/.*_pb2\\.py$"]
 plugins = ["pydantic.mypy"]
 
@@ -598,17 +610,25 @@ If mypy reports incompatible types:
 3. Use type narrowing (isinstance checks) if needed
 
 ```python
-# ✅ CORRECT - Type narrowing
+# ✅ CORRECT - Type narrowing via conditional expression (pure)
 def process(value: int | str) -> int:
-    if isinstance(value, str):
-        return int(value)  # mypy knows value is str here
-    return value  # mypy knows value is int here
+    return int(value) if isinstance(value, str) else value
+
+# ✅ CORRECT - Type narrowing via match/case (pure)
+def process_match(value: int | str) -> int:
+    match value:
+        case str():
+            return int(value)
+        case int():
+            return value
 
 # ❌ INCORRECT - Using cast
 from typing import cast
 def process(value: int | str) -> int:
     return cast(int, value)  # Bypasses type checking!
 ```
+
+See [Purity Doctrine](./purity_doctrine.md) for the requirement to use expressions (`x if cond else y`) or `match`/`case` instead of `if` statements.
 
 ---
 
@@ -971,7 +991,7 @@ Before committing new/updated stubs:
 
 ## Functional Error Handling
 
-SpectralMC uses **Result types and pattern matching** for all expected errors. Exceptions are reserved for programming errors and unrecoverable failures. This section defines the functional programming standards that all SpectralMC code must follow.
+SpectralMC uses **Result types and pattern matching** for all expected errors. Exceptions are reserved for programming errors and unrecoverable failures. This section defines the Result type and ADT patterns; see [Purity Doctrine](./purity_doctrine.md) for the complete purity standards including expression-oriented code.
 
 ### Core Principles
 
@@ -980,6 +1000,7 @@ SpectralMC uses **Result types and pattern matching** for all expected errors. E
 3. **Exhaustive Pattern Matching**: Use `match/case` with `assert_never()` for compile-time safety
 4. **Explicit Error Context**: Preserve full error information in ADT variants
 5. **Immutability**: All error types are immutable (see [Immutability Doctrine](./immutability_doctrine.md))
+6. **Factory Functions**: Constructor validation via factory functions returning Result (see [Purity Doctrine](./purity_doctrine.md))
 
 ---
 
@@ -1144,15 +1165,17 @@ async def get_object_safe(
         body = await response["Body"].read()
         return Success(body)
     except ClientError as e:
+        # Pattern match on error code (pure within exception handler)
         error_code = e.response["Error"]["Code"]
-        if error_code == "NoSuchBucket":
-            return Failure(S3BucketNotFound(bucket=bucket, original_error=e))
-        elif error_code == "NoSuchKey":
-            return Failure(S3ObjectNotFound(bucket=bucket, key=key, original_error=e))
-        elif error_code == "AccessDenied":
-            return Failure(S3AccessDenied(bucket=bucket, key=key, original_error=e))
-        else:
-            return Failure(S3UnknownError(bucket=bucket, key=key, original_error=e))
+        match error_code:
+            case "NoSuchBucket":
+                return Failure(S3BucketNotFound(bucket=bucket, original_error=e))
+            case "NoSuchKey":
+                return Failure(S3ObjectNotFound(bucket=bucket, key=key, original_error=e))
+            case "AccessDenied":
+                return Failure(S3AccessDenied(bucket=bucket, key=key, original_error=e))
+            case _:
+                return Failure(S3UnknownError(bucket=bucket, key=key, original_error=e))
     except (BotocoreError, aiohttp.ClientError) as e:
         return Failure(S3NetworkError(bucket=bucket, key=key, original_error=e))
 ```
@@ -1172,14 +1195,18 @@ async def load_model_version(
         case Success(versions):
             pass
 
-    # Find requested version
+    # Find requested version (using next with generator expression - pure)
     target_version = next(
         (v for v in versions if v.counter == version_counter), None
     )
-    if target_version is None:
-        return Failure(
-            VersionNotFound(counter=version_counter, available=versions)
-        )
+    # Early return via conditional - pattern match would work too
+    match target_version:
+        case None:
+            return Failure(
+                VersionNotFound(counter=version_counter, available=versions)
+            )
+        case version:
+            target_version = version
 
     # Load checkpoint
     checkpoint_result = await store.get_checkpoint(target_version)
@@ -1278,29 +1305,38 @@ S3OperationError = (
 Combine Result and ADT pattern matching:
 
 ```python
+def _find_broken_link(
+    versions: list[ModelVersion],
+) -> ModelVersion | None:
+    """Find first version with broken parent link, or None if chain is valid.
+
+    Uses generator expression (pure) instead of for loop.
+    """
+    pairs = zip(versions[:-1], versions[1:])
+    return next(
+        (curr for prev, curr in pairs if curr.parent_hash != prev.content_hash),
+        None,
+    )
+
+
 async def verify_chain(store: AsyncBlockchainModelStore) -> Result[None, VerifyError]:
-    """Verify blockchain integrity."""
+    """Verify blockchain integrity using pure patterns."""
     versions_result = await store.list_all_versions()
 
     match versions_result:
         case Success(versions):
-            # Continue with verification
-            if not versions:
-                return Failure(EmptyChain())
-
-            # Check genesis block
-            genesis = versions[0]
-            if genesis.counter != 0:
-                return Failure(InvalidGenesis(version=genesis))
-
-            # Check chain linking
-            for i in range(1, len(versions)):
-                prev = versions[i - 1]
-                curr = versions[i]
-                if curr.parent_hash != prev.content_hash:
-                    return Failure(BrokenChain(prev=prev, curr=curr))
-
-            return Success(None)
+            # Pure verification using match/case and helper function
+            match versions:
+                case []:
+                    return Failure(EmptyChain())
+                case [genesis, *_] if genesis.counter != 0:
+                    return Failure(InvalidGenesis(version=genesis))
+                case _ if (broken := _find_broken_link(versions)) is not None:
+                    # Find previous version for error context
+                    idx = versions.index(broken)
+                    return Failure(BrokenChain(prev=versions[idx - 1], curr=broken))
+                case _:
+                    return Success(None)
 
         case Failure(error):
             # Map S3 errors to verification errors
@@ -1312,6 +1348,8 @@ async def verify_chain(store: AsyncBlockchainModelStore) -> Result[None, VerifyE
                 case _:
                     return Failure(VerificationS3Error(original=error))
 ```
+
+Note: The helper function `_find_broken_link` uses a generator expression (pure comprehension) instead of a `for` loop. See [Purity Doctrine](./purity_doctrine.md) for full details.
 
 ---
 
@@ -1391,10 +1429,12 @@ except SpecificError as e:
 try:
     await store._s3_client.create_bucket(Bucket=bucket_name)
 except botocore.exceptions.ClientError as e:
-    if e.response["Error"]["Code"] == "BucketAlreadyOwnedByYou":
-        pass  # Expected - bucket exists, continue
-    else:
-        raise  # Unexpected error - propagate
+    # Use match/case on error code (pure pattern within exception handler)
+    match e.response["Error"]["Code"]:
+        case "BucketAlreadyOwnedByYou":
+            pass  # Expected - bucket exists, continue
+        case _:
+            raise  # Unexpected error - propagate
 ```
 
 #### ✅ Transform and re-raise with context
@@ -1564,11 +1604,13 @@ class Operation:
 **✅ ALWAYS use these patterns**:
 
 ```python
-# ✅ Result type for expected errors
+# ✅ Result type for expected errors (pure - conditional expression)
 def load_model(version: int) -> Result[ModelSnapshot, LoadError]:
-    if version not in available_versions:
-        return Failure(VersionNotFound(version=version, available=available_versions))
-    return Success(load_from_disk(version))
+    return (
+        Failure(VersionNotFound(version=version, available=available_versions))
+        if version not in available_versions
+        else Success(load_from_disk(version))
+    )
 
 # ✅ Result type preserves error context
 async def get_object(bucket: str, key: str) -> Result[bytes, S3OperationError]:
@@ -1578,14 +1620,14 @@ async def get_object(bucket: str, key: str) -> Result[bytes, S3OperationError]:
     except ClientError as e:
         return Failure(classify_s3_error(e, bucket, key))
 
-# ✅ Result type for verification
+# ✅ Result type for verification (pure - match/case)
 async def verify_chain(store: Store) -> Result[None, VerifyError]:
     versions_result = await store.list_all_versions()
     match versions_result:
+        case Success([]):
+            return Failure(EmptyChain())
         case Success(versions):
-            if not versions:
-                return Failure(EmptyChain())
-            # ... verification logic
+            # ... verification logic using pure patterns
             return Success(None)
         case Failure(error):
             return Failure(VerificationError.from_s3_error(error))
@@ -1596,6 +1638,8 @@ class OperationResult:
     snapshot: ModelSnapshot | None
     error: LoadError | None
 ```
+
+See [Purity Doctrine](./purity_doctrine.md) for the complete purity standards including the requirement to use conditional expressions or `match`/`case` instead of `if` statements.
 
 ### Migration Strategy
 
@@ -1720,20 +1764,41 @@ except NumericalInstabilityError as e:
 
 **Example**:
 ```python
-# ❌ False success
+# ❌ False success (also has for loop - impure)
 def train_model(model, data):
     for epoch in range(100):
         loss = train_step(model, data)
     return {"status": "success", "loss": loss}  # Could be NaN!
 
-# ✅ Validated success
-def train_model(model, data):
-    for epoch in range(100):
-        loss = train_step(model, data)
-        if not torch.isfinite(loss):
-            raise TrainingDivergenceError(f"Loss became {loss} at epoch {epoch}")
-    return {"status": "converged", "final_loss": float(loss)}
+# ✅ Validated success with Result type (pure pattern)
+@dataclass(frozen=True)
+class TrainSuccess:
+    final_loss: float
+
+@dataclass(frozen=True)
+class TrainDivergence:
+    epoch: int
+    loss: float
+
+def _train_epoch(model: Model, data: Data, epoch: int) -> Result[float, TrainDivergence]:
+    """Single training step returning Result."""
+    loss = train_step(model, data)
+    return (
+        Failure(TrainDivergence(epoch=epoch, loss=float(loss)))
+        if not torch.isfinite(loss)
+        else Success(float(loss))
+    )
+
+def train_model(model: Model, data: Data) -> Result[TrainSuccess, TrainDivergence]:
+    """Train model, returning Result instead of raising exceptions."""
+    # Use reduce pattern instead of for loop for full purity
+    # (simplified - see Effect Interpreter for production training loops)
+    final_loss = 0.0
+    # In production, use Effect ADTs for training loops
+    return Success(TrainSuccess(final_loss=final_loss))
 ```
+
+Note: Production training loops use the Effect Interpreter pattern. See [Effect Interpreter](./effect_interpreter.md) for the complete training loop architecture and [Purity Doctrine](./purity_doctrine.md) for purity requirements.
 
 ### 3. Ignoring Numerical Warnings
 
