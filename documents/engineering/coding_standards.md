@@ -1666,6 +1666,14 @@ def test_pattern_matching_exhaustiveness():
     # ... etc
 ```
 
+### Advanced Functional Patterns
+
+For advanced functional programming patterns beyond Result types and basic ADTs:
+
+- **Effect Interpreter**: See [Effect Interpreter](effect_interpreter.md) for modeling all side effects as pure ADT types
+- **Effect Composition**: See [Effect Interpreter](effect_interpreter.md#effect-composition) for sequential and parallel effect composition
+- **Reproducibility Proofs**: See [Reproducibility Proofs](reproducibility_proofs.md) for how pure code enables provable determinism
+
 ---
 
 ## Implementation Anti-Patterns

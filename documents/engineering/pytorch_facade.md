@@ -4,7 +4,7 @@
 
 SpectralMC uses a custom PyTorch facade (`spectralmc.models.torch`) to ensure guaranteed reproducibility of training across different environments. This facade **must** be imported before any direct PyTorch imports.
 
-**Related Standards**: [Coding Standards](coding_standards.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)
+**Related Standards**: [Coding Standards](coding_standards.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [Reproducibility Proofs](reproducibility_proofs.md), [Effect Interpreter](effect_interpreter.md)
 
 ---
 
@@ -24,6 +24,10 @@ Without the facade, PyTorch's default behavior is **non-deterministic**:
 - Thread-local state can cause race conditions
 
 The facade fixes all of these issues **before** PyTorch initializes.
+
+**Formal Proofs**: For the formal proof of how the facade guarantees deterministic execution, see [Reproducibility Proofs](reproducibility_proofs.md#reproducibility-via-effect-sequencing).
+
+**Effect Interpreter Role**: The facade serves as an effect interpreter for determinism. See [Effect Interpreter](effect_interpreter.md) for how this fits into the broader effect system.
 
 ---
 
@@ -481,4 +485,4 @@ def train_complex_model(
 - **Performance cost**: ~5-15% slower, but reproducible
 - **Required everywhere**: Tests, scripts, libraries all use facade
 
-See also: [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [Testing Requirements](testing_requirements.md), [Coding Standards](./coding_standards.md)
+See also: [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [Testing Requirements](testing_requirements.md), [Coding Standards](coding_standards.md), [Reproducibility Proofs](reproducibility_proofs.md), [Effect Interpreter](effect_interpreter.md)

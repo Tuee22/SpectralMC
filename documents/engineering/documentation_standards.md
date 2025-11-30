@@ -4,7 +4,51 @@
 
 SpectralMC requires comprehensive documentation for all modules, functions, and classes. Documentation serves as executable specification and must be maintained alongside code.
 
-**Related Standards**: [Coding Standards](coding_standards.md), [Pydantic Patterns](pydantic_patterns.md)
+**Related Standards**: [Coding Standards](coding_standards.md), [Pydantic Patterns](pydantic_patterns.md), [Effect Interpreter](effect_interpreter.md)
+
+---
+
+## Single Source of Truth (SSoT) Principles
+
+### What is SSoT?
+
+Each topic has exactly **ONE canonical document**. All other documents link to it rather than duplicating content. This eliminates inconsistencies and reduces maintenance burden.
+
+### SSoT Document Requirements
+
+1. **Clear scope statement** at top of document
+2. **"Related Standards"** links to other SSoT docs
+3. **Comprehensive coverage** of the topic
+4. **No duplication** with other SSoT docs
+
+### SSoT Documents in SpectralMC
+
+| Document | Canonical For |
+|----------|---------------|
+| [coding_standards.md](coding_standards.md) | Type safety, basic ADTs, error handling, deprecation |
+| [testing_requirements.md](testing_requirements.md) | Test patterns, GPU requirements, anti-patterns |
+| [immutability_doctrine.md](immutability_doctrine.md) | Immutability rules, frozen dataclasses |
+| [pytorch_facade.md](pytorch_facade.md) | Determinism, CVNN patterns, ComplexValuedModel |
+| [cpu_gpu_compute_policy.md](cpu_gpu_compute_policy.md) | Device placement, CPU/GPU boundaries |
+| [blockchain_storage.md](blockchain_storage.md) | Model versioning, atomic commits |
+| [effect_interpreter.md](effect_interpreter.md) | Effect ADTs, interpreter pattern, effect composition |
+| [reproducibility_proofs.md](reproducibility_proofs.md) | Bit-exact guarantees, determinism proofs |
+
+### Linking Protocol
+
+- **Relative links**: `[Coding Standards](coding_standards.md)`
+- **Section anchors**: `[Result Types](coding_standards.md#result-types)`
+- **Bidirectional linking**: If A links to B, B should link back to A
+
+### Duplication Rules
+
+| Allowed | Forbidden |
+|---------|-----------|
+| Quick reference summaries (with link to SSoT) | Full content duplication |
+| Code examples illustrating concepts | Copy-pasted sections |
+| Cross-reference notes | Restated rules without attribution |
+
+**Example**: CLAUDE.md may summarize "Run tests via Docker" with link to [testing_requirements.md](testing_requirements.md), but must NOT duplicate the full test execution workflow.
 
 ---
 
@@ -610,15 +654,215 @@ Before committing Mermaid diagrams, verify:
 
 ---
 
+## ADT Documentation Patterns
+
+Algebraic Data Types (ADTs) require specific documentation patterns to ensure exhaustive handling and type safety. See [Effect Interpreter](effect_interpreter.md) for complete ADT examples.
+
+### Required Elements for ADT Docstrings
+
+1. **`kind` field purpose** - Explain the discriminator for pattern matching
+2. **All variant fields** documented with types and descriptions
+3. **Example pattern match** showing exhaustive handling
+4. **Link to coding_standards.md** for full ADT rules
+
+### Example ADT Docstring
+
+```python
+@dataclass(frozen=True)
+class S3BucketNotFound:
+    """S3 bucket does not exist.
+
+    This variant is returned when the specified bucket cannot be found.
+    Part of the S3OperationError discriminated union.
+
+    Attributes:
+        bucket_name: Name of the bucket that was not found.
+        message: Error message from S3.
+
+    Example:
+        >>> match result:
+        ...     case Failure(S3BucketNotFound(bucket_name=b)):
+        ...         print(f"Bucket not found: {b}")
+        ...     case Failure(S3ObjectNotFound(key=k)):
+        ...         print(f"Object not found: {k}")
+        ...     case _:
+        ...         assert_never(result)  # Exhaustiveness check
+
+    See Also:
+        - coding_standards.md - ADT patterns and exhaustive matching
+        - effect_interpreter.md - Effect ADT hierarchy
+    """
+    bucket_name: str
+    message: str
+```
+
+### Union Type Documentation
+
+Document the union type that combines ADT variants:
+
+```python
+# Union type for all S3 errors - enables exhaustive pattern matching
+# Note: Named S3OperationError to avoid conflict with exception-based S3Error
+S3OperationError = (
+    S3BucketNotFound | S3ObjectNotFound | S3AccessDenied | S3NetworkError | S3UnknownError
+)
+```
+
+---
+
+## Effect Type Documentation Patterns
+
+Effect-producing functions require special documentation to make side effects explicit. See [Effect Interpreter](effect_interpreter.md) for the complete effect system.
+
+### Documenting Effect-Producing Functions
+
+Functions that produce effects (I/O, GPU operations, async) must document their effects:
+
+```python
+async def commit_snapshot(
+    store: AsyncBlockchainModelStore,
+    config: GbmCVNNPricerConfig,
+    message: str,
+) -> Result[ModelVersion, CommitError]:
+    """Commit model snapshot to blockchain storage.
+
+    Effects:
+        - S3 I/O: Writes checkpoint.pb, metadata.json, content_hash.txt
+        - S3 I/O: Updates chain.json atomically (CAS)
+        - Network: May retry on conflict (exponential backoff)
+
+    Args:
+        store: Async blockchain model store instance.
+        config: Frozen trainer configuration to commit.
+        message: Commit message describing the version.
+
+    Returns:
+        Success(ModelVersion): Committed version with content hash.
+        Failure(CommitError): Error variant describing failure mode.
+
+    See Also:
+        - effect_interpreter.md - Effect Interpreter doctrine
+        - blockchain_storage.md - Atomic commit protocol
+    """
+```
+
+### Effect Flow Diagrams
+
+Effect-producing modules SHOULD include a Mermaid diagram showing effect flow:
+
+```mermaid
+flowchart TB
+    PureInput[Pure Input - Config]
+    DescribeEffect[Describe Effect - ADT]
+    Interpreter[Interpreter Executes]
+    ResultType[Result Type Returned]
+
+    PureInput --> DescribeEffect
+    DescribeEffect --> Interpreter
+    Interpreter --> ResultType
+```
+
+### Effect Boundary Documentation
+
+When a module crosses the pure/effectful boundary, document it clearly:
+
+```python
+"""
+spectralmc.storage.store
+========================
+
+Effect Boundary
+---------------
+This module is an **effect interpreter** - it executes storage effects.
+All code calling into this module should be aware that it performs I/O.
+
+Pure callers should use the Effect ADT types from `effect_interpreter.md`
+and pass them to the interpreter for execution.
+
+Effects Performed
+-----------------
+- S3 reads/writes via boto3 async client
+- Network I/O with retry logic
+- Atomic CAS operations on chain.json
+"""
+```
+
+---
+
+## Mermaid Requirements by Document Category
+
+Different document types require different diagram patterns:
+
+### Mandatory Diagrams
+
+| Document Category | Required Diagram Types |
+|-------------------|------------------------|
+| Architecture docs | Component diagram (flowchart TB) |
+| Workflow docs | Sequence diagram |
+| Decision docs | Decision tree (flowchart TB with diamonds) |
+| State machine docs | State diagram (flowchart TB with states) |
+| FP/Effect docs | Effect flow diagram + type hierarchy |
+
+### Diagram Templates
+
+#### Component Architecture Template
+
+```mermaid
+flowchart TB
+    ComponentA[Component A - Description]
+    ComponentB[Component B - Description]
+    ComponentC[Component C - Description]
+
+    ComponentA --> ComponentB
+    ComponentB --> ComponentC
+```
+
+#### Decision Tree Template
+
+```mermaid
+flowchart TB
+    Start[Start]
+    Decision{Decision Question?}
+    OptionA[Option A Result]
+    OptionB[Option B Result]
+
+    Start --> Decision
+    Decision -->|Yes| OptionA
+    Decision -->|No| OptionB
+```
+
+#### Effect Flow Template
+
+```mermaid
+flowchart TB
+    PureCode[Pure Code Layer]
+    EffectADT[Effect ADT]
+    Boundary[Effect Boundary]
+    Interpreter[Interpreter]
+    SideEffect[Side Effect Execution]
+    Result[Result Type]
+
+    PureCode --> EffectADT
+    EffectADT --> Boundary
+    Boundary --> Interpreter
+    Interpreter --> SideEffect
+    SideEffect --> Result
+```
+
+---
+
 ## Summary
 
+- **SSoT Principles**: One canonical document per topic, link don't duplicate
 - **Module docs**: Overview, implementation details, API catalogue
 - **Function docs**: Google-style with Args, Returns, Raises sections
 - **Class docs**: Overview, mathematical formulation, Attributes, Example
+- **ADT docs**: kind field, all variants, pattern match example
+- **Effect docs**: Effects section, flow diagrams, boundary documentation
 - **Technical docs**: Whitepapers in `documents/whitepapers/` for theory
 - **Visual docs**: Mermaid diagrams with universal compatibility (TB orientation, safe syntax)
 - **Formatting**: 88-character line wrap, consistent with Black
 - **Math notation**: reStructuredText or inline LaTeX
 - **Examples**: Doctest format or code blocks
 
-See also: [Coding Standards](coding_standards.md), [Docker Build Philosophy](docker_build_philosophy.md)
+See also: [Coding Standards](coding_standards.md), [Effect Interpreter](effect_interpreter.md), [Docker Build Philosophy](docker_build_philosophy.md)

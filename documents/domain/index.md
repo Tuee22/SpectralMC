@@ -55,4 +55,4 @@ Research on handling variable-length input sequences.
 
 - [Engineering Standards](../engineering/index.md) - Implementation practices
 - [Product Documentation](../product/index.md) - Deployment and operations
-- [Project Patterns](../engineering/project_patterns.md) - CVNN implementation patterns
+- [PyTorch Facade](../engineering/pytorch_facade.md) - CVNN implementation patterns and determinism

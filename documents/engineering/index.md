@@ -115,6 +115,24 @@ Violating these guidelines can result in:
     - CLI tools and TensorBoard integration
     - Training integration with auto-commit
 
+### Functional Architecture
+
+11. **[Effect Interpreter](effect_interpreter.md)** ⭐ Effect System Doctrine
+    - Effect ADT hierarchy (GPU, Training, Storage, RNG effects)
+    - Effect Interpreter protocol and implementation
+    - Effect composition (sequential, parallel, monadic)
+    - Making illegal states unrepresentable
+    - Mock interpreters for pure testing
+    - Migration strategy from current architecture
+
+12. **[Reproducibility Proofs](reproducibility_proofs.md)** ⭐ Determinism Guarantees
+    - Provable reproducibility through pure code
+    - Effect sequencing via PyTorch Facade
+    - RNG as explicit effect (state threading)
+    - Checkpoint/resume correctness proof
+    - Type-level reproducibility guarantees
+    - Complete reproducibility architecture
+
 ---
 
 ## Cross-Reference Guide
@@ -142,6 +160,17 @@ Violating these guidelines can result in:
 - **Primary**: [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) - Device placement and transfers
 - **Related**: [PyTorch Facade](pytorch_facade.md) - Deterministic algorithms (5-15% slower)
 - **Related**: [Docker Build Philosophy](docker_build_philosophy.md) - Build-time performance optimizations
+
+### Functional Programming
+- **Primary**: [Coding Standards](coding_standards.md) - Basic ADTs, Result types
+- **Advanced**: [Effect Interpreter](effect_interpreter.md) - Effect ADTs, interpreter pattern, composition
+- **Related**: [Immutability Doctrine](immutability_doctrine.md) - Frozen dataclasses
+
+### Reproducibility
+- **Primary**: [Reproducibility Proofs](reproducibility_proofs.md) - Formal determinism guarantees
+- **Related**: [PyTorch Facade](pytorch_facade.md) - Determinism settings
+- **Related**: [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) - CPU initialization for reproducibility
+- **Related**: [Effect Interpreter](effect_interpreter.md) - Effect sequencing for determinism
 
 ---
 
@@ -241,7 +270,14 @@ Following these standards ensures that SpectralMC maintains:
 
 All code must pass `mypy --strict` and `black --check` before being committed. The custom type stubs in `stubs/` ensure complete type coverage for all dependencies, while the CPU/GPU compute policy guarantees reproducible, deterministic execution with GPU performance.
 
-### Recent Changes (2025-11-29)
+### Recent Changes (2025-11-30)
+
+- **Added**: [Effect Interpreter](effect_interpreter.md) - New SSoT for effect system doctrine
+- **Added**: [Reproducibility Proofs](reproducibility_proofs.md) - New SSoT for determinism guarantees
+- **Updated**: [Documentation Standards](documentation_standards.md) - SSoT principles, ADT patterns, effect documentation
+- **Updated**: Cross-reference guide with Functional Programming and Reproducibility sections
+
+### Previous Changes (2025-11-29)
 
 - **Consolidated**: Merged `functional_programming.md` into [Coding Standards](coding_standards.md) - now SSoT for all coding standards including error handling
 - **Added**: "No Exception Swallowing Doctrine" section in [Coding Standards](coding_standards.md)
