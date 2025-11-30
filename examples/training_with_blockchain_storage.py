@@ -25,10 +25,12 @@ from spectralmc.gbm_trainer import (
     TrainingConfig,
 )
 from spectralmc.models.numerical import Precision
+from spectralmc.result import Success, Failure
 from spectralmc.sobol_sampler import BoundSpec
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     InferenceClient,
+    TrackingMode,
     load_snapshot_from_checkpoint,
 )
 
@@ -149,53 +151,55 @@ async def train_with_blockchain() -> None:
         print("\n5. Training complete!")
 
         # List versions
-        head = await store.get_head()
-        if head is not None:
-            print(f"\n6. Blockchain status:")
-            print(f"   - Total versions: {head.counter + 1}")
-            print(f"   - Latest version: v{head.counter:010d}")
-            print(f"   - Content hash: {head.content_hash[:16]}...")
-            print(f"   - Commit message: {head.commit_message}")
+        head_result = await store.get_head()
+        match head_result:
+            case Success(head):
+                print(f"\n6. Blockchain status:")
+                print(f"   - Total versions: {head.counter + 1}")
+                print(f"   - Latest version: v{head.counter:010d}")
+                print(f"   - Content hash: {head.content_hash[:16]}...")
+                print(f"   - Commit message: {head.commit_message}")
 
-        # Load model back from blockchain
-        print("\n7. Loading model from blockchain storage...")
-        model_template = create_simple_cvnn()
-        if torch.cuda.is_available():
-            model_template = model_template.cuda()
+                # Load model back from blockchain
+                print("\n7. Loading model from blockchain storage...")
+                model_template = create_simple_cvnn()
+                if torch.cuda.is_available():
+                    model_template = model_template.cuda()
 
-        config_template = create_training_config()
+                config_template = create_training_config()
 
-        # Type narrowing for head (cannot be None after commit)
-        assert head is not None, "HEAD should exist after training commit"
+                loaded_snapshot = await load_snapshot_from_checkpoint(
+                    store,
+                    head,
+                    model_template,
+                    config_template,
+                )
 
-        loaded_snapshot = await load_snapshot_from_checkpoint(
-            store,
-            head,
-            model_template,
-            config_template,
-        )
+                print(f"   - Loaded global_step: {loaded_snapshot.global_step}")
+                print(f"   - Loaded sobol_skip: {loaded_snapshot.sobol_skip}")
 
-        print(f"   - Loaded global_step: {loaded_snapshot.global_step}")
-        print(f"   - Loaded sobol_skip: {loaded_snapshot.sobol_skip}")
+                # Run inference with loaded model
+                print("\n8. Running inference with loaded model...")
+                loaded_pricer = GbmCVNNPricer(loaded_snapshot)
 
-        # Run inference with loaded model
-        print("\n8. Running inference with loaded model...")
-        loaded_pricer = GbmCVNNPricer(loaded_snapshot)
+                # Create sample input
+                test_input = BlackScholes.Inputs(
+                    X0=100.0,
+                    K=100.0,
+                    T=1.0,
+                    v=0.2,
+                    r=0.05,
+                    d=0.0,
+                )
 
-        # Create sample input
-        test_input = BlackScholes.Inputs(
-            X0=100.0,
-            K=100.0,
-            T=1.0,
-            v=0.2,
-            r=0.05,
-            d=0.0,
-        )
-
-        results = loaded_pricer.predict_price([test_input])
-        print(f"   - Test input: spot=100, strike=100, T=1.0, vol=0.2")
-        print(f"   - Predicted call price: ${results[0].call_price:.4f}")
-        print(f"   - Predicted put price: ${results[0].put_price:.4f}")
+                results = loaded_pricer.predict_price([test_input])
+                print(f"   - Test input: spot=100, strike=100, T=1.0, vol=0.2")
+                print(f"   - Predicted call price: ${results[0].call_price:.4f}")
+                print(f"   - Predicted put price: ${results[0].put_price:.4f}")
+            case Failure(error):
+                print(f"\nError retrieving HEAD pointer: {error}")
+                print("Cannot proceed with model loading. Skipping inference demo.")
+                return
 
     print("\n" + "=" * 80)
     print("Example complete!")
@@ -220,7 +224,7 @@ async def demonstrate_inference_client() -> None:
         # Use InferenceClient in tracking mode
         print("\n1. Starting InferenceClient (tracking mode)...")
         async with InferenceClient(
-            version_counter=None,  # Track latest
+            mode=TrackingMode(),  # Track latest
             poll_interval=10.0,
             store=store,
             model_template=model_template,

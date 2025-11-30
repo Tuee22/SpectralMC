@@ -1,38 +1,123 @@
-# Local .terraform directories
+# Git metadata
+.git
+.gitignore
+.gitattributes
+.env
 
-# Crash log files
-**/crash.log
+# Python cache
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+eggs
+.eggs
+lib
+lib64
+parts
+sdist
+var
+wheels
+*.dist-info
 
-# data folder
+# Virtual environments
+venv
+env
+ENV
+.venv
+
+# Poetry - exclude lock to reduce context size, will be regenerated
+poetry.lock
+
+# Testing
+.pytest_cache
+.coverage
+htmlcov
+.tox
+.hypothesis
+
+# Type checking
+.mypy_cache
+**/.mypy_cache
+.dmypy.json
+dmypy.json
+
+# IDEs
+.vscode
+.idea
+*.swp
+*.swo
+*~
+**/.DS_Store
+
+# Documentation - keep essential project docs
+*.md
+!CLAUDE.md
+!STYLE_GUIDE.md
+!README.md
+
+# Logs
+*.log
+**/*.log
+logs
+**/.logs
+
+# Notebooks
+.ipynb_checkpoints
+**/*.ipynb_checkpoints
+*.ipynb
+
+# Docker - avoid recursive copying
+docker/
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# CI/CD
+.github
+.gitlab-ci.yml
+
+# Temporary files
+tmp
+temp
+*.tmp
+*.bak
+*.backup
+**/.failed_artifacts
+
+# OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE_BIN/
+**/.Trash-0
+
+# Build artifacts
+*.whl
+*.tar.gz
+**/*.zip
+**/*.bin
+**/*.pid
+
+# Data directories
 data/
+**/.miniodata
 
-# Ignore any secret or private key files
+# Secrets
 **/*.pem
 **/*.key
 
-# Ignore .DS_Store (macOS specific)
-**/.DS_Store
+# Crash logs
+**/crash.log
 
-# Ignore .Trash-0 (linux specific)
-**/.Trash-0
+# Terraform
+.terraform/
 
-# other extensions to ignore
-**/*.zip
-**/*.log
-**/*.txt
-**/*.bin
-**/*.pid
-**/*.ipynb_checkpoints
-
-**/__pycache__
-
-.git
-.env
-.gitignore
-.dockerignore
-poetry.lock
-**/.mypy_cache
+# Setup scripts (run on host, not in container)
 setup.sh
-**/.failed_artifacts
-**/.logs
-**/.miniodata

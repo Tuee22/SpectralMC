@@ -1,4 +1,5 @@
 from google.protobuf import message
+
 from . import simulation_pb2, tensors_pb2
 
 class TrainingConfigProto(message.Message):

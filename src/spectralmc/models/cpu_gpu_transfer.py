@@ -1,25 +1,35 @@
 # src/spectralmc/models/cpu_gpu_transfer.py
 from __future__ import annotations
 
-"""
-Pure‑functional helpers to
 
-* move an arbitrarily‑nested *TensorTree* CPU ↔ CUDA,
-* detect the unique (Device, DType) of a tree, and
+"""
+Pure-functional helpers to
+
+* move an arbitrarily-nested *TensorTree* CPU ↔ CUDA,
+* detect the unique (Device, DType) of a tree, and
 * derive that pair for model / optimiser ``state_dict`` objects.
 
-No explicit ``if``/``for`` loops in user‑level code; comprehensions,
-pattern‑matching, and expression‑level guards do the work.
+No explicit ``if``/``for`` loops in user-level code; comprehensions,
+pattern-matching, and expression-level guards do the work.
 
 Fully ``mypy --strict`` clean.
 """
 
 from collections.abc import Hashable, Mapping
 from enum import Enum
-from typing import List, Optional, Tuple, Union, NoReturn
+from typing import NoReturn, Union
 
 import torch
-from spectralmc.models.torch import Device, AnyDType
+
+# CRITICAL: Import facade BEFORE torch for deterministic algorithms
+from spectralmc.models.torch import (
+    _TORCH_DTYPE_TO_STR,
+    AnyDType,
+    Device,
+    FullPrecisionDType,
+    ReducedPrecisionDType,
+)
+
 
 __all__ = [
     "TransferDestination",
@@ -63,19 +73,23 @@ Scalar = Union[int, float, bool, str, bytes, None]
 TensorTree = Union[
     torch.Tensor,
     Scalar,
-    List["TensorTree"],
-    Tuple["TensorTree", ...],
+    list["TensorTree"],
+    tuple["TensorTree", ...],
     Mapping[Hashable, "TensorTree"],
 ]
 
 # ──────────────────────────── global resources ──────────────────────────────
-_CUDA_STREAM: Optional[torch.cuda.Stream] = (
+# NOTE: Conditional stream creation is intentional. torch.cuda.Stream() fails
+# without CUDA. All CUDA operations fail-fast via the explicit check in
+# move_tensor_tree() at lines 158-160. This pattern is acceptable per CPU/GPU
+# policy as infrastructure code that enables the TensorTree API.
+_CUDA_STREAM: torch.cuda.Stream | None = (
     torch.cuda.Stream(Device.cuda.to_torch()) if torch.cuda.is_available() else None
 )
 
 
 # ───────────────────────── functional helpers ───────────────────────────────
-def _raise(exc: Exception) -> NoReturn:  # expression‑level raise
+def _raise(exc: Exception) -> NoReturn:  # expression-level raise
     raise exc
 
 
@@ -84,7 +98,7 @@ def _copy_tensor(
     *,
     dest: TransferDestination,
 ) -> torch.Tensor:
-    """Clone *src* to *dest* (non‑blocking, global stream)."""
+    """Clone *src* to *dest* (non-blocking, global stream)."""
     target_dev = dest.to_torch_device()
 
     src.device == target_dev and _raise(
@@ -122,7 +136,7 @@ def _move(
     *,
     dest: TransferDestination,
 ) -> TensorTree:
-    """Pure‑functional recursion via pattern matching."""
+    """Pure-functional recursion via pattern matching."""
     match obj:
         case torch.Tensor():
             return _copy_tensor(obj, dest=dest)
@@ -155,10 +169,10 @@ def move_tensor_tree(
 
 
 # ───────────────────────── tree inspection util ────────────────────────────
-def get_tree_device_dtype(tree: TensorTree) -> Tuple[Device, AnyDType]:
+def get_tree_device_dtype(tree: TensorTree) -> tuple[Device, AnyDType]:
     """Return the unique ``(Device, AnyDType)`` shared by *all* tensors in *tree*."""
 
-    def _pairs(node: TensorTree) -> set[Tuple[torch.device, torch.dtype]]:
+    def _pairs(node: TensorTree) -> set[tuple[torch.device, torch.dtype]]:
         match node:
             case torch.Tensor() as t:
                 return {(t.device, t.dtype)}
@@ -171,18 +185,9 @@ def get_tree_device_dtype(tree: TensorTree) -> Tuple[Device, AnyDType]:
 
     pairs = _pairs(tree)
     not pairs and _raise(RuntimeError("TensorTree contains no tensors."))
-    len(pairs) != 1 and _raise(
-        RuntimeError("TensorTree contains heterogeneous tensors.")
-    )
+    len(pairs) != 1 and _raise(RuntimeError("TensorTree contains heterogeneous tensors."))
 
     dev, dt = next(iter(pairs))
-
-    # Import here to access the new types
-    from spectralmc.models.torch import (
-        FullPrecisionDType,
-        ReducedPrecisionDType,
-        _TORCH_DTYPE_TO_STR,
-    )
 
     if dt not in _TORCH_DTYPE_TO_STR:
         _raise(ValueError(f"Unsupported torch.dtype {dt!r}"))
@@ -197,20 +202,20 @@ def get_tree_device_dtype(tree: TensorTree) -> Tuple[Device, AnyDType]:
     return Device.from_torch(dev), dtype
 
 
-# ───────────────────── state‑dict helpers (strictly typed) ──────────────────
+# ───────────────────── state-dict helpers (strictly typed) ──────────────────
 def module_state_device_dtype(
     state: Mapping[str, torch.Tensor],
-) -> Tuple[Device, AnyDType]:
+) -> tuple[Device, AnyDType]:
     """Device/dtype for a *model* ``state_dict``."""
     return get_tree_device_dtype(tuple(state.values()))
 
 
 def optimizer_state_device_dtype(
     state: Mapping[str, object],  # <-- keys are *str* now
-) -> Tuple[Device, AnyDType]:
+) -> tuple[Device, AnyDType]:
     """Device/dtype for an *optimizer* ``state_dict`` (Adam, etc.)."""
 
-    def _tensors(node: object) -> List[torch.Tensor]:
+    def _tensors(node: object) -> list[torch.Tensor]:
         match node:
             case torch.Tensor() as t:
                 return [t]

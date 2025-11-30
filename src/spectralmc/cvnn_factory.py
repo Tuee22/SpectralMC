@@ -2,20 +2,13 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, List, Optional, Tuple, TypeAlias, Union
+from typing import TypeAlias, Union
 
 import torch
-import torch.nn as nn
 from pydantic import BaseModel, ConfigDict, PositiveInt
+from torch import nn
 
-from spectralmc.models.torch import (
-    TensorState,
-    DType,
-    AnyDType,
-    Device,
-    default_dtype,
-    default_device,
-)
+# CRITICAL: Import facade BEFORE torch for deterministic algorithms
 from spectralmc.cvnn import (
     ComplexLinear,
     ComplexResidual,
@@ -25,8 +18,16 @@ from spectralmc.cvnn import (
     modReLU,
     zReLU,
 )
+from spectralmc.models.torch import (
+    AnyDType,
+    Device,
+    TensorState,
+    default_device,
+    default_dtype,
+)
 
-__all__: Tuple[str, ...] = (
+
+__all__: tuple[str, ...] = (
     "ActivationKind",
     "LayerKind",
     "WidthSpec",
@@ -60,13 +61,13 @@ class LayerKind(str, Enum):
 class WidthSpec(BaseModel):
     """Base class for width specification."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class PreserveWidth(WidthSpec):
     """Tag-only class indicating width should be preserved from input."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class ExplicitWidth(WidthSpec):
@@ -74,22 +75,22 @@ class ExplicitWidth(WidthSpec):
 
     value: PositiveInt
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class ActivationCfg(BaseModel):
     kind: ActivationKind
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class LinearCfg(BaseModel):
     kind: LayerKind = LayerKind.LINEAR
     width: WidthSpec = PreserveWidth()
     bias: bool = True
-    activation: Optional[ActivationCfg] = None
+    activation: ActivationCfg | None = None
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class NaiveBNCfg(BaseModel):
@@ -98,9 +99,9 @@ class NaiveBNCfg(BaseModel):
     momentum: float = 0.1
     affine: bool = True
     track_running_stats: bool = True
-    activation: Optional[ActivationCfg] = None
+    activation: ActivationCfg | None = None
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class CovBNCfg(BaseModel):
@@ -109,40 +110,38 @@ class CovBNCfg(BaseModel):
     momentum: float = 0.1
     affine: bool = True
     track_running_stats: bool = True
-    activation: Optional[ActivationCfg] = None
+    activation: ActivationCfg | None = None
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
-LayerCfg: TypeAlias = Union[
-    LinearCfg, NaiveBNCfg, CovBNCfg, "SequentialCfg", "ResidualCfg"
-]
+LayerCfg: TypeAlias = Union[LinearCfg, NaiveBNCfg, CovBNCfg, "SequentialCfg", "ResidualCfg"]
 
 
 class SequentialCfg(BaseModel):
     kind: LayerKind = LayerKind.SEQ
-    layers: List[LayerCfg]
-    activation: Optional[ActivationCfg] = None
+    layers: list[LayerCfg]
+    activation: ActivationCfg | None = None
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class ResidualCfg(BaseModel):
     kind: LayerKind = LayerKind.RES
     body: SequentialCfg
-    projection: Optional[LinearCfg] = None
-    activation: Optional[ActivationCfg] = None
+    projection: LinearCfg | None = None
+    activation: ActivationCfg | None = None
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class CVNNConfig(BaseModel):
     dtype: AnyDType
-    layers: List[LayerCfg]
+    layers: list[LayerCfg]
     seed: PositiveInt
-    final_activation: Optional[ActivationCfg] = None
+    final_activation: ActivationCfg | None = None
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 # ─────────────────────────── builder helpers ───────────────────────────────
@@ -154,19 +153,15 @@ def _seq(*mods: nn.Module) -> nn.Module:
     return mods[0] if len(mods) == 1 else ComplexSequential(*mods)
 
 
-def _maybe_activate(
-    mod: nn.Module, act: Optional[ActivationCfg], width: int
-) -> nn.Module:
+def _maybe_activate(mod: nn.Module, act: ActivationCfg | None, width: int) -> nn.Module:
     return _seq(mod, _make_activation(act.kind, width)) if act else mod
 
 
-def _maybe_project(mod: nn.Module, in_w: int, out_w: int) -> Tuple[nn.Module, int]:
-    return (
-        (mod, in_w) if in_w == out_w else (_seq(mod, ComplexLinear(in_w, out_w)), out_w)
-    )
+def _maybe_project(mod: nn.Module, in_w: int, out_w: int) -> tuple[nn.Module, int]:
+    return (mod, in_w) if in_w == out_w else (_seq(mod, ComplexLinear(in_w, out_w)), out_w)
 
 
-def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
+def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> tuple[nn.Module, int]:
     match cfg:
 
         case LinearCfg() as c:
@@ -201,7 +196,7 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
 
         case SequentialCfg() as c:
 
-            def _fold(lst: List[LayerCfg], w_in: int) -> Tuple[List[nn.Module], int]:
+            def _fold(lst: list[LayerCfg], w_in: int) -> tuple[list[nn.Module], int]:
                 if not lst:
                     return [], w_in
                 head, *tail = lst
@@ -218,21 +213,13 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> Tuple[nn.Module, int]:
             proj_mod, proj_w = (
                 _build_from_cfg(c.projection, cur_w)
                 if c.projection is not None
-                else (
-                    (None, body_w)
-                    if body_w == cur_w
-                    else (ComplexLinear(cur_w, body_w), body_w)
-                )
+                else ((None, body_w) if body_w == cur_w else (ComplexLinear(cur_w, body_w), body_w))
             )
             assert proj_w == body_w, "Projection width mismatch in Residual block"
             res = ComplexResidual(
                 body=body_mod,
                 proj=proj_mod,
-                post_act=(
-                    _make_activation(c.activation.kind, body_w)
-                    if c.activation
-                    else None
-                ),
+                post_act=(_make_activation(c.activation.kind, body_w) if c.activation else None),
             )
             return res, body_w
 
@@ -264,7 +251,7 @@ def build_model(*, n_inputs: int, n_outputs: int, cfg: CVNNConfig) -> nn.Module:
     return net
 
 
-def load_model(*, model: nn.Module, tensors: Dict[str, TensorState]) -> nn.Module:
+def load_model(*, model: nn.Module, tensors: dict[str, TensorState]) -> nn.Module:
     if any(p.device.type != Device.cpu.value for p in model.parameters()):
         raise RuntimeError("`model` must be on CPU before loading weights.")
 
@@ -273,7 +260,7 @@ def load_model(*, model: nn.Module, tensors: Dict[str, TensorState]) -> nn.Modul
     return model
 
 
-def get_safetensors(model: nn.Module) -> Dict[str, TensorState]:
+def get_safetensors(model: nn.Module) -> dict[str, TensorState]:
     if any(p.device.type != Device.cpu.value for p in model.parameters()):
         raise RuntimeError("Model must reside on CPU for serialisation.")
 

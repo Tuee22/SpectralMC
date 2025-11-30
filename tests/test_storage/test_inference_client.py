@@ -4,22 +4,23 @@
 from __future__ import annotations
 
 import asyncio
+
 import pytest
 import torch
 
+from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.gbm_trainer import GbmCVNNPricerConfig
+from spectralmc.models.numerical import Precision
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     InferenceClient,
+    PinnedMode,
+    TrackingMode,
     commit_snapshot,
 )
-from spectralmc.gbm_trainer import GbmCVNNPricerConfig
-from spectralmc.gbm import BlackScholesConfig, SimulationParams
-from spectralmc.models.numerical import Precision
 
 
-def make_test_config(
-    model: torch.nn.Module, global_step: int = 0
-) -> GbmCVNNPricerConfig:
+def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPricerConfig:
     """Factory to create test configurations (GbmCVNNPricerConfig is frozen)."""
     sim_params = SimulationParams(
         timesteps=100,
@@ -58,16 +59,16 @@ async def test_pinned_mode_basic(async_store: AsyncBlockchainModelStore) -> None
     # Create 2 versions
     model1 = torch.nn.Linear(5, 5)
     config1 = make_test_config(model1, global_step=100)
-    v1 = await commit_snapshot(async_store, config1, "V1")
+    _v1 = await commit_snapshot(async_store, config1, "V1")
 
     model2 = torch.nn.Linear(5, 5)
     config2 = make_test_config(model2, global_step=200)
-    v2 = await commit_snapshot(async_store, config2, "V2")
+    _v2 = await commit_snapshot(async_store, config2, "V2")
 
     # Pin to version 0
     template = make_test_config(torch.nn.Linear(5, 5))
     client = InferenceClient(
-        version_counter=0,
+        mode=PinnedMode(counter=0),
         poll_interval=0.1,
         store=async_store,
         model_template=torch.nn.Linear(5, 5),
@@ -93,7 +94,7 @@ async def test_tracking_mode_basic(async_store: AsyncBlockchainModelStore) -> No
     # Start tracking mode
     template = make_test_config(torch.nn.Linear(5, 5))
     client = InferenceClient(
-        version_counter=None,  # Tracking
+        mode=TrackingMode(),
         poll_interval=0.5,
         store=async_store,
         model_template=torch.nn.Linear(5, 5),
@@ -121,7 +122,7 @@ async def test_tracking_mode_auto_update(
     # Start tracking with fast polling
     template = make_test_config(torch.nn.Linear(5, 5))
     client = InferenceClient(
-        version_counter=None,
+        mode=TrackingMode(),
         poll_interval=0.1,
         store=async_store,
         model_template=torch.nn.Linear(5, 5),
@@ -129,7 +130,10 @@ async def test_tracking_mode_auto_update(
     )
 
     async with client:
-        assert client.get_current_version().counter == 0  # type: ignore[union-attr]
+        # Add explicit None check for type narrowing
+        version = client.get_current_version()
+        assert version is not None, "Expected version to be loaded"
+        assert version.counter == 0
 
         # Create new version
         config2 = make_test_config(torch.nn.Linear(5, 5), global_step=100)
@@ -153,7 +157,7 @@ async def test_get_model_before_start(async_store: AsyncBlockchainModelStore) ->
 
     template = make_test_config(torch.nn.Linear(5, 5))
     client = InferenceClient(
-        version_counter=0,
+        mode=PinnedMode(counter=0),
         poll_interval=1.0,
         store=async_store,
         model_template=torch.nn.Linear(5, 5),
@@ -174,7 +178,7 @@ async def test_context_manager_lifecycle(
 
     template = make_test_config(torch.nn.Linear(5, 5))
     client = InferenceClient(
-        version_counter=0,
+        mode=PinnedMode(counter=0),
         poll_interval=1.0,
         store=async_store,
         model_template=torch.nn.Linear(5, 5),
@@ -198,7 +202,7 @@ async def test_manual_start_stop(async_store: AsyncBlockchainModelStore) -> None
 
     template = make_test_config(torch.nn.Linear(5, 5))
     client = InferenceClient(
-        version_counter=0,
+        mode=PinnedMode(counter=0),
         poll_interval=1.0,
         store=async_store,
         model_template=torch.nn.Linear(5, 5),
@@ -219,7 +223,7 @@ async def test_empty_store_tracking_mode(
     """Test tracking mode fails on empty store."""
     template = make_test_config(torch.nn.Linear(5, 5))
     client = InferenceClient(
-        version_counter=None,
+        mode=TrackingMode(),
         poll_interval=1.0,
         store=async_store,
         model_template=torch.nn.Linear(5, 5),
@@ -241,7 +245,7 @@ async def test_graceful_shutdown_tracking(
 
     template = make_test_config(torch.nn.Linear(5, 5))
     client = InferenceClient(
-        version_counter=None,  # Tracking
+        mode=TrackingMode(),
         poll_interval=0.1,
         store=async_store,
         model_template=torch.nn.Linear(5, 5),

@@ -4,9 +4,8 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
 from dataclasses import dataclass
-from typing import Optional
+from datetime import UTC, datetime
 
 
 @dataclass(frozen=True)
@@ -49,7 +48,7 @@ class ModelVersion:
             f"{self.content_hash}|"
             f"{self.commit_timestamp}|"
             f"{self.commit_message}"
-        ).encode("utf-8")
+        ).encode()
         return hashlib.sha256(data).hexdigest()
 
 
@@ -68,15 +67,13 @@ def bump_semantic_version(current: str, change_type: str = "patch") -> str:
 
     if change_type == "major":
         return f"{major + 1}.0.0"
-    elif change_type == "minor":
+    if change_type == "minor":
         return f"{major}.{minor + 1}.0"
-    else:  # patch
-        return f"{major}.{minor}.{patch + 1}"
+    # patch
+    return f"{major}.{minor}.{patch + 1}"
 
 
-def create_genesis_version(
-    content_hash: str, message: str = "Genesis version"
-) -> ModelVersion:
+def create_genesis_version(content_hash: str, message: str = "Genesis version") -> ModelVersion:
     """
     Create the genesis version (v0) of the blockchain.
 
@@ -91,7 +88,7 @@ def create_genesis_version(
         semantic_version="1.0.0",
         parent_hash="",  # No parent for genesis
         content_hash=content_hash,
-        commit_timestamp=datetime.now(timezone.utc).isoformat(),
+        commit_timestamp=datetime.now(UTC).isoformat(),
         commit_message=message,
     )
 

@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from spectralmc.storage.chain import (
     ModelVersion,
     bump_semantic_version,

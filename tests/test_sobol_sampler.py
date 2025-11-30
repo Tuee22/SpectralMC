@@ -2,19 +2,19 @@
 """
 test_sobol_sampler.py
 =====================
-Strictly‑typed pytest suite for
+Strictly-typed pytest suite for
 :class:`spectralmc.sobol_sampler.SobolSampler`.
 
-The sampler is float64‑only, so the tests do **not** parametrize over
+The sampler is float64-only, so the tests do **not** parametrize over
 precision.  Focus areas:
 
-1. **Skip reproducibility** – `skip=n` must produce the same tail as
+1. **Skip reproducibility** - `skip=n` must produce the same tail as
    manually discarding ``n`` samples.
-2. **Bound adherence** in 1‑ and 3‑D cases.
+2. **Bound adherence** in 1- and 3-D cases.
 3. **Constructor validation** for dimension mismatch, negative params,
    and invalid :class:`BoundSpec`.
-4. **Propagation** of user‑defined validator failures.
-5. A quick **smoke test** exercising nominal two‑dimensional usage.
+4. **Propagation** of user-defined validator failures.
+5. A quick **smoke test** exercising nominal two-dimensional usage.
 
 The file passes **``mypy --strict``** with no ignores.
 """
@@ -22,13 +22,13 @@ The file passes **``mypy --strict``** with no ignores.
 from __future__ import annotations
 
 import math
-import re
-from typing import List, Sequence, Tuple
+from typing import Sequence
 
 import pytest
 from pydantic import BaseModel, ValidationError, model_validator
 
 from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler
+
 
 # --------------------------------------------------------------------------- #
 # Constants                                                                   #
@@ -38,7 +38,7 @@ _SEED: int = 42
 _TOL: float = 1e-12
 _N_SAMPLES_BOUND_CHECK: int = 1_024  # 2**10
 
-_SKIP_REPRO: Tuple[Tuple[int, int], ...] = (
+_SKIP_REPRO: tuple[tuple[int, int], ...] = (
     (0, 1),
     (8, 8),
     (16, 16),
@@ -50,20 +50,20 @@ _SKIP_REPRO: Tuple[Tuple[int, int], ...] = (
 
 
 class Point(BaseModel):
-    """Two‑dimensional point."""
+    """Two-dimensional point."""
 
     x: float
     y: float
 
 
 class OneDim(BaseModel):
-    """Single‑axis model used for 1‑D bound checks."""
+    """Single-axis model used for 1-D bound checks."""
 
     x: float
 
 
 class ThreeDim(BaseModel):
-    """Three‑axis model used for 3‑D bound checks."""
+    """Three-axis model used for 3-D bound checks."""
 
     x: float
     y: float
@@ -75,7 +75,7 @@ class ThreeDim(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-def _pairs(pts: Sequence[Point]) -> List[Tuple[float, float]]:
+def _pairs(pts: Sequence[Point]) -> list[tuple[float, float]]:
     """Convert a sequence of :class:`Point` to ``[(x, y), …]`` tuples."""
     return [(p.x, p.y) for p in pts]
 
@@ -94,7 +94,7 @@ def test_skip_repro(n_skip: int, n_check: int) -> None:
     }
 
     manual = SobolSampler(Point, dims, config=SobolConfig(seed=_SEED))
-    _ = manual.sample(n_skip)  # burn‑in
+    _ = manual.sample(n_skip)  # burn-in
     expected = manual.sample(n_check)
 
     fast = SobolSampler(Point, dims, config=SobolConfig(seed=_SEED, skip=n_skip))
@@ -103,7 +103,7 @@ def test_skip_repro(n_skip: int, n_check: int) -> None:
     assert _pairs(expected) == _pairs(got)
 
 
-_BOUND_CASES: Tuple[Tuple[dict[str, BoundSpec], type[BaseModel]], ...] = (
+_BOUND_CASES: tuple[tuple[dict[str, BoundSpec], type[BaseModel]], ...] = (
     ({"x": BoundSpec(lower=0.0, upper=1.0)}, OneDim),
     (
         {
@@ -165,7 +165,7 @@ def test_validator_bubbles() -> None:
         z: float
 
         @model_validator(mode="after")
-        def _fail(self) -> "AlwaysFail":  # noqa: D401
+        def _fail(self) -> AlwaysFail:
             raise ValueError("forced failure")
 
     dims = {"z": BoundSpec(lower=0.0, upper=1.0)}
@@ -175,7 +175,7 @@ def test_validator_bubbles() -> None:
 
 
 def test_smoke_two_dim() -> None:
-    """End‑to‑end sanity check sampling four 2‑D points."""
+    """End-to-end sanity check sampling four 2-D points."""
     dims = {
         "x": BoundSpec(lower=0.0, upper=1.0),
         "y": BoundSpec(lower=-1.0, upper=1.0),

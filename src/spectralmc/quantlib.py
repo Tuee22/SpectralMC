@@ -8,6 +8,7 @@ import QuantLib as ql  # runtime dependency; we supply stubs for typing
 
 from spectralmc.gbm import BlackScholes
 
+
 # Public re-export for type annotations
 Inputs = BlackScholes.Inputs
 HostPriceResults = BlackScholes.HostPricingResults
@@ -15,7 +16,7 @@ HostPriceResults = BlackScholes.HostPricingResults
 __all__ = ["bs_price_quantlib"]
 
 
-def bs_price_quantlib(inp: Inputs) -> HostPriceResults:  # noqa: D401
+def bs_price_quantlib(inp: Inputs) -> HostPriceResults:
     """Return analytic Black price using QuantLib."""
     std = inp.v * math.sqrt(inp.T)
     df = math.exp(-inp.r * inp.T)

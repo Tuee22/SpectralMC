@@ -5,10 +5,10 @@ from __future__ import annotations
 
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import (
+    AnyDType,
     Device,
     FullPrecisionDType,
     ReducedPrecisionDType,
-    AnyDType,
 )
 from spectralmc.proto import common_pb2
 
@@ -71,14 +71,13 @@ class DTypeConverter:
                 FullPrecisionDType.complex128: common_pb2.DTYPE_COMPLEX128,
             }
             return mapping_full[dtype]
-        elif isinstance(dtype, ReducedPrecisionDType):
+        if isinstance(dtype, ReducedPrecisionDType):
             mapping_reduced = {
                 ReducedPrecisionDType.float16: common_pb2.DTYPE_FLOAT16,
                 ReducedPrecisionDType.bfloat16: common_pb2.DTYPE_BFLOAT16,
             }
             return mapping_reduced[dtype]
-        else:
-            raise TypeError(f"Unknown dtype type: {type(dtype)}")
+        raise TypeError(f"Unknown dtype type: {type(dtype)}")
 
     @staticmethod
     def from_proto(proto_value: int) -> AnyDType:

@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+
 """
 `spectralmc.models.numerical`
 --------------------------------
-A single, strictly‑typed source of truth for the numeric *scalar* formats
+A single, strictly-typed source of truth for the numeric *scalar* formats
 (`float32`, `float64`, `complex64`, `complex128`) that *SpectralMC* supports.
 
-The :class:`Precision` enum exposes loss‑free conversions to / from both
+The :class:`Precision` enum exposes loss-free conversions to / from both
 NumPy and CuPy **without** any conditional branching at runtime.  All lookup
 operations are *O(1)* dict accesses, so every helper is a pure function with
-zero side‑effects.
+zero side-effects.
 
 Why do we appear to map *both* ``np.float32`` **and** ``np.dtype(np.float32)``
 (or their CuPy equivalents)?
@@ -17,9 +18,9 @@ Why do we appear to map *both* ``np.float32`` **and** ``np.dtype(np.float32)``
     * The second is the *dtype object* used when constructing arrays
 
 They are distinct objects and users routinely pass *either* form.  We accept
-this micro‑duplication (two extra dict entries per dtype) to guarantee
-constant‑time look‑ups **without** coercions like ``np.dtype(x)`` or
-``isinstance`` checks.  The overhead is negligible (<100 B per table) while
+this micro-duplication (two extra dict entries per dtype) to guarantee
+constant-time look-ups **without** coercions like ``np.dtype(x)`` or
+``isinstance`` checks.  The overhead is negligible (<100 B per table) while
 preserving functional purity and mypy --strict compatibility.
 
 Public helpers
@@ -34,11 +35,11 @@ Public helpers
 """
 
 from enum import Enum
-from itertools import chain
-from typing import Type, TypeAlias, Union
+from typing import TypeAlias, Union
 
-import numpy as np
 import cupy as cp
+import numpy as np
+
 
 __all__ = ["Precision"]
 
@@ -52,10 +53,10 @@ _NPDTypeC128: TypeAlias = np.dtype[np.complex128]
 _NPDTypeRet: TypeAlias = Union[_NPDTypeF32, _NPDTypeF64, _NPDTypeC64, _NPDTypeC128]
 
 _NPDTypeLike: TypeAlias = Union[
-    Type[np.float32],
-    Type[np.float64],
-    Type[np.complex64],
-    Type[np.complex128],
+    type[np.float32],
+    type[np.float64],
+    type[np.complex64],
+    type[np.complex128],
     _NPDTypeF32,
     _NPDTypeF64,
     _NPDTypeC64,
@@ -67,14 +68,14 @@ _NPDTypeLike: TypeAlias = Union[
 _CPDTypeRet: TypeAlias = cp.dtype
 _CPDTypeLike: TypeAlias = Union[
     cp.dtype,
-    Type[np.float32],
-    Type[np.float64],
-    Type[np.complex64],
-    Type[np.complex128],
+    type[np.float32],
+    type[np.float64],
+    type[np.complex64],
+    type[np.complex128],
 ]
 
 # --------------------------------------------------------------------------- #
-# Mapping tables – generated *functionally* to avoid repetition
+# Mapping tables - generated *functionally* to avoid repetition
 # --------------------------------------------------------------------------- #
 _PRECISION_NAMES: tuple[str, ...] = (
     "float32",
@@ -110,7 +111,7 @@ _CP_TO_PRECISION_STR: dict[_CPDTypeLike, str] = {
     for obj in (
         getattr(cp, name),  # CuPy scalar class
         cp.dtype(getattr(cp, name)),  # CuPy dtype instance
-        getattr(np, name),  # NumPy scalar alias (runtime‑equal)
+        getattr(np, name),  # NumPy scalar alias (runtime-equal)
     )
 }
 
@@ -119,16 +120,14 @@ _PRECISION_TO_COMPLEX_STR: dict[str, str] = {
     "float32": "complex64",
     "float64": "complex128",
 }
-_COMPLEX_TO_FLOAT_STR: dict[str, str] = {
-    v: k for k, v in _PRECISION_TO_COMPLEX_STR.items()
-}
+_COMPLEX_TO_FLOAT_STR: dict[str, str] = {v: k for k, v in _PRECISION_TO_COMPLEX_STR.items()}
 
 
 # --------------------------------------------------------------------------- #
 # Enum definition
 # --------------------------------------------------------------------------- #
 class Precision(str, Enum):
-    """Scalar floating / complex‑floating formats supported by SpectralMC."""
+    """Scalar floating / complex-floating formats supported by SpectralMC."""
 
     float32 = "float32"
     float64 = "float64"
@@ -143,7 +142,7 @@ class Precision(str, Enum):
         return _PRECISION_STR_TO_NP[self.value]
 
     @classmethod
-    def from_numpy(cls, dtype: _NPDTypeLike) -> "Precision":
+    def from_numpy(cls, dtype: _NPDTypeLike) -> Precision:
         """Map a NumPy *dtype* or scalar class back to :class:`Precision`."""
         try:
             return cls(_NP_TO_PRECISION_STR[dtype])
@@ -158,7 +157,7 @@ class Precision(str, Enum):
         return _PRECISION_STR_TO_CP[self.value]
 
     @classmethod
-    def from_cupy(cls, dtype: _CPDTypeLike) -> "Precision":
+    def from_cupy(cls, dtype: _CPDTypeLike) -> Precision:
         """Map a CuPy *dtype* or scalar class back to :class:`Precision`."""
         try:
             return cls(_CP_TO_PRECISION_STR[dtype])
@@ -166,13 +165,13 @@ class Precision(str, Enum):
             raise ValueError(f"Unsupported CuPy dtype: {dtype!r}") from exc
 
     # ------------------------------------------------------------------ #
-    # Complex helpers (pure, branch‑free)
+    # Complex helpers (pure, branch-free)
     # ------------------------------------------------------------------ #
-    def to_complex(self) -> "Precision":
+    def to_complex(self) -> Precision:
         """Return the complex counterpart (idempotent for complex inputs)."""
         return Precision(_PRECISION_TO_COMPLEX_STR[self.value])
 
     @classmethod
-    def from_complex(cls, prec: "Precision") -> "Precision":
+    def from_complex(cls, prec: Precision) -> Precision:
         """Return the *real* precision behind a complex format (idempotent)."""
         return cls(_COMPLEX_TO_FLOAT_STR[prec.value])

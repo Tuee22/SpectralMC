@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 from spectralmc.cvnn_factory import (
     ActivationCfg,
     ActivationKind,
@@ -15,6 +13,7 @@ from spectralmc.cvnn_factory import (
     WidthSpec,
 )
 from spectralmc.proto import models_pb2
+
 from .common import DTypeConverter
 
 
@@ -37,7 +36,7 @@ class WidthSpecConverter:
         which = proto.WhichOneof("spec")
         if which == "preserve":
             return PreserveWidth()
-        elif which == "explicit":
+        if which == "explicit":
             return ExplicitWidth(value=proto.explicit.value)
         raise ValueError(f"Unknown WidthSpec variant: {which}")
 

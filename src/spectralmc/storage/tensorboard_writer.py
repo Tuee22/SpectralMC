@@ -7,17 +7,20 @@ Logs version metadata, training metrics, and model statistics to TensorBoard.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Optional
 from datetime import datetime
+from pathlib import Path
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-from .store import AsyncBlockchainModelStore
+# CRITICAL: Import facade BEFORE torch for deterministic algorithms
+from ..gbm_trainer import GbmCVNNPricerConfig
+from ..result import Failure, Success
 from .chain import ModelVersion
 from .checkpoint import load_snapshot_from_checkpoint
-from ..gbm_trainer import GbmCVNNPricerConfig
+from .errors import StorageError, VersionNotFoundError
+from .store import AsyncBlockchainModelStore
+
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +74,8 @@ class TensorBoardWriter:
     async def log_version(
         self,
         version: ModelVersion,
-        model_template: Optional[torch.nn.Module] = None,
-        config_template: Optional[GbmCVNNPricerConfig] = None,
+        model_template: torch.nn.Module | None = None,
+        config_template: GbmCVNNPricerConfig | None = None,
     ) -> None:
         """
         Log a single version to TensorBoard.
@@ -93,13 +96,9 @@ class TensorBoardWriter:
             "version/semantic_version", version.semantic_version, global_step=counter
         )
 
-        self.writer.add_text(
-            "version/content_hash", version.content_hash, global_step=counter
-        )
+        self.writer.add_text("version/content_hash", version.content_hash, global_step=counter)
 
-        self.writer.add_text(
-            "version/commit_message", version.commit_message, global_step=counter
-        )
+        self.writer.add_text("version/commit_message", version.commit_message, global_step=counter)
 
         # Log timestamp as scalar (seconds since epoch)
         commit_time = datetime.fromisoformat(version.commit_timestamp)
@@ -121,9 +120,7 @@ class TensorBoardWriter:
 
                 # Log model statistics
                 param_count = sum(p.numel() for p in snapshot.cvnn.parameters())
-                self.writer.add_scalar(
-                    "model/param_count", param_count, global_step=counter
-                )
+                self.writer.add_scalar("model/param_count", param_count, global_step=counter)
 
                 # Log Sobol skip
                 self.writer.add_scalar(
@@ -132,15 +129,15 @@ class TensorBoardWriter:
 
                 logger.info(f"Logged version {counter} with checkpoint metrics")
 
-            except Exception as e:
+            except (VersionNotFoundError, StorageError, RuntimeError, OSError) as e:
                 logger.warning(f"Failed to load checkpoint for version {counter}: {e}")
         else:
             logger.info(f"Logged version {counter} metadata only")
 
     async def log_all_versions(
         self,
-        model_template: Optional[torch.nn.Module] = None,
-        config_template: Optional[GbmCVNNPricerConfig] = None,
+        model_template: torch.nn.Module | None = None,
+        config_template: GbmCVNNPricerConfig | None = None,
     ) -> None:
         """
         Log all versions in the blockchain to TensorBoard.
@@ -153,12 +150,14 @@ class TensorBoardWriter:
             This is useful for initializing TensorBoard with historical data.
             For large chains, this may take a while.
         """
-        head = await self.store.get_head()
-        if head is None:
-            logger.info("No versions to log (empty chain)")
-            return
+        head_result = await self.store.get_head()
 
-        logger.info(f"Logging {head.counter + 1} versions to TensorBoard...")
+        match head_result:
+            case Success(head):
+                logger.info(f"Logging {head.counter + 1} versions to TensorBoard...")
+            case Failure(_):
+                logger.info("No versions to log (empty chain)")
+                return
 
         for counter in range(head.counter + 1):
             version_id = f"v{counter:010d}"
@@ -178,11 +177,13 @@ class TensorBoardWriter:
         - Total storage size estimate
         - Average versions per day
         """
-        head = await self.store.get_head()
-        if head is None:
-            return
+        head_result = await self.store.get_head()
 
-        total_versions = head.counter + 1
+        match head_result:
+            case Success(head):
+                total_versions = head.counter + 1
+            case Failure(_):
+                return
 
         # Log total versions
         self.writer.add_scalar("summary/total_versions", total_versions, global_step=0)
@@ -198,9 +199,7 @@ class TensorBoardWriter:
             days_elapsed = (t_head - t0).total_seconds() / 86400
             if days_elapsed > 0:
                 versions_per_day = total_versions / days_elapsed
-                self.writer.add_scalar(
-                    "summary/versions_per_day", versions_per_day, global_step=0
-                )
+                self.writer.add_scalar("summary/versions_per_day", versions_per_day, global_step=0)
 
         self.writer.flush()
         logger.info("Logged summary statistics")
@@ -216,9 +215,9 @@ class TensorBoardWriter:
 
     def __exit__(
         self,
-        exc_type: Optional[type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[object],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object | None,
     ) -> None:
         """Context manager exit."""
         self.close()
@@ -227,8 +226,8 @@ class TensorBoardWriter:
 async def log_blockchain_to_tensorboard(
     store: AsyncBlockchainModelStore,
     log_dir: str = "runs/blockchain_models",
-    model_template: Optional[torch.nn.Module] = None,
-    config_template: Optional[GbmCVNNPricerConfig] = None,
+    model_template: torch.nn.Module | None = None,
+    config_template: GbmCVNNPricerConfig | None = None,
 ) -> None:
     """
     Convenience function to log entire blockchain to TensorBoard.

@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 from botocore.exceptions import ClientError
 
+from spectralmc.result import Failure, Success
 from spectralmc.storage import AsyncBlockchainModelStore
 
 
@@ -54,8 +55,8 @@ async def test_concurrent_commit_etag_changes(
     assert etag1 != etag2, "ETag must change with each commit for CAS to work"
 
     # Verify we can't write with stale ETag
+    assert async_store._s3_client is not None
     with pytest.raises(ClientError) as exc_info:
-        assert async_store._s3_client is not None
         await async_store._s3_client.put_object(
             Bucket=async_store.bucket_name,
             Key="chain.json",
@@ -82,8 +83,8 @@ async def test_cas_etag_mismatch() -> None:
         assert store1._s3_client is not None
         try:
             await store1._s3_client.create_bucket(Bucket=bucket_name)
-        except Exception:
-            pass
+        except ClientError:
+            pass  # Bucket may already exist
 
         # First commit
         checkpoint1 = b"checkpoint 1"
@@ -104,7 +105,7 @@ async def test_cas_etag_mismatch() -> None:
         # Another process commits (changes ETag)
         checkpoint2 = b"checkpoint 2"
         hash2 = "hash2"
-        version2 = await store1.commit(checkpoint2, hash2, "Second")
+        _version2 = await store1.commit(checkpoint2, hash2, "Second")
 
         # Get new ETag (should be different)
         response = await store1._s3_client.get_object(
@@ -151,8 +152,12 @@ async def test_genesis_commit_no_etag(async_store: AsyncBlockchainModelStore) ->
     an ETag for the CAS operation.
     """
     # Verify bucket is empty
-    head = await async_store.get_head()
-    assert head is None, "Bucket should start empty"
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(_):
+            pytest.fail("Bucket should start empty")
+        case Failure(_):
+            pass  # Expected - no HEAD yet
 
     # Genesis commit should succeed without ETag
     checkpoint = b"genesis checkpoint"
@@ -166,7 +171,10 @@ async def test_genesis_commit_no_etag(async_store: AsyncBlockchainModelStore) ->
     assert version.commit_message == "Genesis"
 
     # Verify HEAD was set
-    head = await async_store.get_head()
-    assert head is not None
-    assert head.counter == 0
-    assert head.content_hash == content_hash
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(head):
+            assert head.counter == 0
+            assert head.content_hash == content_hash
+        case Failure(_):
+            pytest.fail("Expected HEAD to exist")

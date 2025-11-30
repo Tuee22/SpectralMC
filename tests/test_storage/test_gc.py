@@ -6,21 +6,20 @@ from __future__ import annotations
 import pytest
 import torch
 
+from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.gbm_trainer import GbmCVNNPricerConfig
+from spectralmc.models.numerical import Precision
+from spectralmc.result import Failure, Success
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     GarbageCollector,
     RetentionPolicy,
-    run_gc,
     commit_snapshot,
+    run_gc,
 )
-from spectralmc.gbm_trainer import GbmCVNNPricerConfig
-from spectralmc.gbm import BlackScholesConfig, SimulationParams
-from spectralmc.models.numerical import Precision
 
 
-def make_test_config(
-    model: torch.nn.Module, global_step: int = 0
-) -> GbmCVNNPricerConfig:
+def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPricerConfig:
     """Factory to create test configurations (GbmCVNNPricerConfig is frozen)."""
     sim_params = SimulationParams(
         timesteps=100,
@@ -193,9 +192,12 @@ async def test_gc_dry_run_vs_actual(async_store: AsyncBlockchainModelStore) -> N
     assert len(report_dry.deleted_versions) == 1  # v1 (v0 protected, v2-v4 recent)
 
     # Verify nothing actually deleted
-    head = await async_store.get_head()
-    assert head is not None
-    assert head.counter == 4
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(head):
+            assert head.counter == 4
+        case Failure(_):
+            pytest.fail("Expected HEAD")
 
     # All versions still exist
     for i in range(5):
@@ -242,9 +244,7 @@ async def test_gc_bytes_freed_nonzero(async_store: AsyncBlockchainModelStore) ->
     report_actual = await gc.collect(dry_run=False)
     assert report_actual.bytes_freed > 0
     # Should be similar to dry run estimate
-    assert (
-        abs(report_dry.bytes_freed - report_actual.bytes_freed) < 100
-    )  # Allow small diff
+    assert abs(report_dry.bytes_freed - report_actual.bytes_freed) < 100  # Allow small diff
 
 
 @pytest.mark.asyncio

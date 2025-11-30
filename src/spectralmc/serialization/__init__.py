@@ -9,8 +9,10 @@ validation) and Protobuf messages (wire format).
 from __future__ import annotations
 
 import hashlib
-from typing import Protocol, TypeVar, Generic
+from typing import Generic, Protocol, TypeVar
+
 from google.protobuf import message as _pb_message
+
 
 # Type variables for generic Protocol
 TPydantic = TypeVar("TPydantic")

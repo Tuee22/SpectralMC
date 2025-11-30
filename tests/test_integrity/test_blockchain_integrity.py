@@ -4,20 +4,20 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
-from spectralmc.storage.chain import ModelVersion
+from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.gbm_trainer import GbmCVNNPricerConfig
+from spectralmc.models.numerical import Precision
+from spectralmc.result import Failure, Success
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
+    commit_snapshot,
+    find_corruption,
     verify_chain,
     verify_chain_detailed,
-    find_corruption,
-    commit_snapshot,
 )
-from spectralmc.storage.errors import ChainCorruptionError
-from spectralmc.gbm_trainer import GbmCVNNPricerConfig
-from spectralmc.gbm import BlackScholesConfig, SimulationParams
-from spectralmc.models.numerical import Precision
-import torch
+from spectralmc.storage.chain import ModelVersion
 
 
 def test_content_hash_integrity() -> None:
@@ -116,6 +116,8 @@ def test_directory_name_uniqueness() -> None:
 
 def test_version_immutability() -> None:
     """Test ModelVersion is immutable (frozen dataclass)."""
+    from dataclasses import FrozenInstanceError
+
     version = ModelVersion(
         counter=1,
         semantic_version="1.0.0",
@@ -125,9 +127,9 @@ def test_version_immutability() -> None:
         commit_message="Test",
     )
 
-    # Should raise FrozenInstanceError
-    with pytest.raises(Exception):
-        version.counter = 999  # type: ignore[misc]
+    # Should raise FrozenInstanceError when attempting to mutate frozen field
+    with pytest.raises(FrozenInstanceError):
+        version.counter = 999  # type: ignore[misc]  # Intentionally testing immutability
 
 
 def test_hash_length_consistency() -> None:
@@ -155,9 +157,7 @@ def test_hash_length_consistency() -> None:
 # ============================================================================
 
 
-def make_test_config(
-    model: torch.nn.Module, global_step: int = 0
-) -> GbmCVNNPricerConfig:
+def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPricerConfig:
     """Factory to create test configurations."""
     sim_params = SimulationParams(
         timesteps=100,
@@ -214,8 +214,12 @@ async def test_verify_single_version_chain(
     await commit_snapshot(async_store, config, "Genesis")
 
     # Single genesis version should be valid
-    is_valid = await verify_chain(async_store)
-    assert is_valid
+    result = await verify_chain(async_store)
+    match result:
+        case Success(report):
+            assert report.is_valid
+        case Failure(error):
+            pytest.fail(f"S3 error during verification: {error}")
 
 
 @pytest.mark.asyncio
@@ -229,8 +233,12 @@ async def test_verify_multi_version_chain(
         await commit_snapshot(async_store, config, f"Version {i}")
 
     # Chain should be valid
-    is_valid = await verify_chain(async_store)
-    assert is_valid
+    result = await verify_chain(async_store)
+    match result:
+        case Success(report):
+            assert report.is_valid
+        case Failure(error):
+            pytest.fail(f"S3 error during verification: {error}")
 
     report = await verify_chain_detailed(async_store)
     assert report.is_valid
@@ -316,14 +324,10 @@ async def test_detect_invalid_genesis_counter(
     # Tamper with counter in metadata
     import json
 
-    version_dir = "v0000000000_1.0.0_"  # Starts with this
-
     # List objects to find exact version dir
     assert async_store._s3_client is not None
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
-    async for page in paginator.paginate(
-        Bucket=async_store.bucket_name, Prefix="versions/"
-    ):
+    async for page in paginator.paginate(Bucket=async_store.bucket_name, Prefix="versions/"):
         if isinstance(page, dict) and "Contents" in page:
             contents = page["Contents"]
             assert isinstance(contents, list)
@@ -457,9 +461,15 @@ async def test_chain_corruption_error_raised(
                     )
                     break
 
-    # Should raise ChainCorruptionError
-    with pytest.raises(ChainCorruptionError, match="corruption detected"):
-        await verify_chain(async_store)
+    # Should detect corruption
+    result = await verify_chain(async_store)
+    match result:
+        case Success(report):
+            # Corruption should be detected in the report
+            assert not report.is_valid, "Expected corruption to be detected"
+            assert report.corruption_type is not None, "Expected corruption_type to be set"
+        case Failure(error):
+            pytest.fail(f"S3 error during verification: {error}")
 
 
 @pytest.mark.asyncio
@@ -473,8 +483,12 @@ async def test_verify_chain_with_long_history(
         await commit_snapshot(async_store, config, f"V{i}")
 
     # Should verify successfully
-    is_valid = await verify_chain(async_store)
-    assert is_valid
+    result = await verify_chain(async_store)
+    match result:
+        case Success(report):
+            assert report.is_valid
+        case Failure(error):
+            pytest.fail(f"S3 error during verification: {error}")
 
     report = await verify_chain_detailed(async_store)
     assert "20 versions intact" in report.details

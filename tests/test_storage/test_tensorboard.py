@@ -3,25 +3,24 @@
 
 from __future__ import annotations
 
-import pytest
-import torch
 import tempfile
 from pathlib import Path
 
+import pytest
+import torch
+
+from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.gbm_trainer import GbmCVNNPricerConfig
+from spectralmc.models.numerical import Precision
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     TensorBoardWriter,
-    log_blockchain_to_tensorboard,
     commit_snapshot,
+    log_blockchain_to_tensorboard,
 )
-from spectralmc.gbm_trainer import GbmCVNNPricerConfig
-from spectralmc.gbm import BlackScholesConfig, SimulationParams
-from spectralmc.models.numerical import Precision
 
 
-def make_test_config(
-    model: torch.nn.Module, global_step: int = 0
-) -> GbmCVNNPricerConfig:
+def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPricerConfig:
     """Factory to create test configurations."""
     sim_params = SimulationParams(
         timesteps=100,

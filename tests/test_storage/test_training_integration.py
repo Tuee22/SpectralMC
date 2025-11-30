@@ -1,21 +1,29 @@
 # tests/test_storage/test_training_integration.py
-"""Integration tests for GbmCVNNPricer training with blockchain storage."""
+"""Integration tests for GbmCVNNPricer training with blockchain storage.
+
+All tests require GPU - missing GPU is a hard failure, not a skip.
+"""
 
 from __future__ import annotations
 
-from typing import Dict, Union
+from typing import Union
 
 import pytest
 import torch
-import torch.nn as nn
+
+
+# Module-level GPU requirement - test file fails immediately without GPU
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
+GPU_DEV: torch.device = torch.device("cuda:0")
 
 from spectralmc.cvnn_factory import (
     ActivationCfg,
     ActivationKind,
-    build_model,
     CVNNConfig,
     ExplicitWidth,
     LinearCfg,
+    build_model,
 )
 from spectralmc.gbm import BlackScholesConfig, SimulationParams
 from spectralmc.gbm_trainer import (
@@ -26,6 +34,7 @@ from spectralmc.gbm_trainer import (
 )
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import DType as TorchDTypeEnum
+from spectralmc.result import Failure, Success
 from spectralmc.sobol_sampler import BoundSpec
 from spectralmc.storage import AsyncBlockchainModelStore, commit_snapshot
 
@@ -50,14 +59,10 @@ def _make_test_cvnn(
         ],
         seed=seed,
     )
-    return build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg).to(
-        device, dtype
-    )
+    return build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg).to(device, dtype)
 
 
-def make_test_config(
-    model: ComplexValuedModel, global_step: int = 0
-) -> GbmCVNNPricerConfig:
+def make_test_config(model: ComplexValuedModel, global_step: int = 0) -> GbmCVNNPricerConfig:
     """Factory to create test configurations."""
     sim_params = SimulationParams(
         timesteps=10,  # Reduced from 100: match test_e2e_storage.py pattern
@@ -77,14 +82,10 @@ def make_test_config(
     )
 
     cpu_rng_state = torch.get_rng_state().numpy().tobytes()
-    cuda_rng_states = []
-    if torch.cuda.is_available():
-        cuda_rng_states = [
-            state.cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()
-        ]
+    cuda_rng_states = [state.cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()]
 
     # Black-Scholes parameter bounds (required for SobolSampler)
-    domain_bounds: Dict[str, BoundSpec] = {
+    domain_bounds: dict[str, BoundSpec] = {
         "X0": BoundSpec(lower=50.0, upper=150.0),  # Initial spot price
         "K": BoundSpec(lower=50.0, upper=150.0),  # Strike price
         "T": BoundSpec(lower=0.1, upper=2.0),  # Time to maturity
@@ -105,7 +106,6 @@ def make_test_config(
     )
 
 
-@pytest.mark.gpu
 @pytest.mark.asyncio
 async def test_training_with_auto_commit(
     async_store: AsyncBlockchainModelStore,
@@ -135,7 +135,6 @@ async def test_training_with_auto_commit(
     assert "Final checkpoint" in version.commit_message
 
 
-@pytest.mark.gpu
 @pytest.mark.asyncio
 async def test_training_with_commit_interval(
     async_store: AsyncBlockchainModelStore,
@@ -165,7 +164,6 @@ async def test_training_with_commit_interval(
     assert "Checkpoint" in version.commit_message
 
 
-@pytest.mark.gpu
 @pytest.mark.asyncio
 async def test_training_without_storage_backward_compat(
     async_store: AsyncBlockchainModelStore,
@@ -185,11 +183,14 @@ async def test_training_without_storage_backward_compat(
     pricer.train(training_config)
 
     # Verify no commits were created
-    head = await async_store.get_head()
-    assert head is None  # No versions in store
+    head_result = await async_store.get_head()
+    match head_result:
+        case Failure(_):
+            pass  # Expected - no versions in store
+        case Success(_):
+            pytest.fail("Expected no HEAD since we didn't commit to store")
 
 
-@pytest.mark.gpu
 @pytest.mark.asyncio
 async def test_training_validation_auto_commit_requires_store(
     async_store: AsyncBlockchainModelStore,
@@ -213,7 +214,6 @@ async def test_training_validation_auto_commit_requires_store(
         )
 
 
-@pytest.mark.gpu
 @pytest.mark.asyncio
 async def test_training_validation_commit_interval_requires_store(
     async_store: AsyncBlockchainModelStore,
@@ -237,7 +237,6 @@ async def test_training_validation_commit_interval_requires_store(
         )
 
 
-@pytest.mark.gpu
 @pytest.mark.asyncio
 async def test_training_commit_message_template(
     async_store: AsyncBlockchainModelStore,
@@ -258,9 +257,7 @@ async def test_training_commit_message_template(
 
     # Manually commit with custom message
     snapshot = pricer.snapshot()
-    message = (
-        f"Training: step={snapshot.global_step}, batch={training_config.num_batches}"
-    )
+    message = f"Training: step={snapshot.global_step}, batch={training_config.num_batches}"
     version = await commit_snapshot(async_store, snapshot, message)
 
     # Verify message was formatted
@@ -268,7 +265,6 @@ async def test_training_commit_message_template(
     assert "batch=" in version.commit_message
 
 
-@pytest.mark.gpu
 @pytest.mark.asyncio
 async def test_training_commit_preserves_optimizer_state(
     async_store: AsyncBlockchainModelStore,

@@ -10,10 +10,11 @@ continuous learning systems that need minimal staleness.
 import asyncio
 import torch
 
-from spectralmc.storage import AsyncBlockchainModelStore, InferenceClient
+from spectralmc.storage import AsyncBlockchainModelStore, InferenceClient, TrackingMode
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.gbm import BlackScholesConfig, SimulationParams
 from spectralmc.models.numerical import Precision
+from spectralmc.result import Success, Failure
 
 
 async def main() -> None:
@@ -26,14 +27,16 @@ async def main() -> None:
     async with AsyncBlockchainModelStore(bucket_name) as store:
         # 2. Check initial state
         print("\n2. Checking current versions")
-        head = await store.get_head()
-        if head is None:
-            print("   ERROR: No versions found in storage!")
-            print("   Run checkpoint_training_example.py first to create versions.")
-            return
-
-        print(f"   Current HEAD: version {head.counter}")
-        print(f"   Semantic version: {head.semantic_version}")
+        head_result = await store.get_head()
+        match head_result:
+            case Success(head):
+                print(f"   Current HEAD: version {head.counter}")
+                print(f"   Semantic version: {head.semantic_version}")
+            case Failure(error):
+                print(f"   ERROR: Failed to load model versions")
+                print(f"   Details: {error}")
+                print(f"   Please ensure blockchain storage is initialized.")
+                return
 
         # 3. Create model template
         print("\n3. Creating model template")
@@ -78,7 +81,7 @@ async def main() -> None:
         print("   Poll interval: 5 seconds")
 
         client = InferenceClient(
-            version_counter=None,  # None = tracking mode
+            mode=TrackingMode(),  # TrackingMode = auto-updates to latest
             poll_interval=5.0,  # Check for updates every 5 seconds
             store=store,
             model_template=model_template,

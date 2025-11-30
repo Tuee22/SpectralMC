@@ -1,23 +1,35 @@
 # docker/docker-compose.yml
 #
-# Build once, re-use everywhere; no remote pulls.
+# SpectralMC Docker Compose - Dual-Mode Build Strategy (Separate Dockerfiles)
+#
+# Binary build (default - CUDA 12.8, fast, 10-15 minutes):
+#   docker compose up --build -d
+#   - Uses: docker/Dockerfile
+#   - PyTorch: 2.7.1+cu128 binary wheel
+#   - GPUs: GTX 1060+, RTX series (including RTX 5090 sm_120)
+#
+# Source build (CUDA 11.8, GTX 970 support, 2-4 hours first build):
+#   BUILD_FROM_SOURCE=true docker compose up --build -d
+#   - Uses: docker/Dockerfile.source
+#   - PyTorch: 2.4.1 compiled from source with sm_52 support
+#   - GPUs: GTX 970+, all Maxwell and newer
+
+name: spectralmc
 
 services:
 # --------------------------------------------------------------------------- #
 # MinIO – S3-compatible object storage                                        #
 # --------------------------------------------------------------------------- #
   minio:
+    container_name: spectralmc-minio
     image: quay.io/minio/minio:latest
     restart: unless-stopped
     command: server /data --console-address ":9001"
     volumes:
-      - ../.miniodata/minio:/data                # persistent host path
+      - minio-data:/data                         # persistent docker volume
     environment:
       MINIO_ROOT_USER:     minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - "9000:9000"                         # S3 API
-      - "9001:9001"                         # Web console
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 30s
@@ -33,6 +45,7 @@ services:
 # One-shot job – create buckets (idempotent)                                  #
 # --------------------------------------------------------------------------- #
   createbuckets:
+    container_name: spectralmc-createbuckets
     image: minio/mc:latest
     depends_on:
       minio:
@@ -50,9 +63,15 @@ services:
 # Main dev / training container                                               #
 # --------------------------------------------------------------------------- #
   spectralmc:
+    container_name: spectralmc-app
     build:
       context: ..                          # repo root
-      dockerfile: docker/Dockerfile
+      # Conditional dockerfile selection:
+      # - BUILD_FROM_SOURCE=true  → docker/Dockerfile.source (CUDA 11.8, GTX 970 support)
+      # - BUILD_FROM_SOURCE=false → docker/Dockerfile (CUDA 12.8, RTX 5090 support)
+      dockerfile: docker/${BUILD_FROM_SOURCE:+Dockerfile.source}${BUILD_FROM_SOURCE:-Dockerfile}
+      args:
+        BUILDKIT_INLINE_CACHE: "1"
     image: spectralmc:local
     pull_policy: "never"                   # never reach out to a registry
     depends_on:
@@ -62,6 +81,8 @@ services:
     platform: linux/amd64
     volumes:
       - ..:/spectralmc                     # live code sync
+      - pip-cache:/root/.cache/pip         # persist pip cache for fast restarts
+      - poetry-cache:/root/.cache/pypoetry # persist poetry cache
     ports:
       - "8888:8888"                        # JupyterLab
     environment:
@@ -86,15 +107,13 @@ services:
 # TensorBoard – same image, different entry-point                             #
 # --------------------------------------------------------------------------- #
   tensorboard:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
+    container_name: spectralmc-tensorboard
     image: spectralmc:local
     pull_policy: "never"
     depends_on:
       - minio
       - createbuckets
-      - spectralmc                        # ensures image exists before run
+      - spectralmc                        # ensures image is built first
     restart: unless-stopped
     command: >
       tensorboard --bind_all
@@ -121,3 +140,11 @@ networks:
   spectralmc-net:
     name: spectralmc-net
     driver: bridge
+
+# --------------------------------------------------------------------------- #
+# Volumes - persist cache for fast subsequent startups                        #
+# --------------------------------------------------------------------------- #
+volumes:
+  pip-cache:
+  poetry-cache:
+  minio-data:

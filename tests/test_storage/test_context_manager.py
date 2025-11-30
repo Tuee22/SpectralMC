@@ -64,15 +64,16 @@ async def test_context_manager_exception_handling() -> None:
     store = AsyncBlockchainModelStore(bucket_name)
 
     # Simulate an exception inside the context
+    async with store:
+        # Verify client was created
+        assert store._s3_client is not None
+
+        # Create bucket for cleanup test
+        await store._s3_client.create_bucket(Bucket=bucket_name)
+
+    # Re-enter context and raise exception
     with pytest.raises(ValueError, match="Simulated error"):
         async with store:
-            # Verify client was created
-            assert store._s3_client is not None
-
-            # Create bucket for cleanup test
-            await store._s3_client.create_bucket(Bucket=bucket_name)
-
-            # Raise an exception
             raise ValueError("Simulated error")
 
     # Even after exception, cleanup should have occurred

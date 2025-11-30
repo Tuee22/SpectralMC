@@ -3,17 +3,17 @@
 spectralmc.models.torch
 =======================
 
-A minimal, fully‑typed façade exposing just enough of PyTorch for SpectralMC
+A minimal, fully-typed façade exposing just enough of PyTorch for SpectralMC
 while enforcing reproducible execution.
 
-Thread‑safety contract
+Thread-safety contract
 ----------------------
 * This module **must be imported from the main thread _before_ any other
   threads are spawned**; otherwise it raises ``ImportError``.
 * The context managers ``default_dtype`` and ``default_device`` **may only be
   entered from the main thread**; attempting to use them from a worker thread
   raises ``RuntimeError``.
-* To override the import‑time thread guard (at your own risk) set the
+* To override the import-time thread guard (at your own risk) set the
   environment variable::
 
       SPECTRALMC_ALLOW_THREADS=1
@@ -22,7 +22,7 @@ Thread‑safety contract
 from __future__ import annotations
 
 # --------------------------------------------------------------------------- #
-#  Early import‑time guards                                                   #
+#  Early import-time guards                                                   #
 # --------------------------------------------------------------------------- #
 import os
 import platform
@@ -30,9 +30,10 @@ import sys
 import threading
 from contextlib import contextmanager
 from enum import Enum
-from typing import Dict, Iterable, Iterator, List, Mapping, Tuple
+from typing import Iterable, Iterator, Mapping
 
-# --- prevent pre‑emptive torch import -------------------------------------- #
+
+# --- prevent pre-emptive torch import -------------------------------------- #
 if "torch" in sys.modules:
     raise ImportError(
         "PyTorch was imported before the SpectralMC torch façade. "
@@ -40,11 +41,11 @@ if "torch" in sys.modules:
         "deterministic flags."
     )
 
-# --- thread‑safety: import must occur before worker threads ---------------- #
+# --- thread-safety: import must occur before worker threads ---------------- #
 if threading.active_count() > 1:
     raise ImportError(
         "SpectralMC façade imported after additional threads were created. "
-        "Its global dtype/device helpers are not thread‑safe. "
+        "Its global dtype/device helpers are not thread-safe. "
         "Import this module in the *main thread* before spawning workers, "
         "or set SPECTRALMC_ALLOW_THREADS=1 to bypass this check."
     )
@@ -57,13 +58,21 @@ _MAIN_THREAD_ID: int = threading.get_ident()
 # Ensure deterministic cuBLAS kernels (ignored if CUDA is absent)
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
 
-import torch  # noqa: E402
-from spectralmc.models.numerical import Precision  # noqa: E402
+import torch
+
+from spectralmc.models.numerical import Precision
+
 
 # --------------------------------------------------------------------------- #
 #  Determinism knobs                                                          #
 # --------------------------------------------------------------------------- #
 torch.use_deterministic_algorithms(True, warn_only=False)
+
+# NOTE: _HAS_CUDA is infrastructure for module-level cuDNN configuration.
+# This is acceptable per CPU/GPU policy: facade code must check CUDA availability
+# at import time to configure determinism flags. It does NOT create silent
+# fallbacks - all GPU operations in SpectralMC fail-fast via explicit device
+# assertions in the compute layer (see cpu_gpu_compute_policy.md).
 _HAS_CUDA: bool = torch.cuda.is_available()
 
 if _HAS_CUDA:
@@ -77,7 +86,7 @@ if _HAS_CUDA:
     torch.backends.cudnn.allow_tf32 = False
     torch.backends.cuda.matmul.allow_tf32 = False
 else:
-    # Even on CPU‑only builds make sure these flags exist and are disabled
+    # Even on CPU-only builds make sure these flags exist and are disabled
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.allow_tf32 = False
@@ -89,15 +98,13 @@ else:
 def _assert_main_thread(ctx_name: str) -> None:
     """Raise if called from any thread other than the importing main thread."""
     if threading.get_ident() != _MAIN_THREAD_ID:
-        raise RuntimeError(
-            f"{ctx_name} is not thread‑safe; call it only from the main thread."
-        )
+        raise RuntimeError(f"{ctx_name} is not thread-safe; call it only from the main thread.")
 
 
 # --------------------------------------------------------------------------- #
-#  Strongly‑typed helpers                                                     #
+#  Strongly-typed helpers                                                     #
 # --------------------------------------------------------------------------- #
-_DTYPE_STR_TO_TORCH: Dict[str, torch.dtype] = {
+_DTYPE_STR_TO_TORCH: dict[str, torch.dtype] = {
     "float16": torch.float16,
     "float32": torch.float32,
     "float64": torch.float64,
@@ -105,18 +112,14 @@ _DTYPE_STR_TO_TORCH: Dict[str, torch.dtype] = {
     "complex64": torch.complex64,
     "complex128": torch.complex128,
 }
-_TORCH_DTYPE_TO_STR: Dict[torch.dtype, str] = {
-    v: k for k, v in _DTYPE_STR_TO_TORCH.items()
-}
-_DTYPE_STR_TO_PRECISION: Dict[str, Precision] = {
+_TORCH_DTYPE_TO_STR: dict[torch.dtype, str] = {v: k for k, v in _DTYPE_STR_TO_TORCH.items()}
+_DTYPE_STR_TO_PRECISION: dict[str, Precision] = {
     "float32": Precision.float32,
     "float64": Precision.float64,
     "complex64": Precision.complex64,
     "complex128": Precision.complex128,
 }
-_PRECISION_DTYPE_TO_STR: Dict[Precision, str] = {
-    v: k for k, v in _DTYPE_STR_TO_PRECISION.items()
-}
+_PRECISION_DTYPE_TO_STR: dict[Precision, str] = {v: k for k, v in _DTYPE_STR_TO_PRECISION.items()}
 
 
 class FullPrecisionDType(str, Enum):
@@ -128,12 +131,12 @@ class FullPrecisionDType(str, Enum):
     complex128 = "complex128"
 
     # --- conversion helpers -------------------------------------------------
-    def to_torch(self) -> torch.dtype:  # noqa: D401
+    def to_torch(self) -> torch.dtype:
         """Return the corresponding ``torch.dtype``."""
         return _DTYPE_STR_TO_TORCH[self.value]
 
     @classmethod
-    def from_torch(cls, dt: torch.dtype) -> "FullPrecisionDType":
+    def from_torch(cls, dt: torch.dtype) -> FullPrecisionDType:
         if dt not in _TORCH_DTYPE_TO_STR:
             raise ValueError(f"Unsupported torch.dtype {dt!r}")
         dtype_str = _TORCH_DTYPE_TO_STR[dt]
@@ -146,7 +149,7 @@ class FullPrecisionDType(str, Enum):
         return _DTYPE_STR_TO_PRECISION[self.value]
 
     @classmethod
-    def from_precision(cls, p: Precision) -> "FullPrecisionDType":
+    def from_precision(cls, p: Precision) -> FullPrecisionDType:
         return cls(_PRECISION_DTYPE_TO_STR[p])
 
 
@@ -157,12 +160,12 @@ class ReducedPrecisionDType(str, Enum):
     bfloat16 = "bfloat16"
 
     # --- conversion helpers -------------------------------------------------
-    def to_torch(self) -> torch.dtype:  # noqa: D401
+    def to_torch(self) -> torch.dtype:
         """Return the corresponding ``torch.dtype``."""
         return _DTYPE_STR_TO_TORCH[self.value]
 
     @classmethod
-    def from_torch(cls, dt: torch.dtype) -> "ReducedPrecisionDType":
+    def from_torch(cls, dt: torch.dtype) -> ReducedPrecisionDType:
         if dt not in _TORCH_DTYPE_TO_STR:
             raise ValueError(f"Unsupported torch.dtype {dt!r}")
         dtype_str = _TORCH_DTYPE_TO_STR[dt]
@@ -180,15 +183,15 @@ DType = FullPrecisionDType
 
 class Device(str, Enum):
     cpu = "cpu"
-    cuda = "cuda:0"  # single‑GPU policy
+    cuda = "cuda:0"  # single-GPU policy
 
     # --- conversion helpers -------------------------------------------------
-    def to_torch(self) -> torch.device:  # noqa: D401
+    def to_torch(self) -> torch.device:
         """Return the corresponding ``torch.device``."""
         return torch.device(self.value)
 
     @classmethod
-    def from_torch(cls, dev: torch.device) -> "Device":
+    def from_torch(cls, dev: torch.device) -> Device:
         if dev.type == "cpu":
             return cls.cpu
         if dev.type == "cuda" and dev.index in {None, 0}:
@@ -197,7 +200,7 @@ class Device(str, Enum):
 
 
 # --------------------------------------------------------------------------- #
-#  Lightweight global context managers (main‑thread only)                     #
+#  Lightweight global context managers (main-thread only)                     #
 # --------------------------------------------------------------------------- #
 @contextmanager
 def default_dtype(dt: torch.dtype) -> Iterator[None]:
@@ -236,22 +239,23 @@ def default_device(dev: torch.device) -> Iterator[None]:
 # --------------------------------------------------------------------------- #
 #  SafeTensor serialization helpers                                           #
 # --------------------------------------------------------------------------- #
-from pydantic import BaseModel, ConfigDict  # noqa: E402
-from safetensors.torch import load as _sf_load, save as _sf_save  # noqa: E402
+from pydantic import BaseModel, ConfigDict
+from safetensors.torch import load as _sf_load
+from safetensors.torch import save as _sf_save
 
 
 class TensorState(BaseModel):
-    """A CPU‑only SafeTensor snapshot with integrity metadata."""
+    """A CPU-only SafeTensor snapshot with integrity metadata."""
 
     data: bytes
-    shape: Tuple[int, ...]
+    shape: tuple[int, ...]
     dtype: AnyDType
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=False)
 
     # ------------------------------------------------------------------ #
     @staticmethod
-    def from_torch(t: torch.Tensor) -> "TensorState":
+    def from_torch(t: torch.Tensor) -> TensorState:
         if t.device != Device.cpu.to_torch():
             raise RuntimeError("Tensor must reside on CPU to enter TensorState.")
         blob: bytes = _sf_save({"tensor": t})
@@ -271,10 +275,10 @@ class TensorState(BaseModel):
         return TensorState(data=blob, shape=tuple(t.shape), dtype=dtype)
 
     def to_torch(self) -> torch.Tensor:
-        tensor_dict: Dict[str, torch.Tensor] = _sf_load(self.data)
+        tensor_dict: dict[str, torch.Tensor] = _sf_load(self.data)
         tensor = tensor_dict["tensor"]
         if tensor.device != Device.cpu.to_torch():
-            raise RuntimeError("Tensor deserialized onto a non‑CPU device.")
+            raise RuntimeError("Tensor deserialized onto a non-CPU device.")
 
         # Validate dtype matches
         expected_dtype = self.dtype.to_torch()
@@ -283,15 +287,13 @@ class TensorState(BaseModel):
         return tensor
 
     @staticmethod
-    def from_bytes(raw: bytes) -> "TensorState":
-        tensor_dict: Dict[str, torch.Tensor] = _sf_load(raw)
+    def from_bytes(raw: bytes) -> TensorState:
+        tensor_dict: dict[str, torch.Tensor] = _sf_load(raw)
         if set(tensor_dict.keys()) != {"tensor"}:
-            raise ValueError(
-                "SafeTensor must contain exactly one entry named 'tensor'."
-            )
+            raise ValueError("SafeTensor must contain exactly one entry named 'tensor'.")
         t = tensor_dict["tensor"]
         if t.device != Device.cpu.to_torch():
-            raise RuntimeError("Tensor deserialized onto a non‑CPU device.")
+            raise RuntimeError("Tensor deserialized onto a non-CPU device.")
 
         # Determine which dtype enum to use
         dt_torch = t.dtype
@@ -321,7 +323,7 @@ class TorchEnv(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=False)
 
     @classmethod
-    def snapshot(cls) -> "TorchEnv":
+    def snapshot(cls) -> TorchEnv:
         if _HAS_CUDA:
             cuda_ver = torch.version.cuda or "<unknown>"
             cudnn_ver = torch.backends.cudnn.version() or -1
@@ -352,7 +354,7 @@ class AdamParamState(BaseModel):
 
     # ------------------------------------------------------------------ #
     @classmethod
-    def from_torch(cls, s: Mapping[str, object]) -> "AdamParamState":
+    def from_torch(cls, s: Mapping[str, object]) -> AdamParamState:
         allowed = {"step", "exp_avg", "exp_avg_sq", "max_exp_avg_sq"}
         extra = set(s) - allowed
         if extra:
@@ -365,7 +367,7 @@ class AdamParamState(BaseModel):
                 raise RuntimeError("Adam state tensors must reside on CPU.")
             return obj
 
-        # Accept Python int or 0‑D CPU tensor for step
+        # Accept Python int or 0-D CPU tensor for step
         step_raw = s["step"]
         if isinstance(step_raw, torch.Tensor):
             if step_raw.ndim != 0 or step_raw.device != Device.cpu.to_torch():
@@ -379,20 +381,16 @@ class AdamParamState(BaseModel):
         return cls(
             step=step_val,
             exp_avg=TensorState.from_torch(_req_tensor(s["exp_avg"], "exp_avg")),
-            exp_avg_sq=TensorState.from_torch(
-                _req_tensor(s["exp_avg_sq"], "exp_avg_sq")
-            ),
+            exp_avg_sq=TensorState.from_torch(_req_tensor(s["exp_avg_sq"], "exp_avg_sq")),
             max_exp_avg_sq=(
-                TensorState.from_torch(
-                    _req_tensor(s["max_exp_avg_sq"], "max_exp_avg_sq")
-                )
+                TensorState.from_torch(_req_tensor(s["max_exp_avg_sq"], "max_exp_avg_sq"))
                 if s.get("max_exp_avg_sq") is not None
                 else None
             ),
         )
 
-    def to_torch(self) -> Dict[str, object]:
-        out: Dict[str, object] = {
+    def to_torch(self) -> dict[str, object]:
+        out: dict[str, object] = {
             "step": self.step,
             "exp_avg": self.exp_avg.to_torch(),
             "exp_avg_sq": self.exp_avg_sq.to_torch(),
@@ -403,9 +401,9 @@ class AdamParamState(BaseModel):
 
 
 class AdamParamGroup(BaseModel):
-    params: List[int]
+    params: list[int]
     lr: float
-    betas: Tuple[float, float]
+    betas: tuple[float, float]
     eps: float
     weight_decay: float
     amsgrad: bool = False
@@ -419,32 +417,32 @@ class AdamParamGroup(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=False)
 
     @classmethod
-    def from_torch(cls, g: Mapping[str, object]) -> "AdamParamGroup":
+    def from_torch(cls, g: Mapping[str, object]) -> AdamParamGroup:
         # Pydantic will both validate and populate all known fields
         return cls.model_validate(g)
 
-    def to_torch(self) -> Dict[str, object]:
+    def to_torch(self) -> dict[str, object]:
         # Convert the Pydantic model to a Python dict for PyTorch consumption
         return self.model_dump(mode="python")
 
 
 class AdamOptimizerState(BaseModel):
     """
-    A structured, fully‑typed representation of a PyTorch Adam/AdamW
+    A structured, fully-typed representation of a PyTorch Adam/AdamW
     ``state_dict``.  The class no longer depends on an optimiser instance
     (and therefore no longer requires a ``_HasStateDict`` protocol); instead
     it directly consumes and produces plain ``Mapping[str, object]`` state
     dictionaries.
     """
 
-    param_states: Dict[int, AdamParamState]
-    param_groups: List[AdamParamGroup]
+    param_states: dict[int, AdamParamState]
+    param_groups: list[AdamParamGroup]
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=False)
 
     # ------------------------------------------------------------------ #
     @classmethod
-    def from_torch(cls, sd: Mapping[str, object]) -> "AdamOptimizerState":
+    def from_torch(cls, sd: Mapping[str, object]) -> AdamOptimizerState:
         """Construct from a PyTorch ``state_dict`` mapping."""
         if set(sd.keys()) != {"state", "param_groups"}:
             raise RuntimeError(
@@ -460,15 +458,13 @@ class AdamOptimizerState(BaseModel):
             raise TypeError("'param_groups' entry must be a sequence.")
 
         return cls(
-            param_states={
-                pid: AdamParamState.from_torch(st) for pid, st in state_raw.items()
-            },
+            param_states={pid: AdamParamState.from_torch(st) for pid, st in state_raw.items()},
             param_groups=[AdamParamGroup.from_torch(pg) for pg in groups_raw],
         )
 
     # ------------------------------------------------------------------ #
     def to_torch(self) -> Mapping[str, object]:
-        """Return a PyTorch‑compatible ``state_dict`` mapping."""
+        """Return a PyTorch-compatible ``state_dict`` mapping."""
         return {
             "state": {pid: st.to_torch() for pid, st in self.param_states.items()},
             "param_groups": [g.to_torch() for g in self.param_groups],
@@ -478,7 +474,7 @@ class AdamOptimizerState(BaseModel):
 # --------------------------------------------------------------------------- #
 #  Public API                                                                 #
 # --------------------------------------------------------------------------- #
-__all__: Tuple[str, ...] = (
+__all__: tuple[str, ...] = (
     "FullPrecisionDType",
     "ReducedPrecisionDType",
     "AnyDType",

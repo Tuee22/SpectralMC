@@ -1,32 +1,35 @@
 # tests/test_cvnn.py
 """
-Precision‑parametrised unit tests for :pymod:`spectralmc.cvnn`.
+Precision-parametrised unit tests for :pymod:`spectralmc.cvnn`.
 
 Each test is executed with both ``torch.float32`` and ``torch.float64``
 precisions by leveraging the :class:`dtype` enum and
-:func:`default_dtype` context‑manager from
+:func:`default_dtype` context-manager from
 :pymod:`spectralmc.models.torch`.
 
-The file type‑checks under ``mypy --strict`` without suppressions.
+The file type-checks under ``mypy --strict`` without suppressions.
 """
 from __future__ import annotations
 
-from typing import List, Iterator
+from typing import Iterator
 
 import pytest
 import torch
-from torch import Tensor, nn
+from torch import Tensor
 
 from spectralmc.cvnn import (
     ComplexLinear,
-    zReLU,
-    modReLU,
-    NaiveComplexBatchNorm,
-    CovarianceComplexBatchNorm,
-    ComplexSequential,
     ComplexResidual,
+    ComplexSequential,
+    CovarianceComplexBatchNorm,
+    NaiveComplexBatchNorm,
+    modReLU,
+    zReLU,
 )
-from spectralmc.models.torch import DType as _dt, Device as _dev, default_dtype
+from spectralmc.models.torch import Device as _dev
+from spectralmc.models.torch import DType as _dt
+from spectralmc.models.torch import default_dtype
+
 
 # ─────────────────────────── global constants ────────────────────────────
 CPU_DEV: torch.device = _dev.cpu.to_torch()
@@ -78,16 +81,14 @@ def assert_close(
     if not torch.allclose(actual, expected, atol=atol, rtol=rtol):
         diff_abs = (actual - expected).abs().max().item()
         diff_rel = (((actual - expected).abs()) / (expected.abs() + 1e-12)).max().item()
-        raise AssertionError(
-            msg or f"Tensors differ (abs={diff_abs:.2e}, rel={diff_rel:.2e})"
-        )
+        raise AssertionError(msg or f"Tensors differ (abs={diff_abs:.2e}, rel={diff_rel:.2e})")
 
 
 # ──────────────────────────── ComplexLinear ──────────────────────────────
 
 
 def test_complex_linear_manual(dt: torch.dtype) -> None:
-    """Analytical 2 × 2 example with non‑trivial bias."""
+    """Analytical 2 x 2 example with non-trivial bias."""
     layer = ComplexLinear(2, 2, bias=True)
 
     with torch.no_grad():
@@ -137,7 +138,7 @@ def test_complex_linear_shapes_and_grad(bias: bool, dt: torch.dtype) -> None:
 
 
 def test_zrelu_masking_and_grad(dt: torch.dtype) -> None:
-    """zReLU passes first‑quadrant values and back‑props correct mask."""
+    """zReLU passes first-quadrant values and back-props correct mask."""
     act = zReLU()
     r_in = torch.tensor([[-1.0, 0.5, 0.2]], requires_grad=True)
     i_in = torch.tensor([[0.3, -0.2, 0.1]], requires_grad=True)
@@ -158,10 +159,10 @@ def test_zrelu_masking_and_grad(dt: torch.dtype) -> None:
 
 
 def test_modrelu_thresholding(dt: torch.dtype) -> None:
-    """Below threshold → 0; above threshold → magnitude‑scaled."""
+    """Below threshold → 0; above threshold → magnitude-scaled."""
     act = modReLU(num_features=1)
     with torch.no_grad():
-        act.bias.fill_(-4.0)  # ensures r+b = 1 for a 3‑4‑5 input
+        act.bias.fill_(-4.0)  # ensures r+b = 1 for a 3-4-5 input
 
     hi_r, hi_i = torch.tensor([[3.0]]), torch.tensor([[4.0]])
     scaling = (5.0 - 4.0) / 5.0  # (r+b)/r
@@ -214,7 +215,7 @@ def _feature_cov(x_r: Tensor, x_i: Tensor, mean_r: Tensor, mean_i: Tensor) -> Te
 
 
 def test_cov_bn_whitening(dt: torch.dtype) -> None:
-    """Whitening ≈0‑means, var≈0.5, and low cross‑covariance."""
+    """Whitening ≈0-means, var≈0.5, and low cross-covariance."""
     bn = CovarianceComplexBatchNorm(6)
     bn.train()
 
@@ -252,7 +253,7 @@ def test_cov_bn_eval_shape(dt: torch.dtype) -> None:
 
 
 def test_complex_sequential_flow_and_grad(dt: torch.dtype) -> None:
-    """Data flows through sequential stack and back‑propagates."""
+    """Data flows through sequential stack and back-propagates."""
     seq = ComplexSequential(
         ComplexLinear(3, 3),
         zReLU(),
@@ -267,7 +268,7 @@ def test_complex_sequential_flow_and_grad(dt: torch.dtype) -> None:
     assert out_r.shape == (10, 4) and out_i.shape == (10, 4)
 
     (out_r.square().mean() + out_i.square().mean()).backward()
-    grads: List[Tensor] = [p.grad for p in seq.parameters() if p.grad is not None]
+    grads: list[Tensor] = [p.grad for p in seq.parameters() if p.grad is not None]
     assert grads and any(torch.isfinite(g).all() for g in grads)
 
 
@@ -275,7 +276,7 @@ def test_complex_sequential_flow_and_grad(dt: torch.dtype) -> None:
 
 
 def test_complex_residual_identity_when_body_zero(dt: torch.dtype) -> None:
-    """With zeroed body the residual becomes post‑activation only."""
+    """With zeroed body the residual becomes post-activation only."""
     body = ComplexSequential(ComplexLinear(4, 4), modReLU(4))
     res = ComplexResidual(body=body, proj=None, post_act=zReLU())
 
@@ -313,7 +314,7 @@ def test_complex_residual_grad_flow(dt: torch.dtype) -> None:
     assert x_r.grad is not None and x_i.grad is not None
     assert torch.isfinite(x_r.grad).all() and torch.isfinite(x_i.grad).all()
 
-    grads: List[Tensor] = [
+    grads: list[Tensor] = [
         p.grad for p in res.parameters() if p.grad is not None and p.requires_grad
     ]
     assert grads and any(torch.isfinite(g).all() for g in grads)

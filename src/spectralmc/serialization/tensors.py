@@ -3,21 +3,20 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
-
+import numpy as np
 import torch
 
 from spectralmc.models.torch import (
     AdamOptimizerState,
-    AdamParamState,
     AdamParamGroup,
-    Device,
+    AdamParamState,
     AnyDType,
+    Device,
     FullPrecisionDType,
     ReducedPrecisionDType,
 )
 from spectralmc.proto import tensors_pb2
-from spectralmc.serialization.common import DTypeConverter, DeviceConverter
+from spectralmc.serialization.common import DeviceConverter, DTypeConverter
 
 
 class TensorStateConverter:
@@ -66,7 +65,9 @@ class TensorStateConverter:
         proto.device = DeviceConverter.to_proto(device_enum)
 
         # Data - serialize via numpy
-        # Move to CPU first to ensure consistent serialization
+        # NOTE: .cpu() is acceptable here per CPU/GPU policy - this is serialization
+        # boundary I/O, not compute. The TensorTree API cannot be used because
+        # it raises on no-op moves (tensors may already be on CPU).
         cpu_tensor = tensor.cpu().detach()
         proto.data = cpu_tensor.numpy().tobytes()
 
@@ -114,9 +115,6 @@ class TensorStateConverter:
         # Shape
         shape = tuple(proto.shape)
 
-        # Deserialize data from bytes via numpy
-        import numpy as np
-
         # Map torch dtype to numpy dtype
         # Use explicit union type to avoid Any
         np_dtype: (
@@ -155,6 +153,9 @@ class TensorStateConverter:
             tensor = torch.from_numpy(reshaped.copy())
 
         # Device
+        # NOTE: .to(device) is acceptable here per CPU/GPU policy - this is
+        # deserialization boundary I/O, not compute. The TensorTree API cannot
+        # be used because it raises on no-op moves (target may be CPU).
         device_enum = DeviceConverter.from_proto(proto.device)
         device = device_enum.to_torch()
         tensor = tensor.to(device)
@@ -223,7 +224,7 @@ class AdamOptimizerStateConverter:
             AdamOptimizerState instance
         """
         # Deserialize param states
-        param_states: Dict[int, AdamParamState] = {}
+        param_states: dict[int, AdamParamState] = {}
         for param_id, param_proto in proto.state.items():
             exp_avg_tensor = TensorStateConverter.from_proto(param_proto.exp_avg)
             exp_avg_sq_tensor = TensorStateConverter.from_proto(param_proto.exp_avg_sq)
@@ -238,7 +239,7 @@ class AdamOptimizerStateConverter:
             param_states[param_id] = param_state
 
         # Deserialize param groups
-        param_groups: List[AdamParamGroup] = []
+        param_groups: list[AdamParamGroup] = []
         for group_proto in proto.param_groups:
             group = AdamParamGroup(
                 params=[],  # Not serialized in proto
@@ -258,7 +259,7 @@ class RNGStateConverter:
 
     @staticmethod
     def to_proto(
-        torch_cpu_rng_state: bytes, torch_cuda_rng_states: List[bytes]
+        torch_cpu_rng_state: bytes, torch_cuda_rng_states: list[bytes]
     ) -> tensors_pb2.RNGStateProto:
         """
         Serialize RNG state to protobuf.
@@ -276,7 +277,7 @@ class RNGStateConverter:
         return proto
 
     @staticmethod
-    def from_proto(proto: tensors_pb2.RNGStateProto) -> tuple[bytes, List[bytes]]:
+    def from_proto(proto: tensors_pb2.RNGStateProto) -> tuple[bytes, list[bytes]]:
         """
         Deserialize RNGStateProto to RNG state.
 
@@ -302,10 +303,10 @@ class ModelCheckpointConverter:
 
     @staticmethod
     def to_proto(
-        model_state_dict: Dict[str, torch.Tensor],
+        model_state_dict: dict[str, torch.Tensor],
         optimizer_state: AdamOptimizerState,
         torch_cpu_rng_state: bytes,
-        torch_cuda_rng_states: List[bytes],
+        torch_cuda_rng_states: list[bytes],
         global_step: int,
     ) -> tensors_pb2.ModelCheckpointProto:
         """
@@ -328,9 +329,7 @@ class ModelCheckpointConverter:
             proto.model_state_dict[name].CopyFrom(TensorStateConverter.to_proto(tensor))
 
         # Serialize optimizer state
-        proto.optimizer_state.CopyFrom(
-            AdamOptimizerStateConverter.to_proto(optimizer_state)
-        )
+        proto.optimizer_state.CopyFrom(AdamOptimizerStateConverter.to_proto(optimizer_state))
 
         # Serialize RNG state
         proto.rng_state.CopyFrom(
@@ -345,7 +344,7 @@ class ModelCheckpointConverter:
     @staticmethod
     def from_proto(
         proto: tensors_pb2.ModelCheckpointProto,
-    ) -> tuple[Dict[str, torch.Tensor], AdamOptimizerState, bytes, List[bytes], int]:
+    ) -> tuple[dict[str, torch.Tensor], AdamOptimizerState, bytes, list[bytes], int]:
         """
         Deserialize ModelCheckpointProto to checkpoint components.
 
@@ -356,7 +355,7 @@ class ModelCheckpointConverter:
             Tuple of (model_state_dict, optimizer_state, cpu_rng, cuda_rngs, global_step)
         """
         # Deserialize model state dict
-        model_state_dict: Dict[str, torch.Tensor] = {}
+        model_state_dict: dict[str, torch.Tensor] = {}
         for name, tensor_proto in proto.model_state_dict.items():
             model_state_dict[name] = TensorStateConverter.from_proto(tensor_proto)
 

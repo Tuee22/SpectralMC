@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import json
-import pytest
-from botocore.exceptions import ClientError
 from unittest.mock import patch
 
+import pytest
+from botocore.exceptions import ClientError
+
+from spectralmc.result import Failure, Success
 from spectralmc.storage import AsyncBlockchainModelStore
 
 
@@ -31,18 +33,14 @@ async def test_audit_log_append(async_store: AsyncBlockchainModelStore) -> None:
     assert async_store._s3_client is not None
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
     audit_entries = []
-    async for page in paginator.paginate(
-        Bucket=async_store.bucket_name, Prefix="audit_log/"
-    ):
+    async for page in paginator.paginate(Bucket=async_store.bucket_name, Prefix="audit_log/"):
         if isinstance(page, dict) and "Contents" in page:
             contents = page["Contents"]
             assert isinstance(contents, list)
             audit_entries.extend([obj["Key"] for obj in contents])
 
     # Should have 3 audit log entries
-    assert (
-        len(audit_entries) == 3
-    ), f"Expected 3 audit log entries, got {len(audit_entries)}"
+    assert len(audit_entries) == 3, f"Expected 3 audit log entries, got {len(audit_entries)}"
 
     # Verify each entry contains correct metadata
     for i, entry_key in enumerate(sorted(audit_entries)):
@@ -102,18 +100,19 @@ async def test_audit_log_failure_non_blocking(
         assert version.content_hash == content_hash
 
         # Verify HEAD was updated
-        head = await async_store.get_head()
-        assert head is not None
-        assert head.counter == 0
-        assert head.content_hash == content_hash
+        head_result = await async_store.get_head()
+        match head_result:
+            case Success(head):
+                assert head.counter == 0
+                assert head.content_hash == content_hash
+            case Failure(_):
+                pytest.fail("Expected HEAD to exist")
 
     # Verify no audit log entries were created (because it failed)
     assert async_store._s3_client is not None
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
     audit_entries = []
-    async for page in paginator.paginate(
-        Bucket=async_store.bucket_name, Prefix="audit_log/"
-    ):
+    async for page in paginator.paginate(Bucket=async_store.bucket_name, Prefix="audit_log/"):
         if isinstance(page, dict) and "Contents" in page:
             contents = page["Contents"]
             assert isinstance(contents, list)

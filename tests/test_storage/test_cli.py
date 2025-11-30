@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from spectralmc.result import Failure, Success
 from spectralmc.storage import AsyncBlockchainModelStore
 
 
@@ -27,9 +28,11 @@ def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     cmd = [sys.executable, "-m", "spectralmc.storage", *args]
     return subprocess.run(
         cmd,
+        check=False,
         capture_output=True,
         text=True,
         timeout=30,  # Prevent hanging
+        encoding="utf-8",  # Handle Unicode characters (checkmarks) in CLI output
     )
 
 
@@ -208,7 +211,7 @@ async def test_cli_inspect_version(async_store: AsyncBlockchainModelStore) -> No
     """Test inspect command on specific version."""
     # Create commits
     await async_store.commit(b"data1", "hash1", "First commit")
-    v2 = await async_store.commit(b"data2", "hash2abc", "Second commit message")
+    _v2 = await async_store.commit(b"data2", "hash2abc", "Second commit message")
 
     result = run_cli("inspect", async_store.bucket_name, "v0000000001")
 
@@ -295,9 +298,7 @@ async def test_cli_gc_preview_with_protected_tags(
         await async_store.commit(b"data" * 100, f"hash{i}", f"Commit {i}")
 
     # Preview keeping last 3, but protect versions 2 and 5
-    result = run_cli(
-        "gc-preview", async_store.bucket_name, "3", "--protect-tags", "2,5"
-    )
+    result = run_cli("gc-preview", async_store.bucket_name, "3", "--protect-tags", "2,5")
 
     assert result.returncode == 0
 
@@ -329,9 +330,12 @@ async def test_cli_gc_run_with_yes_flag(async_store: AsyncBlockchainModelStore) 
     assert "Deleted 2 versions" in result.stdout
 
     # Verify versions were actually deleted
-    head = await async_store.get_head()
-    assert head is not None
-    assert head.counter == 4  # Last version still exists
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(head):
+            assert head.counter == 4  # Last version still exists
+        case Failure(_):
+            pytest.fail("Expected HEAD to exist")
 
     # Version 0 should still exist (genesis is always protected)
     v0 = await async_store.get_version("v0000000000")
@@ -379,9 +383,7 @@ async def test_cli_gc_run_protects_tags(async_store: AsyncBlockchainModelStore) 
 
 
 @pytest.mark.asyncio
-async def test_cli_tensorboard_log(
-    async_store: AsyncBlockchainModelStore, tmp_path: Path
-) -> None:
+async def test_cli_tensorboard_log(async_store: AsyncBlockchainModelStore, tmp_path: Path) -> None:
     """Test tensorboard-log command."""
     # Create some commits
     for i in range(3):

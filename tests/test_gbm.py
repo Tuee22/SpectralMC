@@ -2,15 +2,15 @@
 """
 Regression tests for :pymod:`spectralmc.gbm`.
 
-Each constant lives in UPPER‑CASE to keep *mypy --strict* and the
-project’s flake‑strict config happy.
+Each constant lives in UPPER-CASE to keep *mypy --strict* and the
+project's flake-strict config happy.
 """
 
 from __future__ import annotations
 
 import math
 import warnings
-from typing import List, Literal, TypeAlias
+from typing import Literal, TypeAlias
 
 import numpy as np
 import pytest
@@ -19,6 +19,7 @@ from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
 from spectralmc.models.numerical import Precision
 from spectralmc.quantlib import bs_price_quantlib
 from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler
+
 
 # ─────────────────────────────── type aliases ───────────────────────────────
 Inputs: TypeAlias = BlackScholes.Inputs
@@ -36,7 +37,9 @@ _BS_DIMENSIONS = {
 
 _TIMESTEPS = 1
 _NETWORK_SIZE = 256
-_BATCHES_PER_RUN = 2**19
+_BATCHES_PER_RUN = (
+    2**17
+)  # Reduced from 2**19 (524,288) to 2**17 (131,072) for GPUs with limited VRAM
 _THREADS_PER_BLOCK: Literal[32, 64, 128, 256, 512, 1024] = 256
 _MC_SEED = 7
 _BUFFER_SIZE = 1
@@ -54,7 +57,7 @@ _EPS32 = 1e-4
 _SNAPSHOT_REPS = 8
 _DET_REL_TOL = 1e-6
 
-# QuantLib deprecation warnings are noisy on recent releases – silence once.
+# QuantLib deprecation warnings are noisy on recent releases - silence once.
 warnings.filterwarnings("ignore", category=DeprecationWarning, module=r".*QuantLib.*")
 
 
@@ -79,15 +82,15 @@ def _make_engine(precision: Precision, *, skip: int = 0) -> BlackScholes:
     return BlackScholes(cfg)
 
 
-def _collect(engine: BlackScholes, inp: Inputs, n: int) -> List[HostPriceResults]:
-    """Return *n* independent Monte‑Carlo prices."""
+def _collect(engine: BlackScholes, inp: Inputs, n: int) -> list[HostPriceResults]:
+    """Return *n* independent Monte-Carlo prices."""
     return [engine.price_to_host(inp) for _ in range(n)]
 
 
 # ───────────────────────────────── tests ────────────────────────────────────
 @pytest.mark.parametrize("precision", [Precision.float32, Precision.float64])
 def test_black_scholes_mc(precision: Precision) -> None:
-    """Aggregate MC accuracy against analytic Black–Scholes."""
+    """Aggregate MC accuracy against analytic Black-Scholes."""
     engine = _make_engine(precision)
     sampler = SobolSampler(
         pydantic_class=BlackScholes.Inputs,
@@ -96,9 +99,7 @@ def test_black_scholes_mc(precision: Precision) -> None:
     )
 
     def _stats(inp: Inputs) -> tuple[float, float | None]:
-        mc_vals = np.array(
-            [p.put_price for p in _collect(engine, inp, _MC_SAMPLE_REPS)]
-        )
+        mc_vals = np.array([p.put_price for p in _collect(engine, inp, _MC_SAMPLE_REPS)])
         analytic = bs_price_quantlib(inp).put_price
 
         mean = float(mc_vals.mean())

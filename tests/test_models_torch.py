@@ -1,31 +1,35 @@
 """
-End‑to‑end tests for ``spectralmc.models.torch``.
+End-to-end tests for ``spectralmc.models.torch``.
 
 The suite focuses on *reproducibility* and *consistency* of:
 
-* Strongly‑typed helpers (``DType``, ``Device``)
-* Thread‑safe context managers (``default_dtype``, ``default_device``)
-* SafeTensor and optimiser state round‑tripping
+* Strongly-typed helpers (``DType``, ``Device``)
+* Thread-safe context managers (``default_dtype``, ``default_device``)
+* SafeTensor and optimiser state round-tripping
 * Environment fingerprinting
 * Determinism knobs (cuDNN flags, TF32, etc.)
 
-All tests are fully typed and mypy‑strict‑clean.
+All tests are fully typed and mypy-strict-clean.
 """
 
 from __future__ import annotations
 
-from typing import List, Mapping, Tuple
+from typing import Mapping
 
-import pytest
 import torch
 
 import spectralmc.models.torch as sm_torch
 
+
+# Module-level GPU requirement - test file fails immediately without GPU
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
+GPU_DEV: torch.device = torch.device("cuda:0")
+
 # ──────────────────────────── helpers & fixtures ────────────────────────────
-_HAS_CUDA: bool = torch.cuda.is_available()
 
 
-def _make_parameters() -> List[torch.nn.Parameter]:
+def _make_parameters() -> list[torch.nn.Parameter]:
     """Return a small deterministic parameter list."""
     gen = torch.Generator().manual_seed(42)
     p = torch.randn(4, 4, generator=gen)
@@ -41,17 +45,10 @@ def test_dtype_roundtrip() -> None:
 
 def test_device_roundtrip() -> None:
     assert sm_torch.Device.from_torch(torch.device("cpu")) is sm_torch.Device.cpu
-    if _HAS_CUDA:
-        assert (
-            sm_torch.Device.from_torch(torch.device("cuda", 0)) is sm_torch.Device.cuda
-        )
-    else:
-        # Non‑zero CUDA index should always fail, regardless of hardware
-        with pytest.raises(ValueError):
-            sm_torch.Device.from_torch(torch.device("cuda", 1))
+    assert sm_torch.Device.from_torch(torch.device("cuda", 0)) is sm_torch.Device.cuda
 
 
-# ───────────────────────── context‑managers (thread safe) ───────────────────
+# ───────────────────────── context-managers (thread safe) ───────────────────
 def test_default_dtype_nested() -> None:
     orig: torch.dtype = torch.get_default_dtype()
     with sm_torch.default_dtype(torch.float64):
@@ -67,13 +64,13 @@ def test_default_device_nested() -> None:
     orig: torch.device = torch.tensor([]).device
     with sm_torch.default_device(torch.device("cpu")):
         assert torch.tensor([]).device.type == "cpu"
-        # Device context nesting should not dead‑lock
+        # Device context nesting should not dead-lock
         with sm_torch.default_device(torch.device("cpu")):
             assert torch.tensor([]).device.type == "cpu"
     assert torch.tensor([]).device == orig
 
 
-# ────────────────────────── TensorState round‑trip ──────────────────────────
+# ────────────────────────── TensorState round-trip ──────────────────────────
 def test_tensor_state_roundtrip() -> None:
     t_orig: torch.Tensor = torch.arange(10, dtype=torch.float32)
     ts: sm_torch.TensorState = sm_torch.TensorState.from_torch(t_orig)
@@ -87,16 +84,14 @@ def test_tensor_state_roundtrip() -> None:
 
 # ───────────────────── Optimiser state serialisation ------------------------
 def test_adam_optimizer_state_roundtrip() -> None:
-    params: List[torch.nn.Parameter] = _make_parameters()
+    params: list[torch.nn.Parameter] = _make_parameters()
     opt = torch.optim.Adam(params, lr=0.001)
     loss: torch.Tensor = (params[0] ** 2).sum()
     loss.backward()
     opt.step()
 
     # Capture the optimiser state directly from its `state_dict`
-    state: sm_torch.AdamOptimizerState = sm_torch.AdamOptimizerState.from_torch(
-        opt.state_dict()
-    )
+    state: sm_torch.AdamOptimizerState = sm_torch.AdamOptimizerState.from_torch(opt.state_dict())
 
     # Restore into a fresh optimiser instance
     new_opt = torch.optim.Adam(params, lr=0.001)
@@ -118,12 +113,9 @@ def test_adam_optimizer_state_roundtrip() -> None:
 def test_torch_env_snapshot() -> None:
     env: sm_torch.TorchEnv = sm_torch.TorchEnv.snapshot()
     assert env.torch_version == torch.__version__
-    if _HAS_CUDA:
-        assert env.cuda_version != "<not available>"
-        assert env.gpu_name not in {"<cpu>", ""}
-    else:
-        assert env.cuda_version == "<not available>"
-        assert env.gpu_name == "<cpu>"
+    # GPU is always available (enforced by module-level assertion)
+    assert env.cuda_version != "<not available>"
+    assert env.gpu_name not in {"<cpu>", ""}
 
 
 # ─────────────────────── Determinism / reproducibility ----------------------
@@ -143,8 +135,8 @@ def test_deterministic_random_stream() -> None:
     assert torch.equal(a, b)
 
 
-@pytest.mark.skipif(not _HAS_CUDA, reason="cuDNN flags only relevant with CUDA")
 def test_cudnn_determinism_flags() -> None:
+    """Verify cuDNN flags are set for deterministic behavior."""
     assert torch.backends.cudnn.deterministic is True
     assert torch.backends.cudnn.benchmark is False
     # TF32 must be disabled
@@ -153,7 +145,6 @@ def test_cudnn_determinism_flags() -> None:
 
 
 # ─────────────────────────── default_device with CUDA -----------------------
-@pytest.mark.skipif(not _HAS_CUDA, reason="requires a CUDA device")
 def test_default_device_cuda_context() -> None:
     prev: torch.device = torch.tensor([]).device
     with sm_torch.default_device(torch.device("cuda", 0)):
@@ -163,7 +154,7 @@ def test_default_device_cuda_context() -> None:
 
 # ────────────────────────────── sanity check ---------------------------------
 def test_public_api_all_exports() -> None:
-    expected: Tuple[str, ...] = (
+    expected: tuple[str, ...] = (
         "FullPrecisionDType",
         "ReducedPrecisionDType",
         "AnyDType",

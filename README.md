@@ -8,6 +8,79 @@ While useful in multiple domains, SpectralMC is especially relevant to the field
 
 ## Key Features
 
+### Training Lifecycle Overview
+
+SpectralMC's complete training workflow from simulation to production deployment:
+
+```mermaid
+flowchart TB
+  SimParams[1. Define Simulation Parameters - BlackScholesConfig]
+  SobolSample[2. Sobol Sampler - Generate Quasi-Random Contracts]
+  MCSimulation[3. GPU Monte Carlo - Price Contracts with GBM]
+  FFT[4. FFT - Estimate Characteristic Function]
+  CVNNTrain[5. CVNN Training - Approximate Spectrum]
+  BlockchainCommit[6. Blockchain Commit - Version Model]
+  Inference[7. Inference - Production Pricing]
+
+  SimParams --> SobolSample
+  SobolSample --> MCSimulation
+  MCSimulation --> FFT
+  FFT --> CVNNTrain
+  CVNNTrain --> BlockchainCommit
+  BlockchainCommit --> Inference
+
+  CVNNTrain -->|Next Batch| SobolSample
+```
+
+### Component Architecture
+
+SpectralMC's tightly-coupled components in the GbmCVNNPricer:
+
+```mermaid
+flowchart TB
+  GbmCVNNPricer[GbmCVNNPricer - Training Orchestrator]
+  SobolSampler[SobolSampler - Quasi-Random Contract Generation]
+  GBMSimulator[GBM Simulator - Numba CUDA Kernel]
+  FFTEngine[FFT Engine - CuPy cuFFT]
+  CVNNModel[CVNN Model - PyTorch Complex Network]
+  Optimizer[Adam Optimizer - Complex Gradients]
+
+  GbmCVNNPricer --> SobolSampler
+  GbmCVNNPricer --> GBMSimulator
+  GbmCVNNPricer --> FFTEngine
+  GbmCVNNPricer --> CVNNModel
+  GbmCVNNPricer --> Optimizer
+
+  SobolSampler -->|Contract Parameters| GBMSimulator
+  GBMSimulator -->|MC Samples| FFTEngine
+  FFTEngine -->|Characteristic Function| CVNNModel
+  CVNNModel -->|Predictions| Optimizer
+  Optimizer -->|Updated Weights| CVNNModel
+```
+
+### GPU Execution Pipeline
+
+Pure-GPU workflow with zero CPU transfers during training:
+
+```mermaid
+flowchart TB
+  GPUStart[GPU Memory - Contract Parameters]
+  NumbaKernel[Numba CUDA - GBM Simulation]
+  DLPackTransfer[DLPack Zero-Copy Transfer]
+  CuPyFFT[CuPy - FFT Computation]
+  PyTorchCVNN[PyTorch - CVNN Forward/Backward]
+  GPUEnd[GPU Memory - Updated Model Weights]
+
+  GPUStart --> NumbaKernel
+  NumbaKernel --> DLPackTransfer
+  DLPackTransfer --> CuPyFFT
+  CuPyFFT --> PyTorchCVNN
+  PyTorchCVNN --> GPUEnd
+  GPUEnd -->|Next Batch| GPUStart
+```
+
+### Core Capabilities
+
 - **Monte-Carlo Simulation**: Generates a finite sample from a parametric distribution directly on the GPU.
 - **Fourier Transform**: Uses Fast Fourier Transform (FFT) to estimate the sample's characteristic function.
 - **CVNN Training**: Updates the parameters of a complex-valued neural network to approximate the characteristic function.
@@ -173,12 +246,6 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
 # Run with verbose output
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all -v
 
-# Run only CPU tests (excludes @pytest.mark.gpu)
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all -m 'not gpu'
-
-# Run only GPU tests
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all -m gpu
-
 # Run specific test file
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_gbm.py
 
@@ -209,8 +276,8 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all 
 ### Test Organization
 
 - **Test directory**: `tests/`
-- **Default behavior**: Excludes GPU tests (`-m 'not gpu'` in `pyproject.toml`)
-- **GPU tests**: Marked with `@pytest.mark.gpu` decorator
+- **GPU required**: All tests require GPU - missing GPU causes test failure
+- **No fallbacks**: Silent CPU fallbacks are forbidden
 - **Fixtures**: Global GPU memory cleanup in `tests/conftest.py`
 
 ### Type Checking

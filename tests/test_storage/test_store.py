@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import pytest
 
+from spectralmc.result import Failure, Success
 from spectralmc.storage import AsyncBlockchainModelStore
-from spectralmc.storage.chain import ModelVersion
 from spectralmc.storage.errors import VersionNotFoundError
 
 
@@ -21,8 +21,8 @@ async def test_store_initialization(async_store: AsyncBlockchainModelStore) -> N
 @pytest.mark.asyncio
 async def test_get_head_empty(async_store: AsyncBlockchainModelStore) -> None:
     """Test get_head returns None when no commits exist."""
-    head = await async_store.get_head()
-    assert head is None
+    head_result = await async_store.get_head()
+    assert head_result.is_failure()
 
 
 @pytest.mark.asyncio
@@ -46,7 +46,7 @@ async def test_commit_incremental(async_store: AsyncBlockchainModelStore) -> Non
     # First commit
     checkpoint1 = b"checkpoint 1"
     hash1 = "hash1"
-    version1 = await async_store.commit(checkpoint1, hash1, "First")
+    _version1 = await async_store.commit(checkpoint1, hash1, "First")
 
     # Second commit
     checkpoint2 = b"checkpoint 2"
@@ -66,10 +66,13 @@ async def test_get_head_after_commit(async_store: AsyncBlockchainModelStore) -> 
     checkpoint1 = b"checkpoint 1"
     version1 = await async_store.commit(checkpoint1, "hash1", "First")
 
-    head = await async_store.get_head()
-    assert head is not None
-    assert head.counter == version1.counter
-    assert head.semantic_version == version1.semantic_version
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(head):
+            assert head.counter == version1.counter
+            assert head.semantic_version == version1.semantic_version
+        case Failure(_):
+            pytest.fail("Expected HEAD to exist")
 
 
 @pytest.mark.asyncio
@@ -92,9 +95,12 @@ async def test_commit_chain(async_store: AsyncBlockchainModelStore) -> None:
             assert version.parent_hash == versions[i - 1].content_hash
 
     # Verify HEAD points to latest
-    head = await async_store.get_head()
-    assert head is not None
-    assert head.counter == 4
+    head_result = await async_store.get_head()
+    match head_result:
+        case Success(head):
+            assert head.counter == 4
+        case Failure(_):
+            pytest.fail("Expected HEAD to exist")
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,5 @@
 from google.protobuf import message
+
 from . import common_pb2
 
 class TensorStateProto(message.Message):
