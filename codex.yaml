@@ -1,0 +1,228 @@
+version: 1
+project: SpectralMC
+purpose: >
+  Codex policy derived from documents/engineering/*.md. Encodes container-only execution,
+  strict typing/purity/immutability, GPU-first testing, deterministic PyTorch facade usage,
+  build philosophy, blockchain storage safety, and documentation SSoT rules. Treat this as
+  the authoritative runbook for agents.
+
+defaults:
+  working_directory: /home/matthewnowak/SpectralMC
+  run_in_container: true
+  container_command_prefix: "docker compose -f docker/docker-compose.yml exec spectralmc"
+  log_output: true
+  log_path: /tmp/codex-run.log
+
+rules:
+  # Coding Standards Agent
+  - id: coding-standards
+    requirement: >
+      Enforce Ruff -> Black (100 cols) -> mypy strict. No Any, cast(), or type: ignore.
+      Imports unconditional at module top (no TYPE_CHECKING, no function-level imports).
+      Use ADTs/Result for errors; no exception swallowing; track deprecations.
+    commands:
+      - "{{container_command_prefix}} poetry run check-code"
+      - "{{container_command_prefix}} mypy"
+      - "{{container_command_prefix}} black --check ."
+      - "{{container_command_prefix}} ruff check --fix ."
+    forbidden:
+      - "Any"
+      - "cast("
+      - "# type: ignore"
+      - "TYPE_CHECKING"
+      - "import inside functions/blocks"
+
+  # Purity Agent
+  - id: purity
+    requirement: >
+      Pure code only: no for/while/if statements; use comprehensions, conditional
+      expressions, match/case with assert_never. No side effects/logging in pure code.
+      No raise for expected errors—return Result/ADT factories.
+    forbidden:
+      - "for "
+      - "while "
+      - "if "  # statements; conditional expressions allowed
+      - "raise "  # for expected control flow
+    notes:
+      - "match/case allowed; enforce exhaustiveness."
+
+  # Immutability Agent
+  - id: immutability
+    requirement: >
+      Do not bypass frozen guarantees. No object.__setattr__, __dict__, vars() hacks on
+      frozen objects. Prefer new instances or dataclasses.replace. Tests must not use
+      bypass patterns.
+    forbidden:
+      - "object.__setattr__"
+      - "__dict__["
+      - "vars("
+
+  # Pydantic Agent
+  - id: pydantic
+    requirement: >
+      Pydantic v2 models use ConfigDict(extra='forbid', frozen=true recommended), typed
+      fields, docstrings, and validators with explicit return types (mode='after' for
+      cross-field). Reject unknown fields; configs are immutable where possible.
+
+  # Documentation Agent
+  - id: documentation
+    requirement: >
+      Maintain SSoT linking, avoid duplication. Modules need header docstring with scope,
+      overview, implementation details, catalogue. Public functions/classes use Google-style
+      docstrings. Use relative links with anchors; if A links to B, B links back.
+
+  # Testing Agent
+  - id: testing
+    requirement: >
+      GPU-required tests, no CPU fallback or pytest.skip for missing CUDA. Fully typed tests.
+      Run via poetry run test-all (with args allowed) and capture logs to file. Avoid 13
+      anti-patterns; prefer check-code.
+    commands:
+      - "{{container_command_prefix}} poetry run test-all > {{log_path}} 2>&1"
+      - "{{container_command_prefix}} poetry run test-all -k \"{keyword}\" > {{log_path}} 2>&1"
+      - "{{container_command_prefix}} poetry run test-all {path} > {{log_path}} 2>&1"
+      - "{{container_command_prefix}} poetry run check-code"
+    forbidden:
+      - "pytest"  # direct
+      - "poetry run pytest"
+      - "CPU fallback for missing CUDA"
+      - "pytest.skip for missing GPU"
+    notes:
+      - "Add module-level GPU assertions; seed randomness for determinism."
+
+  # CPU/GPU Compute Policy Agent
+  - id: cpu-gpu-policy
+    requirement: >
+      Two-phase: deterministic CPU init (Sobol) then GPU-only compute. CPU acceptable for
+      init, checkpoint IO, RNG state, optimizer snapshots. Enforce GPU-only training/forward;
+      validate device placement; tests default to GPU.
+
+  # PyTorch Facade Agent
+  - id: pytorch-facade
+    requirement: >
+      Import spectralmc.models.torch before torch; configure deterministic settings (no TF32,
+      cudnn deterministic, warn_only=False). Import in main thread. Use ComplexValuedModel
+      protocol and (real, imag) tensor pairs. Raising ImportError if torch imported first.
+    forbidden:
+      - "import torch"  # before facade
+    notes:
+      - "Facade acts as determinism interpreter; keep import order strict."
+
+  # Docker Build Agent
+  - id: docker-build
+    requirement: >
+      Dual build modes: binary default vs BUILD_FROM_SOURCE=true for sm_52 legacy GPUs.
+      Poetry-first single RUN; no pip after Poetry; do not copy poetry.lock. Avoid extra
+      poetry config commands.
+    commands:
+      - "cd docker && docker compose up --build -d"
+      - "BUILD_FROM_SOURCE=true docker compose up --build -d"
+    forbidden:
+      - "pip install"  # after Poetry
+      - "poetry.lock in image"
+      - "poetry config virtualenvs.create false"  # already in poetry.toml
+
+  # GPU Build Agent
+  - id: gpu-build
+    requirement: >
+      Select build path by GPU capability. Legacy sm_52 uses Dockerfile.source (CUDA 11.8,
+      PT 2.4.1). Modern GPUs use binary path (CUDA 12.8, PT 2.7.1+). Follow troubleshooting
+      guidance from gpu_build.md.
+
+  # Blockchain Storage Agent
+  - id: blockchain-storage
+    requirement: >
+      Preserve atomic 10-step CAS protocol, immutable version dirs, and Merkle linking.
+      Use AsyncBlockchainModelStore; support pinned/tracking inference, chain verify, GC,
+      TensorBoard hooks. Never mutate committed versions.
+    commands:
+      - "{{container_command_prefix}} python -m spectralmc.storage list-versions {bucket}"
+      - "{{container_command_prefix}} python -m spectralmc.storage verify {bucket}"
+      - "{{container_command_prefix}} python -m spectralmc.storage gc-run {bucket} {keep} --yes"
+
+  # Effect Interpreter Agent
+  - id: effect-interpreter
+    requirement: >
+      Model all side effects as frozen ADTs with discriminators; interpret centrally. Compose
+      effects safely; use factories to prevent illegal states; provide mock interpreters for
+      pure tests. No side effects outside interpreter layer.
+
+  # Reproducibility Agent
+  - id: reproducibility
+    requirement: >
+      Enforce import-order determinism (facade first), explicit RNG capture/restore, checkpoint
+      resume equivalence, and effect sequencing. Determinism is a type property; failures must
+      occur at import/compile time.
+
+  # Documentation Index Agent
+  - id: doc-index
+    requirement: >
+      Respect cross-links from index.md; adhere to priorities: reproducibility, performance,
+      reliability, maintainability. Non-compliance risks must be considered in reviews.
+
+  # Git Safety Agent
+  - id: git-safety
+    requirement: >
+      Do not run git commit/push/amend/force/reset-hard. Leave changes uncommitted for human
+      review.
+    forbidden:
+      - "git commit"
+      - "git push"
+      - "git reset --hard"
+
+commands:
+  start_services: "cd docker && docker compose up -d"
+  check_code: "{{container_command_prefix}} poetry run check-code"
+  test_all: "{{container_command_prefix}} poetry run test-all > {{log_path}} 2>&1"
+  test_file: "{{container_command_prefix}} poetry run test-all {path} > {{log_path}} 2>&1"
+  test_keyword: "{{container_command_prefix}} poetry run test-all -k \"{keyword}\" > {{log_path}} 2>&1"
+  mypy: "{{container_command_prefix}} mypy"
+  black_check: "{{container_command_prefix}} black --check ."
+  ruff_fix: "{{container_command_prefix}} ruff check --fix ."
+  verify_chain: "{{container_command_prefix}} python -m spectralmc.storage verify {bucket}"
+  gc_chain: "{{container_command_prefix}} python -m spectralmc.storage gc-run {bucket} {keep} --yes"
+
+forbidden:
+  commands:
+    - pattern: "pytest"
+      reason: Tests must run through poetry run test-all
+    - pattern: "poetry run pytest"
+      reason: Direct pytest is blocked in Dockerfile
+    - pattern: "git commit"
+      reason: Human-only commits
+    - pattern: "git push"
+      reason: Human-only pushes
+    - pattern: "git reset --hard"
+      reason: Prevent destructive operations
+  behaviors:
+    - "CPU fallback for missing CUDA"
+    - "Conditional imports or TYPE_CHECKING guards"
+    - "Adding pytest.skip for missing GPU"
+    - "Introducing Any, cast(), or type: ignore"
+    - "Bypassing frozen dataclasses with object.__setattr__/__dict__/vars"
+    - "Importing torch before spectralmc.models.torch"
+    - "Side effects in pure code paths"
+
+checklists:
+  pre_commit_like:
+    - "Run check-code or at minimum mypy and black --check"
+    - "Run poetry run test-all with log capture at {{log_path}}"
+    - "Inspect logs for NaN/Inf, divergence, or numerical warnings"
+    - "Verify no pytest.skip or CPU fallbacks were added"
+    - "Ensure docstrings and type hints exist for new public functions"
+    - "Update stubs/ if new third-party APIs are used"
+    - "Confirm facade import order in new modules"
+    - "For storage changes, run chain verify/GC as needed"
+  recovery_steps:
+    - "Reproduce failures with poetry run test-all on the smallest scope (file or -k filter)."
+    - "Read the full log at {{log_path}}; avoid truncated output."
+    - "Check seeds, RNG capture/restore, and device placement."
+    - "Verify GPU memory/availability before code refactors."
+    - "For storage issues, re-run chain verification and inspect CAS steps."
+
+notes:
+  - "Tests live under tests/ (effects, storage, e2e, integrity) and require GPU."
+  - "Use stubs/ for any new dependency typing; keep stubs type-pure."
+  - "Architecture and standards references are under documents/engineering/."
+  - "Build path depends on GPU capability: binary default vs BUILD_FROM_SOURCE for sm_52."
+  - "Blockchain storage is immutable; follow 10-step CAS protocol."
