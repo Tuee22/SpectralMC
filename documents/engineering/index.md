@@ -222,11 +222,12 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
 - ❌ `__dict__` manipulation on immutable objects
 
 **Purity** (see [Purity Doctrine](purity_doctrine.md)):
-- ❌ `for` loops (use comprehensions)
+- ❌ `for` loops in business logic (use comprehensions or Effect sequences)
 - ❌ `if` statements (use conditional expressions or `match`/`case`)
 - ❌ `while` loops (use comprehensions or recursion)
 - ❌ `raise` for expected errors (use Result types)
 - ❌ Side effects in pure functions (`print()`, `logger.*()`)
+- ❌ Direct GPU ops in training code (training must build Effect ADTs, only interpreter executes)
 
 **Error Handling** (see [Coding Standards](coding_standards.md)):
 - ❌ Exceptions for expected errors (use Result types)
@@ -257,7 +258,8 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
 - ✅ Comprehensions instead of `for` loops
 - ✅ Conditional expressions or `match`/`case` instead of `if` statements
 - ✅ Factory functions returning `Result` for validation
-- ✅ Side effects isolated to Effect Interpreter
+- ✅ Training logic builds Effect ADTs (pure description of operations)
+- ✅ Side effects isolated to Effect Interpreter (only place effects execute)
 
 **Functional Error Handling** (see [Coding Standards](coding_standards.md)):
 - ✅ Result[T, E] for expected errors

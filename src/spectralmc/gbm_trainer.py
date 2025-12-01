@@ -501,6 +501,7 @@ class GbmCVNNPricer:
                 cols=mc_snapshot.sim_params.total_paths(),
                 seed=ngen_snapshot.seed,
                 skip=current_skip,
+                output_tensor_id=f"normals_{batch_idx}",
             ),
             # Phase 2: Simulate GBM paths using Numba kernel
             # Market params are placeholders; real values come from Sobol sampler
@@ -515,12 +516,14 @@ class GbmCVNNPricer:
                 simulate_log_return=mc_snapshot.simulate_log_return,
                 normalize_forwards=mc_snapshot.normalize_forwards,
                 input_normals_id=f"normals_{batch_idx}",
+                output_tensor_id=f"paths_{batch_idx}",
             ),
             StreamSync(stream_type="cupy"),
             # Phase 3: FFT of price paths
             ComputeFFT(
                 input_tensor_id=f"paths_{batch_idx}",
                 axis=1,
+                output_tensor_id=f"fft_{batch_idx}",
             ),
             # Phase 4: Transfer FFT result from CuPy to PyTorch via DLPack
             DLPackTransfer(
@@ -554,7 +557,7 @@ class GbmCVNNPricer:
                 step=batch_idx,
             ),
             # Phase 8: RNG state capture for reproducibility
-            CaptureRNGState(rng_type="torch_cuda"),
+            CaptureRNGState(rng_type="torch_cuda", output_id=f"rng_state_{batch_idx}"),
         )
 
     def build_epoch_effects(self, config: TrainingConfig) -> EffectSequence[list[object]]:
@@ -1005,13 +1008,8 @@ class GbmCVNNPricer:
             >>> print(f"Final loss: {result.final_loss:.6f}")
         """
         from spectralmc.effects import (
-            GPUInterpreter,
-            MetadataInterpreter,
-            MonteCarloInterpreter,
-            RNGInterpreter,
+            SharedRegistry,
             SpectralMCInterpreter,
-            StorageInterpreter,
-            TrainingInterpreter,
         )
         from spectralmc.result import Failure, Success
 
@@ -1021,38 +1019,27 @@ class GbmCVNNPricer:
                 "auto_commit or commit_interval requires blockchain_store to be provided"
             )
 
-        # Initialize interpreters
-        gpu_interp = GPUInterpreter(
+        # Create interpreter with shared registry using factory method
+        interpreter = SpectralMCInterpreter.create(
             torch_stream=self._context.torch_stream,
             cupy_stream=self._context.cupy_stream,
+            storage_bucket="",  # Not used for training
         )
-        training_interp = TrainingInterpreter()
-        mc_interp = MonteCarloInterpreter()
-        storage_interp = StorageInterpreter(bucket="")  # Not used for training
-        rng_interp = RNGInterpreter()
-        metadata_interp = MetadataInterpreter()
 
-        # Create master interpreter
-        interpreter = SpectralMCInterpreter(
-            gpu=gpu_interp,
-            training=training_interp,
-            montecarlo=mc_interp,
-            storage=storage_interp,
-            rng=rng_interp,
-            metadata=metadata_interp,
-        )
+        # Get shared registry for pre-registration
+        registry = interpreter.registry
 
         # Register model and optimizer
         adam = optim.Adam(self._cvnn.parameters(), lr=config.learning_rate)
         if self._optimizer_state is not None:
             adam.load_state_dict(self._optimizer_state.to_torch())
 
-        training_interp.register_model("cvnn", self._cvnn)
-        training_interp.register_optimizer("adam", adam)
+        registry.register_model("cvnn", self._cvnn)
+        registry.register_optimizer("adam", adam)
 
         # Initialize metadata
-        metadata_interp.register("global_step", self._global_step)
-        metadata_interp.register("sobol_skip", self._sobol_skip)
+        registry.register_metadata("global_step", self._global_step)
+        registry.register_metadata("sobol_skip", self._sobol_skip)
 
         self._cvnn.train()
 
@@ -1076,10 +1063,13 @@ class GbmCVNNPricer:
                 case Success(_):
                     pass
 
-            # Get loss from registry for logging
-            loss_tensor = training_interp._tensor_registry.get(f"loss_{batch_idx}")
-            if loss_tensor is not None and hasattr(loss_tensor, "item"):
-                final_loss = float(loss_tensor.item())
+            # Get loss from shared registry for logging
+            loss_result = registry.get_tensor(f"loss_{batch_idx}")
+            match loss_result:
+                case Success(loss_tensor) if hasattr(loss_tensor, "item"):
+                    final_loss = float(loss_tensor.item())
+                case _:
+                    pass  # No loss tensor found
 
             # Compute grad norm
             final_grad_norm = float(
@@ -1116,23 +1106,30 @@ class GbmCVNNPricer:
                     batch=current_global_step,
                 )
 
-        # Update internal state from metadata
-        global_step_val = metadata_interp._registry.get("global_step")
-        sobol_skip_val = metadata_interp._registry.get("sobol_skip")
+        # Update internal state from shared registry metadata
+        global_step_result = registry.get_metadata("global_step")
+        sobol_skip_result = registry.get_metadata("sobol_skip")
 
-        if isinstance(global_step_val, int):
-            self._global_step = global_step_val
-        if isinstance(sobol_skip_val, int):
-            self._sobol_skip = sobol_skip_val
+        match global_step_result:
+            case Success(val) if isinstance(val, int):
+                self._global_step = val
+            case _:
+                pass
+
+        match sobol_skip_result:
+            case Success(val) if isinstance(val, int):
+                self._sobol_skip = val
+            case _:
+                pass
 
         # Snapshot optimizer state
         # NOTE: Explicit .cpu() calls acceptable per CPU/GPU policy for checkpoint I/O.
         state_dict = adam.state_dict()
         for param_id in state_dict["state"]:
             for key in state_dict["state"][param_id]:
-                val = state_dict["state"][param_id][key]
-                if isinstance(val, torch.Tensor):
-                    state_dict["state"][param_id][key] = val.cpu()
+                state_val = state_dict["state"][param_id][key]
+                if isinstance(state_val, torch.Tensor):
+                    state_dict["state"][param_id][key] = state_val.cpu()
         self._optimizer_state = AdamOptimizerState.from_torch(state_dict)
 
         # Final blockchain commit

@@ -16,7 +16,7 @@ See Also:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Never, Protocol, TypeVar
+from typing import TYPE_CHECKING, Literal, Never, Protocol, TypeVar
 
 
 T = TypeVar("T")
@@ -99,25 +99,25 @@ class GPUInterpreter:
 
     Handles tensor transfers, stream synchronization, and kernel launches.
     Coordinates between PyTorch, CuPy, and Numba CUDA streams.
+    Uses SharedRegistry for tensor and kernel storage.
     """
 
     def __init__(
         self,
         torch_stream: torch.cuda.Stream,
         cupy_stream: cp.cuda.Stream,
+        registry: SharedRegistry,
     ) -> None:
         """Initialize GPU interpreter with CUDA streams.
 
         Args:
             torch_stream: PyTorch CUDA stream for PyTorch operations.
             cupy_stream: CuPy CUDA stream for CuPy operations.
+            registry: Shared registry for tensor and kernel storage.
         """
         self._torch_stream = torch_stream
         self._cupy_stream = cupy_stream
-        # Registry for tensor storage (tensor_id -> tensor)
-        self._tensor_registry: dict[str, object] = {}
-        # Registry for kernel functions (kernel_name -> callable)
-        self._kernel_registry: dict[str, object] = {}
+        self._registry = registry
 
     async def interpret(self, effect: GPUEffect) -> Result[object, GPUError]:
         """Execute GPU effect with stream coordination."""
@@ -149,9 +149,12 @@ class GPUInterpreter:
         from spectralmc.models.torch import Device
 
         try:
-            tensor = self._tensor_registry.get(tensor_id)
-            if tensor is None:
-                return Failure(GPUError(message=f"Tensor not found: {tensor_id}"))
+            tensor_result = self._registry.get_torch_tensor(tensor_id)
+            match tensor_result:
+                case Failure(err):
+                    return Failure(GPUError(message=f"Tensor not found: {tensor_id}"))
+                case Success(tensor):
+                    pass
 
             # Determine transfer destination
             if dst == Device.cpu:
@@ -159,14 +162,8 @@ class GPUInterpreter:
             else:
                 dest = TransferDestination.CUDA
 
-            # Validate tensor is a torch.Tensor (base TensorTree type)
-            if not isinstance(tensor, torch.Tensor):
-                return Failure(
-                    GPUError(message=f"Registry item {tensor_id} is not a Tensor: {type(tensor)}")
-                )
-
             result = move_tensor_tree(tensor, dest=dest)
-            self._tensor_registry[tensor_id] = result
+            self._registry.register_tensor(tensor_id, result)
             return Success(result)
         except (RuntimeError, ValueError) as e:
             return Failure(GPUError(message=str(e)))
@@ -209,9 +206,12 @@ class GPUInterpreter:
         Returns:
             Result containing None on success or GPUError on failure.
         """
-        kernel_fn = self._kernel_registry.get(name)
-        if kernel_fn is None:
-            return Failure(GPUError(message=f"Kernel not found: {name}"))
+        kernel_result = self._registry.get_kernel(name)
+        match kernel_result:
+            case Failure(err):
+                return Failure(GPUError(message=f"Kernel not found: {name}"))
+            case Success(kernel_fn):
+                pass
 
         try:
             # For Numba CUDA kernels, use [] indexing syntax
@@ -241,9 +241,12 @@ class GPUInterpreter:
         Returns:
             Result containing transferred tensor or GPUError.
         """
-        tensor = self._tensor_registry.get(effect.source_tensor_id)
-        if tensor is None:
-            return Failure(GPUError(message=f"Tensor not found: {effect.source_tensor_id}"))
+        tensor_result = self._registry.get_tensor(effect.source_tensor_id)
+        match tensor_result:
+            case Failure(err):
+                return Failure(GPUError(message=f"Tensor not found: {effect.source_tensor_id}"))
+            case Success(tensor):
+                pass
 
         try:
             import cupy as cp
@@ -268,35 +271,27 @@ class GPUInterpreter:
                     )
                 )
 
-            # Store result in registry
-            self._tensor_registry[effect.output_tensor_id] = transferred
+            # Store result in shared registry
+            self._registry.register_tensor(effect.output_tensor_id, transferred)
             return Success(transferred)
         except (RuntimeError, TypeError) as e:
             return Failure(GPUError(message=str(e)))
-
-    def register_tensor(self, tensor_id: str, tensor: object) -> None:
-        """Register a tensor in the interpreter's registry."""
-        self._tensor_registry[tensor_id] = tensor
-
-    def register_kernel(self, kernel_name: str, kernel_fn: object) -> None:
-        """Register a kernel function in the interpreter's registry."""
-        self._kernel_registry[kernel_name] = kernel_fn
 
 
 class TrainingInterpreter:
     """Interpreter for training effects.
 
     Handles forward/backward passes and optimizer steps.
+    Uses SharedRegistry for tensor, model, and optimizer storage.
     """
 
-    def __init__(self) -> None:
-        """Initialize training interpreter."""
-        # Registry for models (model_id -> model)
-        self._model_registry: dict[str, object] = {}
-        # Registry for optimizers (optimizer_id -> optimizer)
-        self._optimizer_registry: dict[str, object] = {}
-        # Registry for tensors (tensor_id -> tensor)
-        self._tensor_registry: dict[str, object] = {}
+    def __init__(self, registry: SharedRegistry) -> None:
+        """Initialize training interpreter.
+
+        Args:
+            registry: Shared registry for tensor, model, and optimizer storage.
+        """
+        self._registry = registry
 
     async def interpret(self, effect: TrainingEffect) -> Result[object, TrainingError]:
         """Execute training effect."""
@@ -326,21 +321,27 @@ class TrainingInterpreter:
         Returns:
             Result containing output tensor or TrainingError.
         """
-        model = self._model_registry.get(effect.model_id)
-        if model is None:
-            return Failure(TrainingError(message=f"Model not found: {effect.model_id}"))
+        model_result = self._registry.get_model(effect.model_id)
+        match model_result:
+            case Failure(err):
+                return Failure(TrainingError(message=f"Model not found: {effect.model_id}"))
+            case Success(model):
+                pass
 
-        tensor = self._tensor_registry.get(effect.input_tensor_id)
-        if tensor is None:
-            return Failure(TrainingError(message=f"Tensor not found: {effect.input_tensor_id}"))
+        tensor_result = self._registry.get_tensor(effect.input_tensor_id)
+        match tensor_result:
+            case Failure(err):
+                return Failure(TrainingError(message=f"Tensor not found: {effect.input_tensor_id}"))
+            case Success(tensor):
+                pass
 
         try:
             # Type-safe model call requires proper protocol
             # Use callable() for reliable type checking
             if callable(model):
                 output = model(tensor)
-                # Store output in registry with specified ID
-                self._tensor_registry[effect.output_tensor_id] = output
+                # Store output in shared registry with specified ID
+                self._registry.register_tensor(effect.output_tensor_id, output)
                 return Success(output)
             return Failure(TrainingError(message=f"Model {effect.model_id} is not callable"))
         except RuntimeError as e:
@@ -348,9 +349,12 @@ class TrainingInterpreter:
 
     async def _backward_pass(self, loss_tensor_id: str) -> Result[object, TrainingError]:
         """Compute gradients via backpropagation."""
-        tensor = self._tensor_registry.get(loss_tensor_id)
-        if tensor is None:
-            return Failure(TrainingError(message=f"Loss tensor not found: {loss_tensor_id}"))
+        tensor_result = self._registry.get_tensor(loss_tensor_id)
+        match tensor_result:
+            case Failure(err):
+                return Failure(TrainingError(message=f"Loss tensor not found: {loss_tensor_id}"))
+            case Success(tensor):
+                pass
 
         try:
             # PyTorch backward requires tensor with grad
@@ -363,9 +367,12 @@ class TrainingInterpreter:
 
     async def _optimizer_step(self, optimizer_id: str) -> Result[object, TrainingError]:
         """Update model parameters using optimizer."""
-        optimizer = self._optimizer_registry.get(optimizer_id)
-        if optimizer is None:
-            return Failure(TrainingError(message=f"Optimizer not found: {optimizer_id}"))
+        optimizer_result = self._registry.get_optimizer(optimizer_id)
+        match optimizer_result:
+            case Failure(err):
+                return Failure(TrainingError(message=f"Optimizer not found: {optimizer_id}"))
+            case Success(optimizer):
+                pass
 
         try:
             if hasattr(optimizer, "step"):
@@ -387,23 +394,26 @@ class TrainingInterpreter:
         Returns:
             Result containing loss tensor or TrainingError.
         """
-        pred = self._tensor_registry.get(effect.pred_tensor_id)
-        if pred is None:
-            return Failure(
-                TrainingError(message=f"Prediction tensor not found: {effect.pred_tensor_id}")
-            )
+        pred_result = self._registry.get_torch_tensor(effect.pred_tensor_id)
+        match pred_result:
+            case Failure(err):
+                return Failure(
+                    TrainingError(message=f"Prediction tensor not found: {effect.pred_tensor_id}")
+                )
+            case Success(pred):
+                pass
 
-        target = self._tensor_registry.get(effect.target_tensor_id)
-        if target is None:
-            return Failure(
-                TrainingError(message=f"Target tensor not found: {effect.target_tensor_id}")
-            )
+        target_result = self._registry.get_torch_tensor(effect.target_tensor_id)
+        match target_result:
+            case Failure(err):
+                return Failure(
+                    TrainingError(message=f"Target tensor not found: {effect.target_tensor_id}")
+                )
+            case Success(target):
+                pass
 
         try:
             import torch
-
-            if not isinstance(pred, torch.Tensor) or not isinstance(target, torch.Tensor):
-                return Failure(TrainingError(message="Tensors must be torch.Tensor"))
 
             loss: torch.Tensor
             if effect.loss_type == "mse":
@@ -416,8 +426,8 @@ class TrainingInterpreter:
                 # Type stubs incomplete for smooth_l1_loss
                 loss = torch.nn.functional.smooth_l1_loss(pred, target)  # type: ignore[attr-defined]
 
-            # Store loss in registry for BackwardPass
-            self._tensor_registry[effect.output_tensor_id] = loss
+            # Store loss in shared registry for BackwardPass
+            self._registry.register_tensor(effect.output_tensor_id, loss)
             return Success(loss)
         except RuntimeError as e:
             return Failure(TrainingError(message=str(e)))
@@ -437,71 +447,74 @@ class TrainingInterpreter:
             # a pre-registered SummaryWriter
             from torch.utils.tensorboard import SummaryWriter
 
-            # Check if a writer is registered
-            writer = self._tensor_registry.get("_tensorboard_writer")
-            if writer is not None and isinstance(writer, SummaryWriter):
-                for metric_name, metric_value in effect.metrics:
-                    writer.add_scalar(metric_name, metric_value, effect.step)
+            # Check if a writer is registered in shared registry
+            writer_result = self._registry.get_tensor("_tensorboard_writer")
+            match writer_result:
+                case Success(writer) if isinstance(writer, SummaryWriter):
+                    for metric_name, metric_value in effect.metrics:
+                        writer.add_scalar(metric_name, metric_value, effect.step)
+                case _:
+                    pass  # No writer registered, skip logging
 
             return Success(None)
         except (ImportError, RuntimeError):
             # Log metrics is optional - don't fail if TensorBoard unavailable
             return Success(None)
 
-    def register_model(self, model_id: str, model: object) -> None:
-        """Register a model in the interpreter's registry."""
-        self._model_registry[model_id] = model
-
-    def register_optimizer(self, optimizer_id: str, optimizer: object) -> None:
-        """Register an optimizer in the interpreter's registry."""
-        self._optimizer_registry[optimizer_id] = optimizer
-
-    def register_tensor(self, tensor_id: str, tensor: object) -> None:
-        """Register a tensor in the interpreter's registry."""
-        self._tensor_registry[tensor_id] = tensor
-
 
 class MonteCarloInterpreter:
     """Interpreter for Monte Carlo effects.
 
     Handles random number generation, path simulation, and FFT computation.
+    Uses SharedRegistry for tensor storage to enable data flow between effects.
     """
 
-    def __init__(self) -> None:
-        """Initialize Monte Carlo interpreter."""
-        # Registry for tensors
-        self._tensor_registry: dict[str, object] = {}
+    def __init__(self, registry: SharedRegistry) -> None:
+        """Initialize Monte Carlo interpreter.
+
+        Args:
+            registry: Shared registry for tensor storage across interpreters.
+        """
+        self._registry = registry
 
     async def interpret(self, effect: MonteCarloEffect) -> Result[object, MonteCarloError]:
         """Execute Monte Carlo effect."""
         match effect:
-            case GenerateNormals(rows=r, cols=c, seed=s, skip=sk):
-                return await self._generate_normals(r, c, s, sk)
+            case GenerateNormals():
+                return await self._generate_normals(effect)
             case SimulatePaths():
                 return await self._simulate_paths(effect)
-            case ComputeFFT(input_tensor_id=tid, axis=ax):
-                return await self._compute_fft(tid, ax)
+            case ComputeFFT():
+                return await self._compute_fft(effect)
             case _:
                 assert_never(effect)
 
     async def _generate_normals(
         self,
-        rows: int,
-        cols: int,
-        seed: int,
-        skip: int,
+        effect: GenerateNormals,
     ) -> Result[object, MonteCarloError]:
-        """Generate standard normal random matrix on GPU."""
+        """Generate standard normal random matrix on GPU.
+
+        Args:
+            effect: GenerateNormals effect with dimensions, seed, and output_tensor_id.
+
+        Returns:
+            Result containing the generated matrix or MonteCarloError.
+        """
         try:
             import cupy as cp
 
             # Use CuPy's random generator with seed
-            rng = cp.random.default_rng(seed)
+            rng = cp.random.default_rng(effect.seed)
             # Skip values if resuming (use tuple shape for skip)
-            if skip > 0:
-                _ = rng.standard_normal((skip,))
+            if effect.skip > 0:
+                _ = rng.standard_normal((effect.skip,))
             # Generate the matrix
-            matrix = rng.standard_normal((rows, cols), dtype=cp.float32)
+            matrix = rng.standard_normal((effect.rows, effect.cols), dtype=cp.float32)
+
+            # Store in shared registry with specified output ID
+            self._registry.register_tensor(effect.output_tensor_id, matrix)
+
             return Success(matrix)
         except RuntimeError as e:
             return Failure(MonteCarloError(message=str(e)))
@@ -527,15 +540,15 @@ class MonteCarloInterpreter:
 
             from spectralmc.gbm import SimulateBlackScholes
 
-            # Get input normals from registry
-            normals = self._tensor_registry.get(effect.input_normals_id)
-            if normals is None:
-                return Failure(
-                    MonteCarloError(message=f"Normals tensor not found: {effect.input_normals_id}")
-                )
-
-            if not isinstance(normals, cp.ndarray):
-                return Failure(MonteCarloError(message="Input normals must be a CuPy array"))
+            # Get input normals from shared registry
+            normals_result = self._registry.get_cupy_array(effect.input_normals_id)
+            match normals_result:
+                case Failure(err):
+                    return Failure(
+                        MonteCarloError(message=f"Normals tensor not found: {effect.input_normals_id}")
+                    )
+                case Success(normals):
+                    pass
 
             # Make a copy since the kernel operates in-place
             # Type stubs incomplete for cp.array
@@ -575,9 +588,8 @@ class MonteCarloInterpreter:
                 row_means = cp.mean(sims, axis=1, keepdims=True).squeeze()
                 sims *= cp.expand_dims(forwards / row_means, 1)
 
-            # Store result in registry for downstream effects
-            output_id = f"paths_{id(effect)}"
-            self._tensor_registry[output_id] = sims
+            # Store result in shared registry with specified output ID
+            self._registry.register_tensor(effect.output_tensor_id, sims)
 
             return Success(sims)
         except RuntimeError as e:
@@ -585,51 +597,59 @@ class MonteCarloInterpreter:
 
     async def _compute_fft(
         self,
-        input_tensor_id: str,
-        axis: int,
+        effect: ComputeFFT,
     ) -> Result[object, MonteCarloError]:
-        """Compute FFT on tensor."""
-        tensor = self._tensor_registry.get(input_tensor_id)
-        if tensor is None:
-            return Failure(MonteCarloError(message=f"Tensor not found: {input_tensor_id}"))
+        """Compute FFT on tensor.
+
+        Args:
+            effect: ComputeFFT effect with input_tensor_id, axis, and output_tensor_id.
+
+        Returns:
+            Result containing the FFT result or MonteCarloError.
+        """
+        tensor_result = self._registry.get_cupy_array(effect.input_tensor_id)
+        match tensor_result:
+            case Failure(err):
+                return Failure(MonteCarloError(message=f"Tensor not found: {effect.input_tensor_id}"))
+            case Success(tensor):
+                pass
 
         try:
             import cupy as cp
 
-            # Compute FFT using CuPy - tensor must be a cupy array
-            if isinstance(tensor, cp.ndarray):
-                result = cp.fft.fft(tensor, axis=axis)
-                return Success(result)
-            return Failure(MonteCarloError(message="Tensor is not a CuPy array"))
+            # Compute FFT using CuPy
+            result = cp.fft.fft(tensor, axis=effect.axis)
+
+            # Store in shared registry with specified output ID
+            self._registry.register_tensor(effect.output_tensor_id, result)
+
+            return Success(result)
         except RuntimeError as e:
             return Failure(MonteCarloError(message=str(e)))
-
-    def register_tensor(self, tensor_id: str, tensor: object) -> None:
-        """Register a tensor in the interpreter's registry."""
-        self._tensor_registry[tensor_id] = tensor
 
 
 class StorageInterpreter:
     """Interpreter for storage effects.
 
     Handles S3 reads, writes, and blockchain version commits.
+    Uses SharedRegistry for bytes content storage.
     """
 
-    def __init__(self, bucket: str) -> None:
+    def __init__(self, bucket: str, registry: SharedRegistry) -> None:
         """Initialize storage interpreter.
 
         Args:
             bucket: Default S3 bucket for operations.
+            registry: Shared registry for bytes content storage.
         """
         self._bucket = bucket
-        # Content registry for write operations (hash -> bytes)
-        self._content_registry: dict[str, bytes] = {}
+        self._registry = registry
 
     async def interpret(self, effect: StorageEffect) -> Result[object, StorageError]:
         """Execute storage effect."""
         match effect:
-            case ReadObject(bucket=b, key=k):
-                return await self._read_object(b or self._bucket, k)
+            case ReadObject():
+                return await self._read_object(effect)
             case WriteObject(bucket=b, key=k, content_hash=h):
                 return await self._write_object(b or self._bucket, k, h)
             case CommitVersion(parent_counter=p, checkpoint_hash=h, message=m):
@@ -637,8 +657,17 @@ class StorageInterpreter:
             case _:
                 assert_never(effect)
 
-    async def _read_object(self, bucket: str, key: str) -> Result[object, StorageError]:
-        """Read object from S3."""
+    async def _read_object(self, effect: ReadObject) -> Result[object, StorageError]:
+        """Read object from S3.
+
+        Args:
+            effect: ReadObject effect with bucket, key, and output_id.
+
+        Returns:
+            Result containing the read data or StorageError.
+        """
+        bucket = effect.bucket or self._bucket
+        key = effect.key
         try:
             # Import AsyncBlockchainModelStore for S3 operations
             from spectralmc.storage.s3_operations import S3Operations
@@ -654,6 +683,9 @@ class StorageInterpreter:
                 result = await ops.get_object(bucket, key)
                 match result:
                     case Success(data):
+                        # Store in shared registry with specified output ID
+                        if isinstance(data, bytes):
+                            self._registry.register_bytes(effect.output_id, data)
                         return Success(data)
                     case Failure(err):
                         return Failure(StorageError(message=str(err), bucket=bucket, key=key))
@@ -667,15 +699,19 @@ class StorageInterpreter:
         content_hash: str,
     ) -> Result[object, StorageError]:
         """Write object to S3."""
-        content = self._content_registry.get(content_hash)
-        if content is None:
-            return Failure(
-                StorageError(
-                    message=f"Content not found for hash: {content_hash}",
-                    bucket=bucket,
-                    key=key,
+        # Get content from shared registry using the content hash as key
+        content_result = self._registry.get_bytes(content_hash)
+        match content_result:
+            case Failure(registry_err):
+                return Failure(
+                    StorageError(
+                        message=f"Content not found for hash: {content_hash}",
+                        bucket=bucket,
+                        key=key,
+                    )
                 )
-            )
+            case Success(content):
+                pass
 
         try:
             from spectralmc.storage.s3_operations import S3Operations
@@ -691,8 +727,8 @@ class StorageInterpreter:
                 match result:
                     case Success(_):
                         return Success(None)
-                    case Failure(err):
-                        return Failure(StorageError(message=str(err), bucket=bucket, key=key))
+                    case Failure(s3_err):
+                        return Failure(StorageError(message=str(s3_err), bucket=bucket, key=key))
         except Exception as e:
             return Failure(StorageError(message=str(e), bucket=bucket, key=key))
 
@@ -703,9 +739,13 @@ class StorageInterpreter:
         message: str,
     ) -> Result[object, StorageError]:
         """Commit new model version."""
-        checkpoint_data = self._content_registry.get(checkpoint_hash)
-        if checkpoint_data is None:
-            return Failure(StorageError(message=f"Checkpoint not found: {checkpoint_hash}"))
+        # Get checkpoint data from shared registry
+        checkpoint_result = self._registry.get_bytes(checkpoint_hash)
+        match checkpoint_result:
+            case Failure(err):
+                return Failure(StorageError(message=f"Checkpoint not found: {checkpoint_hash}"))
+            case Success(checkpoint_data):
+                pass
 
         try:
             from spectralmc.storage.store import AsyncBlockchainModelStore
@@ -717,37 +757,50 @@ class StorageInterpreter:
         except Exception as e:
             return Failure(StorageError(message=str(e)))
 
-    def register_content(self, content_hash: str, content: bytes) -> None:
-        """Register content in the interpreter's registry."""
-        self._content_registry[content_hash] = content
-
 
 class RNGInterpreter:
     """Interpreter for RNG effects.
 
     Captures and restores RNG states for reproducibility.
+    Uses SharedRegistry for state bytes storage.
     See reproducibility_proofs.md for determinism guarantees.
     """
+
+    def __init__(self, registry: SharedRegistry) -> None:
+        """Initialize RNG interpreter.
+
+        Args:
+            registry: Shared registry for state bytes storage.
+        """
+        self._registry = registry
 
     async def interpret(self, effect: RNGEffect) -> Result[object, RNGError]:
         """Execute RNG effect."""
         match effect:
-            case CaptureRNGState(rng_type=rt):
-                return await self._capture_state(rt)
+            case CaptureRNGState():
+                return await self._capture_state(effect)
             case RestoreRNGState(rng_type=rt, state_bytes=sb):
                 return await self._restore_state(rt, sb)
             case _:
                 assert_never(effect)
 
-    async def _capture_state(self, rng_type: str) -> Result[object, RNGError]:
-        """Capture RNG state as bytes for serialization."""
+    async def _capture_state(self, effect: CaptureRNGState) -> Result[object, RNGError]:
+        """Capture RNG state as bytes for serialization.
+
+        Args:
+            effect: CaptureRNGState effect with rng_type and output_id.
+
+        Returns:
+            Result containing captured state bytes or RNGError.
+        """
+        rng_type = effect.rng_type
         try:
+            state: bytes
             match rng_type:
                 case "torch_cpu":
                     import torch
 
                     state = torch.get_rng_state().cpu().numpy().tobytes()
-                    return Success(state)
                 case "torch_cuda":
                     import torch
 
@@ -755,8 +808,7 @@ class RNGInterpreter:
                         return Failure(RNGError(message="CUDA not available", rng_type=rng_type))
                     states = torch.cuda.get_rng_state_all()
                     # Serialize all CUDA device states
-                    combined = b"".join(s.cpu().numpy().tobytes() for s in states)
-                    return Success(combined)
+                    state = b"".join(s.cpu().numpy().tobytes() for s in states)
                 case "numpy":
                     import pickle
 
@@ -764,15 +816,16 @@ class RNGInterpreter:
 
                     # Get numpy random state as bytes via pickle
                     state_dict = np.random.get_state(legacy=False)
-                    state_bytes = pickle.dumps(state_dict)
-                    return Success(state_bytes)
+                    state = pickle.dumps(state_dict)
                 case "cupy":
                     # CuPy doesn't have direct state export
                     return Failure(
                         RNGError(message="CuPy state capture not implemented", rng_type=rng_type)
                     )
-                case _:
-                    return Failure(RNGError(message=f"Unknown RNG type: {rng_type}", rng_type=""))
+
+            # Store in shared registry with specified output ID
+            self._registry.register_bytes(effect.output_id, state)
+            return Success(state)
         except RuntimeError as e:
             return Failure(RNGError(message=str(e), rng_type=rng_type))
 
@@ -826,12 +879,17 @@ class MetadataInterpreter:
     """Interpreter for metadata effects.
 
     Handles reading and updating metadata state during effect execution.
+    Uses SharedRegistry for metadata storage.
     This enables tracking of training state like sobol_skip and global_step.
     """
 
-    def __init__(self) -> None:
-        """Initialize metadata interpreter with empty registry."""
-        self._registry: dict[str, int | float | str] = {}
+    def __init__(self, registry: SharedRegistry) -> None:
+        """Initialize metadata interpreter.
+
+        Args:
+            registry: Shared registry for metadata storage.
+        """
+        self._registry = registry
 
     async def interpret(self, effect: MetadataEffect) -> Result[object, MetadataError]:
         """Execute metadata effect."""
@@ -857,10 +915,12 @@ class MetadataInterpreter:
         Returns:
             Result containing the value or MetadataError if key not found.
         """
-        value = self._registry.get(key)
-        if value is None:
-            return Failure(MetadataError(message=f"Metadata key not found: {key}", key=key))
-        return Success(value)
+        result = self._registry.get_metadata(key)
+        match result:
+            case Failure(err):
+                return Failure(MetadataError(message=f"Metadata key not found: {key}", key=key))
+            case Success(value):
+                return Success(value)
 
     async def _update_metadata(
         self,
@@ -878,37 +938,18 @@ class MetadataInterpreter:
         Returns:
             Result containing the new value or MetadataError.
         """
-        try:
-            match operation:
-                case "set":
-                    self._registry[key] = value
-                    return Success(value)
-                case "add":
-                    current = self._registry.get(key, 0)
-                    if isinstance(current, str) or isinstance(value, str):
-                        return Failure(MetadataError(message="Cannot add to string value", key=key))
-                    new_value = current + value
-                    self._registry[key] = new_value
-                    return Success(new_value)
-                case "increment":
-                    current = self._registry.get(key, 0)
-                    if isinstance(current, str):
-                        return Failure(
-                            MetadataError(message="Cannot increment string value", key=key)
-                        )
-                    new_value = current + 1
-                    self._registry[key] = new_value
-                    return Success(new_value)
-                case _:
-                    return Failure(
-                        MetadataError(message=f"Unknown operation: {operation}", key=key)
-                    )
-        except (TypeError, ValueError) as e:
-            return Failure(MetadataError(message=str(e), key=key))
+        # Use SharedRegistry's update_metadata method which handles all operations
+        if operation not in ("set", "add", "increment"):
+            return Failure(MetadataError(message=f"Unknown operation: {operation}", key=key))
 
-    def register(self, key: str, value: int | float | str) -> None:
-        """Pre-register a metadata value."""
-        self._registry[key] = value
+        # Type narrowing for the operation literal
+        op_literal: Literal["set", "add", "increment"] = operation  # type: ignore[assignment]
+        result = self._registry.update_metadata(key, op_literal, value)
+        match result:
+            case Failure(err):
+                return Failure(MetadataError(message=str(err), key=key))
+            case Success(new_value):
+                return Success(new_value)
 
 
 class SpectralMCInterpreter:
@@ -917,12 +958,18 @@ class SpectralMCInterpreter:
     Routes effects to the appropriate sub-interpreter based on type.
     This is the ONLY entry point for effect execution in SpectralMC.
 
+    All sub-interpreters share a single SharedRegistry for data flow.
+
     Example:
-        >>> interpreter = SpectralMCInterpreter(gpu, training, mc, storage, rng)
+        >>> registry = SharedRegistry()
+        >>> gpu = GPUInterpreter(torch_stream, cupy_stream, registry)
+        >>> training = TrainingInterpreter(registry)
+        >>> mc = MonteCarloInterpreter(registry)
+        >>> storage = StorageInterpreter(bucket, registry)
+        >>> rng = RNGInterpreter(registry)
+        >>> metadata = MetadataInterpreter(registry)
+        >>> interpreter = SpectralMCInterpreter(gpu, training, mc, storage, rng, metadata, registry)
         >>> result = await interpreter.interpret(effect)
-        >>> match result:
-        ...     case Success(value): ...
-        ...     case Failure(error): ...
     """
 
     def __init__(
@@ -932,7 +979,8 @@ class SpectralMCInterpreter:
         montecarlo: MonteCarloInterpreter,
         storage: StorageInterpreter,
         rng: RNGInterpreter,
-        metadata: MetadataInterpreter | None = None,
+        metadata: MetadataInterpreter,
+        registry: SharedRegistry,
     ) -> None:
         """Initialize master interpreter with all sub-interpreters.
 
@@ -942,14 +990,16 @@ class SpectralMCInterpreter:
             montecarlo: Interpreter for Monte Carlo effects.
             storage: Interpreter for storage effects.
             rng: Interpreter for RNG effects.
-            metadata: Interpreter for metadata effects (optional, created if None).
+            metadata: Interpreter for metadata effects.
+            registry: Shared registry used by all sub-interpreters.
         """
         self._gpu = gpu
         self._training = training
         self._montecarlo = montecarlo
         self._storage = storage
         self._rng = rng
-        self._metadata = metadata or MetadataInterpreter()
+        self._metadata = metadata
+        self._registry = registry
 
     async def interpret(self, effect: Effect) -> Result[object, EffectError]:
         """Route effect to appropriate sub-interpreter."""
@@ -1053,6 +1103,50 @@ class SpectralMCInterpreter:
         # Apply combiner to collected results
         final_value = parallel.combiner(values)
         return Success(final_value)
+
+    @property
+    def registry(self) -> SharedRegistry:
+        """Get the shared registry for direct access."""
+        return self._registry
+
+    @classmethod
+    def create(
+        cls,
+        torch_stream: torch.cuda.Stream,
+        cupy_stream: cp.cuda.Stream,
+        storage_bucket: str,
+    ) -> SpectralMCInterpreter:
+        """Factory method to create a SpectralMCInterpreter with a shared registry.
+
+        Creates all sub-interpreters with a single shared registry for data flow.
+
+        Args:
+            torch_stream: PyTorch CUDA stream.
+            cupy_stream: CuPy CUDA stream.
+            storage_bucket: Default S3 bucket for storage operations.
+
+        Returns:
+            Configured SpectralMCInterpreter with shared registry.
+
+        Example:
+            >>> import cupy as cp
+            >>> import torch
+            >>> torch_stream = torch.cuda.Stream()
+            >>> cupy_stream = cp.cuda.Stream()
+            >>> interpreter = SpectralMCInterpreter.create(
+            ...     torch_stream, cupy_stream, "my-bucket"
+            ... )
+        """
+        registry = SharedRegistry()
+        return cls(
+            gpu=GPUInterpreter(torch_stream, cupy_stream, registry),
+            training=TrainingInterpreter(registry),
+            montecarlo=MonteCarloInterpreter(registry),
+            storage=StorageInterpreter(storage_bucket, registry),
+            rng=RNGInterpreter(registry),
+            metadata=MetadataInterpreter(registry),
+            registry=registry,
+        )
 
 
 def _widen_gpu_error(result: Result[object, GPUError]) -> Result[object, EffectError]:

@@ -1037,6 +1037,104 @@ flowchart TB
 
 ---
 
+## Training Logic Must Be Pure
+
+Training orchestration builds Effect ADTs - it does **NOT** execute side effects directly. Only the Effect Interpreter executes effects.
+
+### Anti-Pattern: Impure Training Loop
+
+```python
+# ❌ WRONG - Direct side effects in training
+def train_batch(model: nn.Module, data: Tensor) -> float:
+    for batch in dataloader:  # VIOLATION: for loop
+        output = model(batch)  # VIOLATION: direct GPU op
+        loss = compute_loss(output)
+        loss.backward()  # VIOLATION: direct GPU op
+        optimizer.step()  # VIOLATION: direct GPU op
+        logger.info(f"Loss: {loss}")  # VIOLATION: side effect
+    return loss.item()
+```
+
+**Why this is wrong:**
+- `for` loop is imperative, not expression-oriented
+- Direct GPU operations bypass effect tracking
+- Logging is a side effect hidden in business logic
+- Cannot test without GPU hardware
+- Cannot reproduce exact behavior without identical state
+
+### Correct Pattern: Pure Effect Building
+
+```python
+# ✅ CORRECT - Pure function building Effect sequence
+def build_training_batch_effects(
+    model_id: str,
+    batch_ids: tuple[str, ...],
+) -> EffectSequence[TrainingResult]:
+    """Pure function that builds training effect sequence.
+
+    This function:
+    - Takes immutable inputs
+    - Returns an Effect ADT (no side effects)
+    - Uses comprehensions, not for loops
+    - Is testable with MockInterpreter
+    """
+    batch_effects = tuple(
+        sequence_effects(
+            ForwardPass(model_id=model_id, input_tensor_id=bid),
+            BackwardPass(loss_tensor_id=f"loss_{bid}"),
+            OptimizerStep(optimizer_id="adam"),
+            StreamSync(stream_type="torch"),
+        )
+        for bid in batch_ids
+    )
+
+    return EffectSequence(
+        effects=batch_effects,
+        continuation=lambda results: TrainingResult(
+            final_loss=results[-1].loss,
+            batches_completed=len(batch_ids),
+        ),
+    )
+
+
+# Interpreter executes the effects (ONLY place for side effects)
+async def run_training(interpreter: SpectralMCInterpreter) -> None:
+    effects = build_training_batch_effects("cvnn", ("batch_0", "batch_1"))
+    result = await interpreter.interpret(effects)
+    match result:
+        case Success(training_result):
+            # Handle success
+            pass
+        case Failure(error):
+            # Handle error
+            pass
+```
+
+### Why This Matters
+
+| Aspect | Impure Training | Pure Effect Building |
+|--------|-----------------|---------------------|
+| **Testability** | Requires GPU hardware | MockInterpreter, no hardware needed |
+| **Reproducibility** | Hidden state mutations | Same inputs → same effect sequence |
+| **Composability** | Tightly coupled to runtime | Effects compose freely |
+| **Debugging** | Must inspect runtime state | Can inspect effect sequence statically |
+| **Parallelization** | Race conditions possible | Pure, safe to parallelize |
+
+### The Golden Rule
+
+> **Pure code describes WHAT to do; the interpreter decides HOW and WHEN.**
+
+Training logic should produce a **description** of the training process as Effect ADTs. The Effect Interpreter then **executes** those effects. This separation enables:
+
+1. **Testing without GPU**: Mock interpreter returns predetermined results
+2. **Effect inspection**: Log or analyze effect sequence before execution
+3. **Effect replay**: Re-run exact same effects for debugging
+4. **Effect composition**: Combine training effects with storage, metrics, etc.
+
+See [Purity Doctrine](purity_doctrine.md) for complete purity requirements.
+
+---
+
 ## Migration Strategy
 
 ### Phase 1: Document Existing Effects (Current Phase)

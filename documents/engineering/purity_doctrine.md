@@ -349,37 +349,100 @@ def use_bounds(lower: float, upper: float) -> Result[float, InvalidBoundsError]:
 mypy cannot detect all purity violations. Use code review and grep audits:
 
 ```bash
-# Check for for-loops in pure code (manual review needed)
-grep -rn "^\s*for " src/spectralmc/ | grep -v "# IMPURE OK:"
+# FORBIDDEN: for-loops in business logic (training, pricing, models)
+# Allowed only in: effects/interpreter.py, storage/, __main__.py
+grep -rn "^\s*for " src/spectralmc/ --include="*.py" \
+  | grep -v "effects/interpreter.py" \
+  | grep -v "storage/" \
+  | grep -v "__main__.py"
 
-# Check for if-statements in pure code (manual review needed)
-grep -rn "^\s*if " src/spectralmc/ | grep -v "# IMPURE OK:" | grep -v "__post_init__"
+# FORBIDDEN: if-statements in pure code
+grep -rn "^\s*if " src/spectralmc/ --include="*.py" \
+  | grep -v "effects/interpreter.py" \
+  | grep -v "storage/" \
+  | grep -v "__main__.py" \
+  | grep -v "__post_init__"
 
-# Check for raise statements (should only be assert_never)
-grep -rn "^\s*raise " src/spectralmc/ | grep -v "assert_never" | grep -v "# IMPURE OK:"
+# FORBIDDEN: raise statements in pure code (except assert_never)
+grep -rn "^\s*raise " src/spectralmc/ --include="*.py" \
+  | grep -v "assert_never" \
+  | grep -v "effects/interpreter.py" \
+  | grep -v "storage/"
 
-# Check for print statements
-grep -rn "print(" src/spectralmc/ && echo "FOUND print()" || echo "OK"
+# FORBIDDEN: print statements in business logic
+grep -rn "print(" src/spectralmc/ --include="*.py" \
+  | grep -v "__main__.py"
 
-# Check for logging in pure modules
-grep -rn "logger\." src/spectralmc/ | grep -v "# EFFECT:"
+# FORBIDDEN: logging in pure modules
+grep -rn "logger\." src/spectralmc/ --include="*.py" \
+  | grep -v "effects/interpreter.py" \
+  | grep -v "storage/"
 ```
 
 ### Code Review Checklist
 
-Before approving any PR:
+Before approving any PR in business logic (training, pricing, models):
 
-- [ ] No `for` loops (use comprehensions)
-- [ ] No `if` statements (use conditional expressions or `match`/`case`)
-- [ ] No `while` loops (use comprehensions or recursion)
-- [ ] No `raise` except in `assert_never()` or system boundaries
-- [ ] No `print()` or `logger.*()` in pure functions
+- [ ] No `for` loops - use comprehensions or Effect sequences
+- [ ] No `if` statements - use conditional expressions or `match`/`case`
+- [ ] No `while` loops
+- [ ] No `raise` except in `assert_never()`
+- [ ] No `print()` or `logger.*()`
+- [ ] Returns Effect ADTs for side-effectful operations
 - [ ] Factory functions return `Result` for validation
 - [ ] Comprehensions have no side effects
 
 ---
 
-## Exceptions
+## Exceptions: Where Impurity is Allowed
+
+### Hierarchy of Purity Requirements
+
+| Layer | Purity Requirement | Allowed Impurity |
+|-------|-------------------|------------------|
+| **Business Logic** (training, pricing, models) | **STRICT PURE** | NONE - must use Effect ADTs |
+| **Effect Interpreter** (`effects/interpreter.py`) | Impure by design | GPU ops, I/O, RNG mutation |
+| **Storage Layer** (`storage/`) | Impure by design | S3 I/O, network operations |
+| **Test Code** (`tests/`) | Relaxed | assert, pytest fixtures, setup |
+| **System Boundaries** (`__main__.py`, HTTP handlers) | Relaxed | Logging, argument parsing |
+
+### Business Logic Must Be Pure
+
+Training orchestration, pricing logic, and model code **MUST be pure**:
+
+- ✅ Build Effect ADTs to describe operations
+- ✅ Return Effect sequences/compositions
+- ✅ Use comprehensions for iteration
+- ❌ NO direct GPU operations
+- ❌ NO I/O or logging
+- ❌ NO `for` loops (use comprehensions instead)
+- ❌ NO `if` statements (use conditional expressions or `match`/`case`)
+
+**Why?** Training logic that builds effects is:
+- **Testable** with MockInterpreter (no GPU needed)
+- **Reproducible** (same inputs → same effect sequence)
+- **Composable** (effects combine without coupling)
+
+### Effect Interpreter (ONLY Place for Side Effects)
+
+The Effect Interpreter is the **ONLY** code allowed to execute side effects:
+
+- GPU operations (kernel launches, transfers)
+- Storage I/O (S3 reads/writes)
+- RNG state manipulation
+- Stream synchronization
+
+All other code produces pure effect descriptions. See [Effect Interpreter](./effect_interpreter.md).
+
+### Storage Layer
+
+Storage modules (`storage/`) are effectful by nature:
+
+- S3 client operations
+- Network I/O with retry logic
+- Blockchain atomic commits
+
+These are part of the Effect Interpreter infrastructure.
 
 ### Test Code
 
@@ -391,25 +454,15 @@ Test code may use impure constructs:
 
 Tests verify behavior; they are not business logic.
 
-### System Boundaries
+### System Boundaries Only
 
-At system boundaries (CLI commands, HTTP handlers), impure code is acceptable:
+At the outermost system boundaries (CLI `__main__.py`, HTTP handlers), minimal impurity is acceptable:
 
 - Logging at entry/exit points
-- `raise` after exhaustive Result handling
-- I/O operations
+- Argument parsing
+- Top-level exception handling
 
-Mark system boundary code with `# IMPURE OK: system boundary` comment.
-
-### Effect Interpreter
-
-The Effect Interpreter itself is impure by design - it executes effects:
-
-- GPU operations
-- Storage I/O
-- RNG state manipulation
-
-All impure operations are concentrated in the interpreter. Business logic remains pure.
+Mark with `# SYSTEM BOUNDARY:` comment.
 
 ---
 
