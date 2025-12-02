@@ -31,7 +31,6 @@ from spectralmc.effects.errors import (
     StorageError,
     TrainingError,
 )
-from spectralmc.effects.registry import SharedRegistry
 from spectralmc.effects.gpu import (
     DLPackTransfer,
     GPUEffect,
@@ -46,6 +45,7 @@ from spectralmc.effects.montecarlo import (
     MonteCarloEffect,
     SimulatePaths,
 )
+from spectralmc.effects.registry import SharedRegistry
 from spectralmc.effects.rng import CaptureRNGState, RestoreRNGState, RNGEffect
 from spectralmc.effects.storage import CommitVersion, ReadObject, StorageEffect, WriteObject
 from spectralmc.effects.training import (
@@ -143,7 +143,6 @@ class GPUInterpreter:
 
         Uses spectralmc.models.cpu_gpu_transfer for actual transfer.
         """
-        import torch
 
         from spectralmc.models.cpu_gpu_transfer import TransferDestination, move_tensor_tree
         from spectralmc.models.torch import Device
@@ -151,7 +150,7 @@ class GPUInterpreter:
         try:
             tensor_result = self._registry.get_torch_tensor(tensor_id)
             match tensor_result:
-                case Failure(err):
+                case Failure(_):
                     return Failure(GPUError(message=f"Tensor not found: {tensor_id}"))
                 case Success(tensor):
                     pass
@@ -208,7 +207,7 @@ class GPUInterpreter:
         """
         kernel_result = self._registry.get_kernel(name)
         match kernel_result:
-            case Failure(err):
+            case Failure(_):
                 return Failure(GPUError(message=f"Kernel not found: {name}"))
             case Success(kernel_fn):
                 pass
@@ -243,7 +242,7 @@ class GPUInterpreter:
         """
         tensor_result = self._registry.get_tensor(effect.source_tensor_id)
         match tensor_result:
-            case Failure(err):
+            case Failure(_):
                 return Failure(GPUError(message=f"Tensor not found: {effect.source_tensor_id}"))
             case Success(tensor):
                 pass
@@ -323,14 +322,14 @@ class TrainingInterpreter:
         """
         model_result = self._registry.get_model(effect.model_id)
         match model_result:
-            case Failure(err):
+            case Failure(_):
                 return Failure(TrainingError(message=f"Model not found: {effect.model_id}"))
             case Success(model):
                 pass
 
         tensor_result = self._registry.get_tensor(effect.input_tensor_id)
         match tensor_result:
-            case Failure(err):
+            case Failure(_):
                 return Failure(TrainingError(message=f"Tensor not found: {effect.input_tensor_id}"))
             case Success(tensor):
                 pass
@@ -351,7 +350,7 @@ class TrainingInterpreter:
         """Compute gradients via backpropagation."""
         tensor_result = self._registry.get_tensor(loss_tensor_id)
         match tensor_result:
-            case Failure(err):
+            case Failure(_):
                 return Failure(TrainingError(message=f"Loss tensor not found: {loss_tensor_id}"))
             case Success(tensor):
                 pass
@@ -369,7 +368,7 @@ class TrainingInterpreter:
         """Update model parameters using optimizer."""
         optimizer_result = self._registry.get_optimizer(optimizer_id)
         match optimizer_result:
-            case Failure(err):
+            case Failure(_):
                 return Failure(TrainingError(message=f"Optimizer not found: {optimizer_id}"))
             case Success(optimizer):
                 pass
@@ -396,7 +395,7 @@ class TrainingInterpreter:
         """
         pred_result = self._registry.get_torch_tensor(effect.pred_tensor_id)
         match pred_result:
-            case Failure(err):
+            case Failure(_):
                 return Failure(
                     TrainingError(message=f"Prediction tensor not found: {effect.pred_tensor_id}")
                 )
@@ -405,7 +404,7 @@ class TrainingInterpreter:
 
         target_result = self._registry.get_torch_tensor(effect.target_tensor_id)
         match target_result:
-            case Failure(err):
+            case Failure(_):
                 return Failure(
                     TrainingError(message=f"Target tensor not found: {effect.target_tensor_id}")
                 )
@@ -543,9 +542,11 @@ class MonteCarloInterpreter:
             # Get input normals from shared registry
             normals_result = self._registry.get_cupy_array(effect.input_normals_id)
             match normals_result:
-                case Failure(err):
+                case Failure(_):
                     return Failure(
-                        MonteCarloError(message=f"Normals tensor not found: {effect.input_normals_id}")
+                        MonteCarloError(
+                            message=f"Normals tensor not found: {effect.input_normals_id}"
+                        )
                     )
                 case Success(normals):
                     pass
@@ -609,8 +610,10 @@ class MonteCarloInterpreter:
         """
         tensor_result = self._registry.get_cupy_array(effect.input_tensor_id)
         match tensor_result:
-            case Failure(err):
-                return Failure(MonteCarloError(message=f"Tensor not found: {effect.input_tensor_id}"))
+            case Failure(_):
+                return Failure(
+                    MonteCarloError(message=f"Tensor not found: {effect.input_tensor_id}")
+                )
             case Success(tensor):
                 pass
 
@@ -702,7 +705,7 @@ class StorageInterpreter:
         # Get content from shared registry using the content hash as key
         content_result = self._registry.get_bytes(content_hash)
         match content_result:
-            case Failure(registry_err):
+            case Failure(_):
                 return Failure(
                     StorageError(
                         message=f"Content not found for hash: {content_hash}",
@@ -742,7 +745,7 @@ class StorageInterpreter:
         # Get checkpoint data from shared registry
         checkpoint_result = self._registry.get_bytes(checkpoint_hash)
         match checkpoint_result:
-            case Failure(err):
+            case Failure(_):
                 return Failure(StorageError(message=f"Checkpoint not found: {checkpoint_hash}"))
             case Success(checkpoint_data):
                 pass
@@ -917,7 +920,7 @@ class MetadataInterpreter:
         """
         result = self._registry.get_metadata(key)
         match result:
-            case Failure(err):
+            case Failure(_):
                 return Failure(MetadataError(message=f"Metadata key not found: {key}", key=key))
             case Success(value):
                 return Success(value)

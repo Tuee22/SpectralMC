@@ -1008,7 +1008,6 @@ class GbmCVNNPricer:
             >>> print(f"Final loss: {result.final_loss:.6f}")
         """
         from spectralmc.effects import (
-            SharedRegistry,
             SpectralMCInterpreter,
         )
         from spectralmc.result import Failure, Success

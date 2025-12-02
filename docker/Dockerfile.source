@@ -165,10 +165,13 @@ RUN if [ "$BUILD_FROM_SOURCE" = "true" ]; then \
         cd /tmp && \
         git clone --branch v2.4.1 --recursive --depth 1 https://github.com/pytorch/pytorch.git && \
         cd /tmp/pytorch && \
+        pip install -r requirements.txt && \
         python setup.py bdist_wheel 2>&1 | tee /tmp/pytorch-build.log && \
         mkdir -p /opt/pytorch-wheel && \
         cp dist/*.whl /opt/pytorch-wheel/ && \
         pip install --force-reinstall /opt/pytorch-wheel/*.whl && \
+        pip uninstall -y cupy-cuda12x cupy || true && \
+        pip install --no-cache-dir "cupy-cuda11x>=13.4,<14.0" && \
         cd /spectralmc && \
         rm -rf /tmp/pytorch && \
         python -c "import torch; print(f'✓ PyTorch {torch.__version__} built from source')" && \
@@ -240,9 +243,8 @@ RUN if [ -f /usr/bin/timeout ]; then mv /usr/bin/timeout /usr/bin/timeout.real; 
 # LAYER 14: Final Configuration
 # ============================================================================
 
-EXPOSE 6006 8888
+EXPOSE 6006
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", \
-     "--NotebookApp.token=", "--NotebookApp.password=", "--notebook-dir=/spectralmc"]
+CMD ["sleep", "infinity"]

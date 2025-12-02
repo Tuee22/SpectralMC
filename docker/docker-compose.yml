@@ -67,11 +67,12 @@ services:
     build:
       context: ..                          # repo root
       # Conditional dockerfile selection:
-      # - BUILD_FROM_SOURCE=true  → docker/Dockerfile.source (CUDA 11.8, GTX 970 support)
-      # - BUILD_FROM_SOURCE=false → docker/Dockerfile (CUDA 12.8, RTX 5090 support)
-      dockerfile: docker/${BUILD_FROM_SOURCE:+Dockerfile.source}${BUILD_FROM_SOURCE:-Dockerfile}
+      # - BUILD_FROM_SOURCE set   → docker/Dockerfile.source (CUDA 11.8, GTX 970 support)
+      # - BUILD_FROM_SOURCE unset → docker/Dockerfile (CUDA 12.8, RTX 5090 support)
+      dockerfile: docker/Dockerfile${BUILD_FROM_SOURCE:+.source}
       args:
         BUILDKIT_INLINE_CACHE: "1"
+        BUILD_FROM_SOURCE: ${BUILD_FROM_SOURCE:-false}
     image: spectralmc:local
     pull_policy: "never"                   # never reach out to a registry
     depends_on:

@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Literal
 
 from spectralmc.result import Failure, Result, Success
 
+
 if TYPE_CHECKING:
     import cupy as cp
     import torch
@@ -133,9 +134,7 @@ class SharedRegistry:
 
         value = self._tensors.get(tensor_id)
         if value is None:
-            return Failure(
-                RegistryKeyNotFound(key=tensor_id, expected_type="torch.Tensor")
-            )
+            return Failure(RegistryKeyNotFound(key=tensor_id, expected_type="torch.Tensor"))
         if not isinstance(value, torch.Tensor):
             return Failure(
                 RegistryTypeMismatch(
@@ -159,9 +158,7 @@ class SharedRegistry:
 
         value = self._tensors.get(tensor_id)
         if value is None:
-            return Failure(
-                RegistryKeyNotFound(key=tensor_id, expected_type="cp.ndarray")
-            )
+            return Failure(RegistryKeyNotFound(key=tensor_id, expected_type="cp.ndarray"))
         if not isinstance(value, cp.ndarray):
             return Failure(
                 RegistryTypeMismatch(
@@ -268,9 +265,7 @@ class SharedRegistry:
                 current = self._metadata.get(key, 0)
                 if isinstance(current, str) or isinstance(value, str):
                     return Failure(
-                        RegistryTypeMismatch(
-                            key=key, expected_type="numeric", actual_type="str"
-                        )
+                        RegistryTypeMismatch(key=key, expected_type="numeric", actual_type="str")
                     )
                 new_value: int | float = current + value
                 self._metadata[key] = new_value
@@ -279,9 +274,7 @@ class SharedRegistry:
                 current = self._metadata.get(key, 0)
                 if isinstance(current, str):
                     return Failure(
-                        RegistryTypeMismatch(
-                            key=key, expected_type="numeric", actual_type="str"
-                        )
+                        RegistryTypeMismatch(key=key, expected_type="numeric", actual_type="str")
                     )
                 new_value_inc: int | float = current + 1
                 self._metadata[key] = new_value_inc
@@ -356,9 +349,7 @@ class SharedRegistry:
         """
         value = self._optimizers.get(optimizer_id)
         if value is None:
-            return Failure(
-                RegistryKeyNotFound(key=optimizer_id, expected_type="optimizer")
-            )
+            return Failure(RegistryKeyNotFound(key=optimizer_id, expected_type="optimizer"))
         return Success(value)
 
     def has_optimizer(self, optimizer_id: str) -> bool:
@@ -394,9 +385,7 @@ class SharedRegistry:
         """
         value = self._kernels.get(kernel_name)
         if value is None:
-            return Failure(
-                RegistryKeyNotFound(key=kernel_name, expected_type="kernel")
-            )
+            return Failure(RegistryKeyNotFound(key=kernel_name, expected_type="kernel"))
         return Success(value)
 
     def has_kernel(self, kernel_name: str) -> bool:

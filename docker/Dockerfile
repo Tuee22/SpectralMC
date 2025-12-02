@@ -96,11 +96,10 @@ RUN if [ -f /usr/bin/timeout ]; then mv /usr/bin/timeout /usr/bin/timeout.real; 
     echo '#!/bin/sh\nif echo "$*" | grep -qE "(pytest|test-|test_)"; then\n  echo "❌ ERROR: Timeout commands with tests forbidden per CLAUDE.md"\n  echo "✅ USE: poetry run test-all [pytest-args]"\n  echo "📖 Tests complete when they complete - patience required"\n  exit 1\nfi\nexec /usr/bin/timeout.real "$@"' > /usr/bin/timeout && \
     chmod +x /usr/bin/timeout
 
-# 11) Expose port 6006 & 8888
-EXPOSE 6006 8888
+# 11) Expose port 6006 (TensorBoard)
+EXPOSE 6006
 
-# 12) Default command to run Jupyter
+# 12) Default command to keep container alive for exec sessions
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", \
-     "--NotebookApp.token=", "--NotebookApp.password=", "--notebook-dir=/spectralmc"]
+CMD ["sleep", "infinity"]

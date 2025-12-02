@@ -133,8 +133,6 @@ This will open a bash terminal, which will allow you to explicitly call the pyth
 python -m spectralmc.gbm
 ```
 
-There is also a jupyter notebook listening on port 8888, which you can access in your browser via localhost:8888.
-
 
 ## Usage Examples
 
@@ -320,6 +318,5 @@ Send any questions or suggestions to this email address.
     the same (valuation_namespace, val_datetime) but a later data_asof.
     -There will be something declarative for running real-time jobs, eg one per second
 -every class that allocates GPU memory has a hard cap (to manage shared memory across pricers)
-
 
 
