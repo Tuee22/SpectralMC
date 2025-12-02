@@ -127,8 +127,6 @@ services:
       S3_ENDPOINT:           http://minio:9000
       S3_USE_HTTPS:          "0"
       S3_VERIFY_SSL:         "0"
-    ports:
-      - "6006:6006"
     networks:
       - spectralmc-net
 

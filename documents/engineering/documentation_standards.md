@@ -30,6 +30,7 @@ Each topic has exactly **ONE canonical document**. All other documents link to i
 | [immutability_doctrine.md](immutability_doctrine.md) | Immutability rules, frozen dataclasses |
 | [pytorch_facade.md](pytorch_facade.md) | Determinism, CVNN patterns, ComplexValuedModel |
 | [cpu_gpu_compute_policy.md](cpu_gpu_compute_policy.md) | Device placement, CPU/GPU boundaries |
+| [docker_build_philosophy.md](docker_build_philosophy.md) | Docker build strategy, compose topology, sidecar isolation |
 | [blockchain_storage.md](blockchain_storage.md) | Model versioning, atomic commits |
 | [effect_interpreter.md](effect_interpreter.md) | Effect ADTs, interpreter pattern, effect composition |
 | [reproducibility_proofs.md](reproducibility_proofs.md) | Bit-exact guarantees, determinism proofs |

@@ -8,6 +8,18 @@ SpectralMC uses a **dual-mode Docker build strategy** to support both modern GPU
 
 ---
 
+## SSoT Scope and Sidecar Pattern
+
+This document is the SSoT for Docker build strategy, compose topology, and sidecar policy for SpectralMC.
+
+### Sidecar Isolation Rule
+
+- **Sidecars stay private**: Services that run alongside the main `spectralmc` container (e.g., TensorBoard, MinIO jobs) must not publish ports to the host. Keep them on the Compose VPN only.
+- **Access from inside**: Interact with sidecars through the Compose network (`docker compose exec spectralmc curl http://tensorboard:6006`) or tunnel through the main container if host access is required, rather than adding host-level `ports` entries.
+- **Rationale**: Fewer exposed surfaces, consistent with the sidecar pattern, and avoids host port conflicts when multiple developers run the stack.
+
+---
+
 ## Build Modes
 
 SpectralMC supports two build modes controlled by the `BUILD_FROM_SOURCE` environment variable:
