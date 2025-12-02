@@ -59,6 +59,14 @@ BUILD_FROM_SOURCE=true docker compose up --build -d
 
 SpectralMC uses **Poetry** as the single source of truth for all Python dependencies. This ensures consistency across development, testing, and production environments.
 
+### Container Parity and Dependency Boundaries
+
+- **Single manifest + command**: `docker/Dockerfile` and `docker/Dockerfile.source` must use the same `pyproject.toml`, `poetry.toml`, and identical `poetry install` invocation—no per-container tweaks or extra flags.
+- **Minimal pyproject**: Keep `pyproject.toml` scoped to the smallest set of dependencies needed to run the binary-only build of SpectralMC. Build-only extras (including Python toolchains) belong outside this file.
+- **Source-build installs stay in-line**: Anything required solely to compile from source (Python included) lives inside the inline build script within the `BUILD_FROM_SOURCE` block in `Dockerfile.source`; do not scatter extra `RUN` steps elsewhere.
+- **Isolated artefacts**: Source-build outputs install into a dedicated `/opt` subtree reserved for build artefacts rather than the global interpreter site-packages.
+- **Swap-in workflow**: In `Dockerfile.source`, run the long C/CUDA build early, before `poetry install`. Use a Poetry dependency group (e.g., `binary-torch`) so binary wheels are skipped for source builds (`POETRY_WITHOUT=binary-torch`) yet installed for binary builds (`POETRY_WITH=binary-torch`). After `poetry install`, surface the built `/opt` wheel via `.pth`/`PYTHONPATH` activation. This remains Poetry-safe because container venvs are disabled via `poetry.toml`.
+
 ### The Only pip Command
 
 There is exactly **one** pip command in SpectralMC Dockerfiles:
@@ -201,7 +209,7 @@ spectralmc:
 
 SpectralMC's Dockerfile is organized to **maximize Docker build cache hits** and **minimize rebuild time**.
 
-### Layer Structure
+### Layer Structure (Binary Build)
 
 ```
 ┌─────────────────────────────────────┐
@@ -246,6 +254,30 @@ SpectralMC's Dockerfile is organized to **maximize Docker build cache hits** and
 | **PyTorch upgrade** | 5 min | 2-4 hours |
 
 **Key takeaway**: Source build penalty is paid **once**, then cached.
+
+### Layer Structure (Source Build)
+
+The source pipeline reorders work to front-load the multi-hour C/CUDA build and keep Poetry installs cache-friendly:
+
+```
+┌───────────────────────────────────────────┐
+│ Layer 1-2: System + toolchain deps       │  Build FROM_SOURCE-only tools stay in-line
+├───────────────────────────────────────────┤
+│ Layer 3-5: Source build to /opt          │  >2 hour CUDA/PyTorch build happens here
+├───────────────────────────────────────────┤
+│ Layer 6: Poetry Installation             │  Identical to binary build
+├───────────────────────────────────────────┤
+│ Layer 7: pyproject.toml COPY             │  Minimal runtime deps only
+├───────────────────────────────────────────┤
+│ Layer 8: poetry install                  │  Installs binary PyTorch temporarily
+├───────────────────────────────────────────┤
+│ Layer 9: BUILD_FROM_SOURCE swap          │  Remove binary PyTorch; point Python at /opt build
+├───────────────────────────────────────────┤
+│ Layer 10+: Application Code              │  COPY repo; install package
+└───────────────────────────────────────────┘
+```
+
+This layout ensures the costly compile step is cached independently, and the post-Poetry swap prevents conflicts between the temporary binary wheel and the built artefact.
 
 ---
 

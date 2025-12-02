@@ -62,11 +62,7 @@ scipy            = ">=1.13,<2.0"
 scikit-learn     = ">=1.6,<2.0"
 
 # --- PyTorch 2.7.1 compiled for CUDA 12.8 (binary default) ----------------- #
-# Note: Source builds (BUILD_FROM_SOURCE=true) use Dockerfile.source with PyTorch 2.4.1
-torch            = { version = "2.7.1+cu128", source = "pytorch-cu128" }
 safetensors      = ">=0.5.3,<1.0"
-stable_baselines3 = ">=2.6,<3.0"
-cupy-cuda12x     = ">=13.4,<14.0"
 numba            = ">=0.61,<1.0"
 pystan           = ">=3.10,<4.0"
 pymc             = ">=5.22,<6.0"
@@ -82,6 +78,18 @@ tensorboard = ">=2.19.0,<3.0"
 # runtime typing / settings
 pydantic           = { version = ">=2.9,<3.0", extras = ["mypy"] }
 pydantic_settings  = ">=2.7,<3.0"
+
+# --------------------------------------------------------------------------- #
+#                 B I N A R Y   T O R C H   D E P E N D E N C I E S           #
+# --------------------------------------------------------------------------- #
+[tool.poetry.group.binary-torch]
+optional = true
+
+[tool.poetry.group.binary-torch.dependencies]
+# Note: Source builds (BUILD_FROM_SOURCE=true) use Dockerfile.source with PyTorch 2.4.1
+torch             = { version = "2.7.1+cu128", source = "pytorch-cu128" }
+cupy-cuda12x      = ">=13.4,<14.0"
+stable_baselines3 = ">=2.6,<3.0"
 
 # testing & development
 pytest           = ">=8.2,<9.0"

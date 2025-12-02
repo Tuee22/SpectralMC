@@ -77,6 +77,7 @@ COPY ./ /spectralmc
 WORKDIR /spectralmc
 
 # 9) Install dependencies system-wide via Poetry
+ENV POETRY_WITH=binary-torch
 RUN poetry install --no-interaction
 
 # 10) Enforce CLAUDE.md testing policies: Block direct pytest and timeout commands
