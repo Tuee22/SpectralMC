@@ -129,10 +129,21 @@ if [ "$BUILD_FROM_SOURCE" = "true" ]; then
     python setup.py bdist_wheel 2>&1 | tee /tmp/pytorch-build.log
     cp dist/*.whl /opt/pytorch-wheel/
     python -m pip install --no-deps --no-warn-script-location --target /opt/pytorch /opt/pytorch-wheel/*.whl
+    python -m pip install --no-deps --no-warn-script-location --target /opt/cupy "cupy-cuda11x>=13.4,<14.0"
+    python -m pip install --no-deps --no-warn-script-location --target /opt/cupy "fastrlock>=0.8,<1.0"
+    python - <<'PY'
+import site
+from pathlib import Path
+pth = Path(site.getsitepackages()[0]) / "spectralmc-opt.pth"
+pth.write_text("/opt/pytorch\n/opt/cupy\n")
+print(f"✓ Wrote {pth} to expose /opt artefacts")
+PY
     echo "=== [3/4] Verifying staged /opt PyTorch wheel ==="
-    PYTHONPATH=/opt/pytorch:$PYTHONPATH python - <<'PY' || { cat /tmp/pytorch-build.log; exit 1; }
+    cd / && PYTHONPATH=/opt/pytorch:/opt/cupy:${PYTHONPATH:-} python - <<'PY' || { cat /tmp/pytorch-build.log; exit 1; }
 import torch
+import cupy
 print(f"✓ Staged torch {torch.__version__} (cuda={torch.version.cuda}) from /opt/pytorch")
+print(f"✓ Staged cupy {cupy.__version__} from /opt/cupy")
 PY
     echo "=== [4/4] Cleaning source tree ==="
     rm -rf /tmp/pytorch
@@ -151,41 +162,12 @@ COPY ./ /spectralmc/
 # LAYER 7: Install SpectralMC (identical Poetry command for both build modes)
 # ============================================================================
 
-RUN echo "=== Installing SpectralMC via Poetry ===" && \
-    POETRY_WITHOUT=binary-torch poetry install --no-interaction
+RUN echo "=== Installing SpectralMC via Poetry (incl. dev tools for check-code) ===" && \
+    poetry install --no-interaction --with dev --without binary-torch && \
+    poetry run ruff --version && poetry run black --version && poetry run mypy --version
 
 # ============================================================================
-# LAYER 8: Source-only wheel swap (after Poetry install)
-# ============================================================================
-
-RUN /bin/bash <<'BUILD'
-set -euo pipefail
-if [ "$BUILD_FROM_SOURCE" = "true" ]; then
-    echo "=== Swapping binary torch/cupy for source-built artefacts ==="
-    pip uninstall -y torch torchvision torchaudio torchtext || true
-    pip uninstall -y cupy-cuda12x cupy || true
-    python -m pip install --no-deps --no-warn-script-location --target /opt/cupy "cupy-cuda11x>=13.4,<14.0"
-    python - <<'PY'
-import site
-from pathlib import Path
-pth = Path(site.getsitepackages()[0]) / "spectralmc-opt.pth"
-pth.write_text("/opt/pytorch\n/opt/cupy\n")
-print(f"✓ Wrote {pth} to expose /opt artefacts")
-PY
-    python -m pip install --no-deps stable-baselines3
-    PYTHONPATH=/opt/pytorch:/opt/cupy:$PYTHONPATH python - <<'PY'
-import torch
-import cupy
-print(f"✓ torch {torch.__version__} (cuda={torch.version.cuda}) sourced from /opt/pytorch")
-print(f"✓ cupy {cupy.__version__} installed to /opt/cupy (cuda11x)")
-import stable_baselines3
-print(f\"✓ stable_baselines3 {stable_baselines3.__version__} installed with /opt torch\")
-PY
-fi
-BUILD
-
-# ============================================================================
-# LAYER 9: Enforce CLAUDE.md Testing Policies
+# LAYER 8: Enforce CLAUDE.md Testing Policies
 # ============================================================================
 
 RUN if [ -f /usr/local/bin/pytest ]; then mv /usr/local/bin/pytest /usr/local/bin/pytest.real; fi && \
@@ -201,7 +183,7 @@ RUN if [ -f /usr/bin/timeout ]; then mv /usr/bin/timeout /usr/bin/timeout.real; 
     chmod +x /usr/bin/timeout
 
 # ============================================================================
-# LAYER 10: Final Configuration
+# LAYER 9: Final Configuration
 # ============================================================================
 
 EXPOSE 6006

@@ -68,6 +68,8 @@ pystan           = ">=3.10,<4.0"
 pymc             = ">=5.22,<6.0"
 statsmodels      = ">=0.14.4,<1.0"
 QuantLib         = ">=1.37,<2.0"
+stable-baselines3 = ">=2.6,<3.0"
+gymnasium        = ">=0.29,<1.0"
 
 # Jupyter / viz
 plotly      = ">=6.0.1,<7.0"
@@ -89,9 +91,11 @@ optional = true
 # Note: Source builds (BUILD_FROM_SOURCE=true) use Dockerfile.source with PyTorch 2.4.1
 torch             = { version = "2.7.1+cu128", source = "pytorch-cu128" }
 cupy-cuda12x      = ">=13.4,<14.0"
-stable_baselines3 = ">=2.6,<3.0"
 
-# testing & development
+[tool.poetry.group.dev]
+optional = true
+
+[tool.poetry.group.dev.dependencies]
 pytest           = ">=8.2,<9.0"
 pytest-cov       = ">=5.0,<6.0"
 pytest-asyncio   = ">=1.2.0,<2.0"
