@@ -18,6 +18,7 @@
 FROM nvidia/cuda:12.8.1-devel-ubuntu22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG BUILD_FROM_SOURCE=false
 ENV PATH="/root/.local/bin:/usr/local/bin:$PATH"
 
 # these are needed to ensure cupy works with newer gen GPUs
@@ -76,8 +77,15 @@ COPY ./ /spectralmc
 # 8) Work in /spectralmc
 WORKDIR /spectralmc
 
+# Use the binary build pyproject (torch 2.7.1+cu128)
+RUN cp pyproject.binary.toml pyproject.toml
+
 # 9) Install dependencies system-wide via Poetry
-RUN poetry install --no-interaction --with "binary-torch,dev"
+RUN if [ "$BUILD_FROM_SOURCE" = "true" ]; then \
+    poetry install --no-interaction --with dev; \
+  else \
+    poetry install --no-interaction --with dev; \
+  fi
 
 # 10) Enforce CLAUDE.md testing policies: Block direct pytest and timeout commands
 # Block direct pytest command (python -m pytest still works for Poetry scripts)

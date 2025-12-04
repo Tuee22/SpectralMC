@@ -12,6 +12,12 @@ defaults:
   container_command_prefix: "docker compose -f docker/docker-compose.yml exec spectralmc"
   log_output: true
   log_path: /tmp/codex-run.log
+timeouts:
+  per_test_seconds: 60
+  suite_guard_seconds: 14400
+  note: >
+    Per-test cap enforced by tests/conftest.py; wrap full suites with a long guard to prevent hangs,
+    never to truncate valid GPU runs.
 
 rules:
   # Coding Standards Agent
@@ -74,9 +80,10 @@ rules:
   # Testing Agent
   - id: testing
     requirement: >
-      GPU-required tests, no CPU fallback or pytest.skip for missing CUDA. Fully typed tests.
-      Run via poetry run test-all (with args allowed) and capture logs to file. Avoid 13
-      anti-patterns; prefer check-code.
+      GPU-required tests, no CPU fallback or pytest.skip for missing CUDA. Fully typed tests with a
+      default 60s per-test timeout enforced in tests/conftest.py (override only with explicit
+      timeout markers). Run via poetry run test-all (with args allowed) and capture logs to file.
+      Avoid 13 anti-patterns; prefer check-code.
     commands:
       - "{{container_command_prefix}} poetry run test-all > {{log_path}} 2>&1"
       - "{{container_command_prefix}} poetry run test-all -k \"{keyword}\" > {{log_path}} 2>&1"

@@ -41,6 +41,7 @@ Scientific background, quantitative finance theory, and research papers.
 - [Engineering Standards Index](engineering/index.md)
 - [Deployment Guide](product/deployment.md)
 - [Training Integration](product/training_integration.md)
+- [Testing Architecture](testing-architecture.md)
 - [SpectralMC Whitepaper](domain/whitepapers/spectralmc_whitepaper.md)
 
 ## Contributing

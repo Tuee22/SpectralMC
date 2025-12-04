@@ -78,6 +78,7 @@ docker/
 Dockerfile*
 docker-compose*.yml
 .dockerignore
+!docker/constraints-source.txt
 
 # CI/CD
 .github

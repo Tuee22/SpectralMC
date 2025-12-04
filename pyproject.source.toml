@@ -9,19 +9,6 @@ packages = [
 ]
 
 # --------------------------------------------------------------------------- #
-#        P Y T O R C H   C U D A   1 2 . 8   W H E E L   S O U R C E          #
-# --------------------------------------------------------------------------- #
-[[tool.poetry.source]]
-name     = "pypi"
-priority = "primary"
-
-[[tool.poetry.source]]
-name     = "pytorch-cu128"
-url      = "https://download.pytorch.org/whl/cu128"
-priority = "supplemental"
-
-
-# --------------------------------------------------------------------------- #
 #                       R U N T I M E   D E P E N D E N C I E S               #
 # --------------------------------------------------------------------------- #
 [tool.poetry.dependencies]
@@ -65,9 +52,9 @@ types-aiobotocore = { version = ">=2.13,<3.0", extras = ["s3"] }
 scipy            = ">=1.13,<2.0"
 scikit-learn     = ">=1.6,<2.0"
 
-# --- PyTorch 2.7.1 compiled for CUDA 12.8 (binary default) ----------------- #
-torch             = { version = "2.7.1+cu128", source = "pytorch-cu128" }
-cupy-cuda12x      = ">=13.4,<14.0"
+# --- PyTorch 2.4.1 compiled from source with CUDA 11.8 (GTX 970 support) --- #
+torch        = "2.4.1"
+cupy-cuda11x = ">=13.4,<14.0"
 safetensors       = ">=0.5.3,<1.0"
 numba             = ">=0.61,<1.0"
 pystan            = ">=3.10,<4.0"

@@ -29,6 +29,8 @@ This guide keeps contributions to SpectralMC consistent, type-safe, and GPU-read
 - All tests assume CUDA; add module-level assertions (e.g., `assert torch.cuda.is_available()`).
 - Keep tests deterministic (seed PyTorch/NumPy/Numba before generating randomness).
 - Prefer explicit GPU devices (`torch.device("cuda:0")`) and forbid CPU fallbacks.
+- Default per-test timeout is 60s via autouse fixture; use `@pytest.mark.timeout(seconds=...)` only when justified.
+- Codex/automation must wrap test commands with a timeout no lower than 4 hours to avoid hanging agents.
 - Organize new cases alongside the feature’s area; mirror examples from `tests/test_storage` or `tests/test_effects`.
 - Capture and attach test logs from `poetry run test-all` in PRs for reviewability.
 

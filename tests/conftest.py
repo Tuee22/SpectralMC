@@ -10,8 +10,10 @@ All tests require GPU - missing GPU is a hard failure, not a skip.
 from __future__ import annotations
 
 import gc
+import signal
 import warnings
-from typing import Generator
+from types import FrameType
+from typing import Callable, Generator
 
 
 # CRITICAL: Import facade BEFORE torch for deterministic algorithms
@@ -29,6 +31,58 @@ import pytest
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 GPU_DEV: torch.device = torch.device("cuda:0")
+
+DEFAULT_TEST_TIMEOUT_SECONDS = 60.0
+
+
+def _build_timeout_handler(
+    timeout_seconds: float,
+) -> Callable[[int, FrameType | None], None]:
+    """Create SIGALRM handler that fails the test when timeout is reached."""
+
+    def _handle_timeout(signum: int, frame: FrameType | None) -> None:
+        pytest.fail(
+            f"Test exceeded {timeout_seconds:.0f}s timeout (includes setup/teardown)",
+            pytrace=True,
+        )
+
+    return _handle_timeout
+
+
+def _resolve_timeout_seconds(request: pytest.FixtureRequest) -> float:
+    """Return timeout for current test (marker override allowed)."""
+    marker = request.node.get_closest_marker("timeout")
+    if marker is None:
+        return DEFAULT_TEST_TIMEOUT_SECONDS
+
+    raw_value = marker.kwargs.get("seconds", marker.args[0] if marker.args else None)
+    if raw_value is None:
+        pytest.fail("timeout marker requires seconds argument", pytrace=True)
+
+    seconds = float(raw_value)
+    if seconds <= 0:
+        pytest.fail("timeout marker must be positive seconds", pytrace=True)
+
+    return seconds
+
+
+@pytest.fixture(autouse=True)
+def per_test_timeout(request: pytest.FixtureRequest) -> Generator[None, None, None]:
+    """Fail any test that runs longer than the default timeout."""
+    if not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
+        yield
+        return
+
+    timeout_seconds = _resolve_timeout_seconds(request)
+    handler = _build_timeout_handler(timeout_seconds)
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, handler)
+    signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 def _free_cupy() -> None:

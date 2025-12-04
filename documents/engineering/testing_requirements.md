@@ -81,6 +81,17 @@ docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/
 
 ---
 
+## Timeout Policy
+
+- **Per-test guard**: All tests have a **60s** timeout enforced by an autouse fixture
+  (`tests/conftest.py`). The limit includes setup and teardown to prevent hangs in fixtures.
+- **Overrides**: Use `@pytest.mark.timeout(seconds=...)` only when a test is *expected* to exceed
+  60s; document the reason inline and keep values as small as feasible.
+- **Suite execution**: Do **not** attach short shell-level timeouts to `poetry run test-all` during
+  development; the per-test guard handles hangs while preserving full logs.
+
+---
+
 ## Code Quality Checks
 
 **CRITICAL**: Run code quality checks via `poetry run check-code`:
@@ -484,13 +495,13 @@ docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc 
 ### Test Execution Requirements
 
 **Forbidden**:
-- ❌ `Bash(command="...test...", timeout=60000)` - Truncates output, kills tests mid-run
+- ❌ `Bash(command="...test...", timeout=60000)` - Short timeouts truncate output and kill tests
 - ❌ `Bash(command="...test...", run_in_background=True)` - Can't see failures in real-time
 - ❌ Reading only partial output with `head -n 100` or similar truncation
 - ❌ Checking test status before completion (polling BashOutput prematurely)
 
 **Required**:
-- ✅ No timeout parameter on test commands
+- ✅ No timeout parameter on test commands for local runs (per-test guard handles hangs)
 - ✅ Wait for complete test execution (GPU tests can take several minutes)
 - ✅ Review ALL stdout/stderr output before drawing conclusions
 - ✅ Let tests complete naturally, read full results
