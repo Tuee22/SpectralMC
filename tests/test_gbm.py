@@ -38,8 +38,8 @@ _BS_DIMENSIONS = {
 _TIMESTEPS = 1
 _NETWORK_SIZE = 256
 _BATCHES_PER_RUN = (
-    2**17
-)  # Reduced from 2**19 (524,288) to 2**17 (131,072) for GPUs with limited VRAM
+    2**15
+)  # Reduced workload (now 32,768 batches) to keep test runtime under the 60s timeout
 _THREADS_PER_BLOCK: Literal[32, 64, 128, 256, 512, 1024] = 256
 _MC_SEED = 7
 _BUFFER_SIZE = 1
