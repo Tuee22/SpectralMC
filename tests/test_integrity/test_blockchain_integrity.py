@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import FrozenInstanceError
+
 import pytest
 import torch
 
@@ -116,8 +119,6 @@ def test_directory_name_uniqueness() -> None:
 
 def test_version_immutability() -> None:
     """Test ModelVersion is immutable (frozen dataclass)."""
-    from dataclasses import FrozenInstanceError
-
     version = ModelVersion(
         counter=1,
         semantic_version="1.0.0",
@@ -129,7 +130,7 @@ def test_version_immutability() -> None:
 
     # Should raise FrozenInstanceError when attempting to mutate frozen field
     with pytest.raises(FrozenInstanceError):
-        version.counter = 999  # type: ignore[misc]  # Intentionally testing immutability
+        setattr(version, "counter", 999)
 
 
 def test_hash_length_consistency() -> None:
@@ -271,7 +272,6 @@ async def test_detect_broken_merkle_chain(
         await commit_snapshot(async_store, config, f"V{i}")
 
     # Tamper with version 1's metadata.json parent_hash
-    import json
 
     # Find v1 metadata
     assert async_store._s3_client is not None
@@ -322,7 +322,6 @@ async def test_detect_invalid_genesis_counter(
     await commit_snapshot(async_store, config, "Genesis")
 
     # Tamper with counter in metadata
-    import json
 
     # List objects to find exact version dir
     assert async_store._s3_client is not None
@@ -373,7 +372,6 @@ async def test_detect_non_sequential_counters(
         await commit_snapshot(async_store, config, f"V{i}")
 
     # Tamper with version 2's counter
-    import json
 
     # Find v2 metadata
     assert async_store._s3_client is not None
@@ -427,8 +425,6 @@ async def test_chain_corruption_error_raised(
     await commit_snapshot(async_store, config, "Genesis")
 
     # Corrupt genesis parent_hash
-    import json
-
     # Find metadata
     assert async_store._s3_client is not None
     paginator = async_store._s3_client.get_paginator("list_objects_v2")

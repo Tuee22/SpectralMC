@@ -1,6 +1,3 @@
-from __future__ import annotations
-
-
 """
 `spectralmc.models.numerical`
 --------------------------------
@@ -33,6 +30,8 @@ Public helpers
 * ``Precision.from_complex(p)   -> Precision``  (where *p* **is already** a
   :class:`Precision`)
 """
+
+from __future__ import annotations
 
 from enum import Enum
 from typing import TypeAlias, Union

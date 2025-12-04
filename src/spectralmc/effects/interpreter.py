@@ -16,15 +16,23 @@ See Also:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, Never, Protocol, TypeVar
+import asyncio
+import logging
+import pickle
+from typing import Literal, Never, Protocol, TypeVar
 
-
-T = TypeVar("T")
+import cupy as cp
+import numpy as np
+import torch
+from numba import cuda
+from numba.cuda import synchronize as numba_sync
+from torch.utils.tensorboard import SummaryWriter
 
 from spectralmc.effects.composition import EffectParallel, EffectSequence
 from spectralmc.effects.errors import (
     EffectError,
     GPUError,
+    LoggingError,
     MetadataError,
     MonteCarloError,
     RNGError,
@@ -38,6 +46,7 @@ from spectralmc.effects.gpu import (
     StreamSync,
     TensorTransfer,
 )
+from spectralmc.effects.logging import LogMessage, LoggingEffect
 from spectralmc.effects.metadata import MetadataEffect, ReadMetadata, UpdateMetadata
 from spectralmc.effects.montecarlo import (
     ComputeFFT,
@@ -57,12 +66,14 @@ from spectralmc.effects.training import (
     TrainingEffect,
 )
 from spectralmc.effects.types import Effect
+from spectralmc.gbm import SimulateBlackScholes
+from spectralmc.models.cpu_gpu_transfer import TransferDestination, move_tensor_tree
+from spectralmc.models.torch import Device
 from spectralmc.result import Failure, Result, Success
+from spectralmc.storage.s3_operations import S3Operations
+from spectralmc.storage.store import AsyncBlockchainModelStore
 
-
-if TYPE_CHECKING:
-    import cupy as cp
-    import torch
+T = TypeVar("T")
 
 
 def assert_never(value: Never) -> Never:
@@ -144,9 +155,6 @@ class GPUInterpreter:
         Uses spectralmc.models.cpu_gpu_transfer for actual transfer.
         """
 
-        from spectralmc.models.cpu_gpu_transfer import TransferDestination, move_tensor_tree
-        from spectralmc.models.torch import Device
-
         try:
             tensor_result = self._registry.get_torch_tensor(tensor_id)
             match tensor_result:
@@ -177,8 +185,6 @@ class GPUInterpreter:
                     self._cupy_stream.synchronize()
                 case "numba":
                     # Numba synchronize via cuda module
-                    from numba.cuda import synchronize as numba_sync
-
                     numba_sync()
                 case _:
                     return Failure(GPUError(message=f"Unknown stream type: {stream_type}"))
@@ -248,9 +254,6 @@ class GPUInterpreter:
                 pass
 
         try:
-            import cupy as cp
-            import torch
-
             transferred: object
             if effect.source_framework == "cupy" and effect.target_framework == "torch":
                 if not isinstance(tensor, cp.ndarray):
@@ -261,8 +264,7 @@ class GPUInterpreter:
                 if not isinstance(tensor, torch.Tensor):
                     return Failure(GPUError(message="Source tensor is not a PyTorch tensor"))
                 # PyTorch to CuPy via DLPack - use asarray which supports __dlpack__
-                # Type stubs incomplete for torch->cupy DLPack transfer
-                transferred = cp.asarray(tensor)  # type: ignore[arg-type]
+                transferred = cp.asarray(tensor)
             else:
                 return Failure(
                     GPUError(
@@ -412,18 +414,14 @@ class TrainingInterpreter:
                 pass
 
         try:
-            import torch
-
             loss: torch.Tensor
             if effect.loss_type == "mse":
                 loss = torch.nn.functional.mse_loss(pred, target)
             elif effect.loss_type == "mae":
-                # Type stubs incomplete for torch.mean
-                loss = torch.mean(torch.abs(pred - target))  # type: ignore[attr-defined]
+                loss = torch.nn.functional.l1_loss(pred, target)
             else:
                 # effect.loss_type == "huber"
-                # Type stubs incomplete for smooth_l1_loss
-                loss = torch.nn.functional.smooth_l1_loss(pred, target)  # type: ignore[attr-defined]
+                loss = torch.nn.functional.smooth_l1_loss(pred, target)
 
             # Store loss in shared registry for BackwardPass
             self._registry.register_tensor(effect.output_tensor_id, loss)
@@ -441,11 +439,6 @@ class TrainingInterpreter:
             Result containing None or TrainingError.
         """
         try:
-            # Import TensorBoard writer if available
-            # This is a simplified implementation - real usage would use
-            # a pre-registered SummaryWriter
-            from torch.utils.tensorboard import SummaryWriter
-
             # Check if a writer is registered in shared registry
             writer_result = self._registry.get_tensor("_tensorboard_writer")
             match writer_result:
@@ -501,8 +494,6 @@ class MonteCarloInterpreter:
             Result containing the generated matrix or MonteCarloError.
         """
         try:
-            import cupy as cp
-
             # Use CuPy's random generator with seed
             rng = cp.random.default_rng(effect.seed)
             # Skip values if resuming (use tuple shape for skip)
@@ -534,11 +525,6 @@ class MonteCarloInterpreter:
             Result containing simulated paths tensor or MonteCarloError.
         """
         try:
-            import cupy as cp
-            from numba import cuda
-
-            from spectralmc.gbm import SimulateBlackScholes
-
             # Get input normals from shared registry
             normals_result = self._registry.get_cupy_array(effect.input_normals_id)
             match normals_result:
@@ -552,8 +538,7 @@ class MonteCarloInterpreter:
                     pass
 
             # Make a copy since the kernel operates in-place
-            # Type stubs incomplete for cp.array
-            sims: cp.ndarray = cp.array(normals)  # type: ignore[attr-defined]
+            sims: cp.ndarray = cp.array(normals)
 
             # Compute kernel launch parameters
             threads_per_block = 256
@@ -564,8 +549,7 @@ class MonteCarloInterpreter:
             dt = effect.expiry / effect.timesteps
 
             # Get the default CUDA stream for kernel launch
-            # Type stubs incomplete for cuda.default_stream
-            stream = cuda.default_stream()  # type: ignore[attr-defined]
+            stream = cuda.default_stream()
 
             # Launch the SimulateBlackScholes kernel (blocks, threads, stream)
             SimulateBlackScholes[blocks, threads_per_block, stream](
@@ -618,8 +602,6 @@ class MonteCarloInterpreter:
                 pass
 
         try:
-            import cupy as cp
-
             # Compute FFT using CuPy
             result = cp.fft.fft(tensor, axis=effect.axis)
 
@@ -672,10 +654,6 @@ class StorageInterpreter:
         bucket = effect.bucket or self._bucket
         key = effect.key
         try:
-            # Import AsyncBlockchainModelStore for S3 operations
-            from spectralmc.storage.s3_operations import S3Operations
-            from spectralmc.storage.store import AsyncBlockchainModelStore
-
             async with AsyncBlockchainModelStore(bucket) as store:
                 # Use public API via S3Operations
                 if store._s3_client is None:
@@ -717,9 +695,6 @@ class StorageInterpreter:
                 pass
 
         try:
-            from spectralmc.storage.s3_operations import S3Operations
-            from spectralmc.storage.store import AsyncBlockchainModelStore
-
             async with AsyncBlockchainModelStore(bucket) as store:
                 if store._s3_client is None:
                     return Failure(
@@ -751,8 +726,6 @@ class StorageInterpreter:
                 pass
 
         try:
-            from spectralmc.storage.store import AsyncBlockchainModelStore
-
             async with AsyncBlockchainModelStore(self._bucket) as store:
                 # store.commit returns ModelVersion directly, not Result
                 version = await store.commit(checkpoint_data, checkpoint_hash, message)
@@ -801,22 +774,14 @@ class RNGInterpreter:
             state: bytes
             match rng_type:
                 case "torch_cpu":
-                    import torch
-
                     state = torch.get_rng_state().cpu().numpy().tobytes()
                 case "torch_cuda":
-                    import torch
-
                     if not torch.cuda.is_available():
                         return Failure(RNGError(message="CUDA not available", rng_type=rng_type))
                     states = torch.cuda.get_rng_state_all()
                     # Serialize all CUDA device states
                     state = b"".join(s.cpu().numpy().tobytes() for s in states)
                 case "numpy":
-                    import pickle
-
-                    import numpy as np
-
                     # Get numpy random state as bytes via pickle
                     state_dict = np.random.get_state(legacy=False)
                     state = pickle.dumps(state_dict)
@@ -837,17 +802,11 @@ class RNGInterpreter:
         try:
             match rng_type:
                 case "torch_cpu":
-                    import numpy as np
-                    import torch
-
                     state_array = np.frombuffer(state_bytes, dtype=np.uint8)
                     state_tensor = torch.from_numpy(state_array.copy())
                     torch.set_rng_state(state_tensor)
                     return Success(None)
                 case "torch_cuda":
-                    import numpy as np
-                    import torch
-
                     if not torch.cuda.is_available():
                         return Failure(RNGError(message="CUDA not available", rng_type=rng_type))
                     # Restore requires knowing device count
@@ -861,10 +820,6 @@ class RNGInterpreter:
                     torch.cuda.set_rng_state_all(states)
                     return Success(None)
                 case "numpy":
-                    import pickle
-
-                    import numpy as np
-
                     state = pickle.loads(state_bytes)  # noqa: S301
                     np.random.set_state(state)
                     return Success(None)
@@ -928,7 +883,7 @@ class MetadataInterpreter:
     async def _update_metadata(
         self,
         key: str,
-        operation: str,
+        operation: Literal["set", "add", "increment"],
         value: int | float | str,
     ) -> Result[object, MetadataError]:
         """Update a value in the metadata registry.
@@ -945,14 +900,63 @@ class MetadataInterpreter:
         if operation not in ("set", "add", "increment"):
             return Failure(MetadataError(message=f"Unknown operation: {operation}", key=key))
 
-        # Type narrowing for the operation literal
-        op_literal: Literal["set", "add", "increment"] = operation  # type: ignore[assignment]
-        result = self._registry.update_metadata(key, op_literal, value)
+        result = self._registry.update_metadata(key, operation, value)
         match result:
             case Failure(err):
                 return Failure(MetadataError(message=str(err), key=key))
             case Success(new_value):
                 return Success(new_value)
+
+
+class LoggingInterpreter:
+    """Interpreter for logging effects.
+
+    Emits structured log messages via the standard logging module.
+    """
+
+    def __init__(self, default_logger_name: str = "spectralmc") -> None:
+        """Initialize logging interpreter.
+
+        Args:
+            default_logger_name: Fallback logger name when effect.logger_name is empty.
+        """
+        self._default_logger_name = default_logger_name
+
+    async def interpret(self, effect: LoggingEffect) -> Result[object, LoggingError]:
+        """Execute logging effect."""
+        match effect:
+            case LogMessage():
+                return self._log_message(effect)
+            case _:
+                assert_never(effect)
+
+    def _log_message(self, effect: LogMessage) -> Result[object, LoggingError]:
+        """Emit a log message at the requested level."""
+        logger_name = effect.logger_name or self._default_logger_name
+        logger = logging.getLogger(logger_name)
+
+        try:
+            match effect.level:
+                case "debug":
+                    logger.debug(effect.message, exc_info=effect.exc_info)
+                case "info":
+                    logger.info(effect.message, exc_info=effect.exc_info)
+                case "warning":
+                    logger.warning(effect.message, exc_info=effect.exc_info)
+                case "error":
+                    logger.error(effect.message, exc_info=effect.exc_info)
+                case "critical":
+                    logger.critical(effect.message, exc_info=effect.exc_info)
+                case _:
+                    return Failure(
+                        LoggingError(
+                            message=f"Unknown log level: {effect.level}",
+                            logger_name=logger_name,
+                        )
+                    )
+            return Success(None)
+        except Exception as exc:
+            return Failure(LoggingError(message=str(exc), logger_name=logger_name))
 
 
 class SpectralMCInterpreter:
@@ -971,7 +975,17 @@ class SpectralMCInterpreter:
         >>> storage = StorageInterpreter(bucket, registry)
         >>> rng = RNGInterpreter(registry)
         >>> metadata = MetadataInterpreter(registry)
-        >>> interpreter = SpectralMCInterpreter(gpu, training, mc, storage, rng, metadata, registry)
+        >>> logging_interpreter = LoggingInterpreter()
+        >>> interpreter = SpectralMCInterpreter(
+        ...     gpu,
+        ...     training,
+        ...     mc,
+        ...     storage,
+        ...     rng,
+        ...     metadata,
+        ...     logging_interpreter,
+        ...     registry,
+        ... )
         >>> result = await interpreter.interpret(effect)
     """
 
@@ -983,6 +997,7 @@ class SpectralMCInterpreter:
         storage: StorageInterpreter,
         rng: RNGInterpreter,
         metadata: MetadataInterpreter,
+        logging_interpreter: LoggingInterpreter,
         registry: SharedRegistry,
     ) -> None:
         """Initialize master interpreter with all sub-interpreters.
@@ -994,6 +1009,7 @@ class SpectralMCInterpreter:
             storage: Interpreter for storage effects.
             rng: Interpreter for RNG effects.
             metadata: Interpreter for metadata effects.
+            logging_interpreter: Interpreter for logging effects.
             registry: Shared registry used by all sub-interpreters.
         """
         self._gpu = gpu
@@ -1002,6 +1018,7 @@ class SpectralMCInterpreter:
         self._storage = storage
         self._rng = rng
         self._metadata = metadata
+        self._logging = logging_interpreter
         self._registry = registry
 
     async def interpret(self, effect: Effect) -> Result[object, EffectError]:
@@ -1025,6 +1042,9 @@ class SpectralMCInterpreter:
             case ReadMetadata() | UpdateMetadata():
                 metadata_result = await self._metadata.interpret(effect)
                 return _widen_metadata_error(metadata_result)
+            case LogMessage():
+                logging_result = await self._logging.interpret(effect)
+                return _widen_logging_error(logging_result)
             case _:
                 assert_never(effect)
 
@@ -1088,8 +1108,6 @@ class SpectralMCInterpreter:
             ... )
             >>> result = await interpreter.interpret_parallel(par)
         """
-        import asyncio
-
         # Start all effects concurrently
         tasks = [self.interpret(effect) for effect in parallel.effects]
         results = await asyncio.gather(*tasks)
@@ -1148,6 +1166,7 @@ class SpectralMCInterpreter:
             storage=StorageInterpreter(storage_bucket, registry),
             rng=RNGInterpreter(registry),
             metadata=MetadataInterpreter(registry),
+            logging_interpreter=LoggingInterpreter(),
             registry=registry,
         )
 
@@ -1204,6 +1223,16 @@ def _widen_rng_error(result: Result[object, RNGError]) -> Result[object, EffectE
 
 def _widen_metadata_error(result: Result[object, MetadataError]) -> Result[object, EffectError]:
     """Widen Metadata error to EffectError union."""
+    match result:
+        case Success(value):
+            return Success(value)
+        case Failure(error):
+            widened: EffectError = error
+            return Failure(widened)
+
+
+def _widen_logging_error(result: Result[object, LoggingError]) -> Result[object, EffectError]:
+    """Widen Logging error to EffectError union."""
     match result:
         case Success(value):
             return Success(value)

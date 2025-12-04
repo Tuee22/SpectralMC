@@ -7,6 +7,8 @@ and pattern matching exhaustiveness.
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from spectralmc.effects import (
@@ -48,8 +50,8 @@ class TestGPUEffects:
     def test_tensor_transfer_frozen(self) -> None:
         """TensorTransfer is immutable."""
         effect = TensorTransfer(tensor_id="weights")
-        with pytest.raises(AttributeError):
-            effect.tensor_id = "other"  # type: ignore[misc]
+        with pytest.raises(FrozenInstanceError):
+            setattr(effect, "tensor_id", "other")
 
     def test_tensor_transfer_same_device_raises(self) -> None:
         """TensorTransfer raises ValueError for same source and target device."""

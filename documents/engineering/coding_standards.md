@@ -1994,6 +1994,6 @@ Both must pass with zero errors.
 See also:
 - [Immutability Doctrine](./immutability_doctrine.md) - Frozen dataclasses and functional updates
 - [Pydantic Patterns](./pydantic_patterns.md) - Model validation and configuration
-- [Documentation Standards](./documentation_standards.md) - Docstring requirements
+- [Documentation Standards](../documentation_standards.md) - Docstring requirements
 - [Testing Requirements](./testing_requirements.md) - Testing anti-patterns and best practices
 - [CPU/GPU Compute Policy](./cpu_gpu_compute_policy.md) - Device placement and transfers

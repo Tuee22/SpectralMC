@@ -30,15 +30,12 @@ Public API
 from __future__ import annotations
 
 from math import exp, sqrt
-from typing import TYPE_CHECKING, Annotated, Literal, TypeAlias
+from typing import Annotated, Literal, TypeAlias
 
 import cupy as cp
 from numba import cuda
+from numba.cuda.cudadrv.devicearray import DeviceNDArray
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-
-if TYPE_CHECKING:
-    from numba.cuda import DeviceNDArray
 
 from spectralmc.async_normals import (
     BufferConfig,

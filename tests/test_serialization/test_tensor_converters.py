@@ -8,12 +8,6 @@ from __future__ import annotations
 
 import torch
 
-
-# Module-level GPU requirement - test file fails immediately without GPU
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
-
-GPU_DEV: torch.device = torch.device("cuda:0")
-
 from spectralmc.models.torch import (
     AdamOptimizerState,
     AdamParamGroup,
@@ -21,9 +15,15 @@ from spectralmc.models.torch import (
 )
 from spectralmc.serialization.tensors import (
     AdamOptimizerStateConverter,
+    ModelCheckpointConverter,
     RNGStateConverter,
     TensorStateConverter,
 )
+
+# Module-level GPU requirement - test file fails immediately without GPU
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
+GPU_DEV: torch.device = torch.device("cuda:0")
 
 
 def test_tensor_state_round_trip_float32() -> None:
@@ -214,8 +214,6 @@ def test_tensor_large() -> None:
 
 def test_model_checkpoint_round_trip() -> None:
     """Test ModelCheckpointConverter with complete checkpoint."""
-    from spectralmc.serialization.tensors import ModelCheckpointConverter
-
     # Create sample model state dict
     model_state_dict = {
         "layer1.weight": torch.randn(10, 5),

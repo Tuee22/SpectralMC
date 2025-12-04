@@ -26,6 +26,11 @@ from .errors import (
     StorageError,
     VersionNotFoundError,
 )
+from .checkpoint import (
+    commit_snapshot,
+    create_checkpoint_from_snapshot,
+    load_snapshot_from_checkpoint,
+)
 from .gc import GarbageCollector, GCReport, RetentionPolicy, run_gc
 from .inference import InferenceClient, InferenceMode, PinnedMode, TrackingMode
 from .store import AsyncBlockchainModelStore, retry_on_throttle
@@ -40,11 +45,6 @@ from .verification import (
 
 # Backward compatibility alias (deprecated - use AsyncBlockchainModelStore)
 BlockchainModelStore = AsyncBlockchainModelStore
-from .checkpoint import (
-    commit_snapshot,
-    create_checkpoint_from_snapshot,
-    load_snapshot_from_checkpoint,
-)
 
 
 __all__ = [

@@ -111,5 +111,28 @@ class MetadataError:
     key: str = ""
 
 
+@dataclass(frozen=True)
+class LoggingError:
+    """Error from logging effect execution.
+
+    Attributes:
+        kind: Discriminator for pattern matching. Always "LoggingError".
+        message: Human-readable error description.
+        logger_name: Logger where the error occurred.
+    """
+
+    kind: Literal["LoggingError"] = "LoggingError"
+    message: str = ""
+    logger_name: str = ""
+
+
 # Master EffectError Union - enables exhaustive pattern matching
-EffectError = GPUError | TrainingError | MonteCarloError | StorageError | RNGError | MetadataError
+EffectError = (
+    GPUError
+    | TrainingError
+    | MonteCarloError
+    | StorageError
+    | RNGError
+    | MetadataError
+    | LoggingError
+)

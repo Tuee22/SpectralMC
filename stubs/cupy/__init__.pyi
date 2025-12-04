@@ -5,10 +5,14 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
-from typing import Tuple, TypeAlias, Union, overload
+from typing import Protocol, Tuple, TypeAlias, Union, overload
+
+# Objects that expose DLPack buffers (e.g., torch.Tensor implements __dlpack__).
+class SupportsDLPack(Protocol):
+    def __dlpack__(self, stream: int | None = None) -> object: ...
 
 # Type aliases to avoid Any from numpy's ArrayLike/DTypeLike
-_ArrayLike: TypeAlias = Union["ndarray", float, complex, int]
+_ArrayLike: TypeAlias = Union["ndarray", float, complex, int, SupportsDLPack]
 _DTypeLike: TypeAlias = Union["dtype", str]
 
 # ---------------------------------------------------------------------------
@@ -76,6 +80,9 @@ def zeros(
     shape: int | Tuple[int, ...],
     dtype: dtype | _DTypeLike | None = ...,
     order: str | None = ...,
+) -> ndarray: ...
+def array(
+    x: _ArrayLike | list["ndarray"], *, dtype: dtype | _DTypeLike | None = ...
 ) -> ndarray: ...
 def linspace(
     start: float, stop: float, num: int = ..., *, dtype: dtype | _DTypeLike | None = ...

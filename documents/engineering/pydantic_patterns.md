@@ -4,7 +4,7 @@
 
 SpectralMC uses **Pydantic v2** for all configuration and data validation. Pydantic models provide runtime type validation, immutable configurations, and seamless integration with mypy strict mode.
 
-**Related Standards**: [Coding Standards](coding_standards.md), [Documentation Standards](documentation_standards.md)
+**Related Standards**: [Coding Standards](coding_standards.md), [Documentation Standards](../documentation_standards.md)
 
 ---
 
@@ -416,4 +416,4 @@ def test_config_forbids_extra_fields():
 - **Nested models**: Automatic validation of nested structures
 - **Testing**: Explicitly test validation logic
 
-See also: [Coding Standards](coding_standards.md), [Documentation Standards](documentation_standards.md)
+See also: [Coding Standards](coding_standards.md), [Documentation Standards](../documentation_standards.md)

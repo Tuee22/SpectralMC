@@ -53,6 +53,7 @@ from spectralmc.effects.composition import (
 from spectralmc.effects.errors import (
     EffectError,
     GPUError,
+    LoggingError,
     MetadataError,
     MonteCarloError,
     RNGError,
@@ -60,10 +61,43 @@ from spectralmc.effects.errors import (
     TrainingError,
 )
 
+# Effect types
+from spectralmc.effects.types import (
+    BackwardPass,
+    CaptureRNGState,
+    CommitVersion,
+    ComputeFFT,
+    ComputeLoss,
+    DLPackTransfer,
+    Effect,
+    ForwardPass,
+    GenerateNormals,
+    GPUEffect,
+    KernelLaunch,
+    LogMessage,
+    LogMetrics,
+    LoggingEffect,
+    MetadataEffect,
+    MonteCarloEffect,
+    OptimizerStep,
+    ReadMetadata,
+    ReadObject,
+    RestoreRNGState,
+    RNGEffect,
+    SimulatePaths,
+    StorageEffect,
+    StreamSync,
+    TensorTransfer,
+    TrainingEffect,
+    UpdateMetadata,
+    WriteObject,
+)
+
 # Interpreters
 from spectralmc.effects.interpreter import (
     EffectInterpreter,
     GPUInterpreter,
+    LoggingInterpreter,
     MetadataInterpreter,
     MonteCarloInterpreter,
     RNGInterpreter,
@@ -84,36 +118,6 @@ from spectralmc.effects.registry import (
     SharedRegistry,
 )
 
-# Effect types
-from spectralmc.effects.types import (
-    BackwardPass,
-    CaptureRNGState,
-    CommitVersion,
-    ComputeFFT,
-    ComputeLoss,
-    DLPackTransfer,
-    Effect,
-    ForwardPass,
-    GenerateNormals,
-    GPUEffect,
-    KernelLaunch,
-    LogMetrics,
-    MetadataEffect,
-    MonteCarloEffect,
-    OptimizerStep,
-    ReadMetadata,
-    ReadObject,
-    RestoreRNGState,
-    RNGEffect,
-    SimulatePaths,
-    StorageEffect,
-    StreamSync,
-    TensorTransfer,
-    TrainingEffect,
-    UpdateMetadata,
-    WriteObject,
-)
-
 
 __all__ = [
     # Master effect union
@@ -131,6 +135,8 @@ __all__ = [
     "OptimizerStep",
     "ComputeLoss",
     "LogMetrics",
+    "LoggingEffect",
+    "LogMessage",
     # Monte Carlo effects
     "MonteCarloEffect",
     "GenerateNormals",
@@ -164,6 +170,7 @@ __all__ = [
     "StorageInterpreter",
     "RNGInterpreter",
     "MetadataInterpreter",
+    "LoggingInterpreter",
     "MockInterpreter",
     "assert_never",
     # Errors
@@ -174,6 +181,7 @@ __all__ = [
     "StorageError",
     "RNGError",
     "MetadataError",
+    "LoggingError",
     # Registry
     "SharedRegistry",
     "RegistryError",

@@ -18,14 +18,12 @@ See Also:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
+
+import cupy as cp
+import torch
 
 from spectralmc.result import Failure, Result, Success
-
-
-if TYPE_CHECKING:
-    import cupy as cp
-    import torch
 
 
 @dataclass(frozen=True)
@@ -130,8 +128,6 @@ class SharedRegistry:
         Returns:
             Success with torch.Tensor, or Failure with error.
         """
-        import torch
-
         value = self._tensors.get(tensor_id)
         if value is None:
             return Failure(RegistryKeyNotFound(key=tensor_id, expected_type="torch.Tensor"))
@@ -154,8 +150,6 @@ class SharedRegistry:
         Returns:
             Success with cp.ndarray, or Failure with error.
         """
-        import cupy as cp
-
         value = self._tensors.get(tensor_id)
         if value is None:
             return Failure(RegistryKeyNotFound(key=tensor_id, expected_type="cp.ndarray"))

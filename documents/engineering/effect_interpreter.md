@@ -73,6 +73,12 @@ flowchart TB
     MonteCarloEffect --> ComputeFFT
 ```
 
+**Logging Effects**
+
+- Use `LogMessage` to describe log side effects (level, message, logger name).
+- Only the `LoggingInterpreter` emits log records; business logic must remain pure.
+- Prefer logging effects over direct `logger.*` calls to preserve determinism and reviewability.
+
 ### Complete Effect ADT Implementation
 
 The following code is production-ready and follows SpectralMC's strict typing requirements (`mypy --strict`, no `Any`, `cast`, or `type: ignore`).

@@ -6,7 +6,9 @@ from __future__ import annotations
 import pytest
 import torch
 
+from spectralmc.gbm import BlackScholesConfig, SimulationParams
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
+from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import AdamOptimizerState, AdamParamGroup, AdamParamState
 from spectralmc.result import Failure, Success
 from spectralmc.storage import (
@@ -52,9 +54,6 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
 
     # Create a minimal GbmCVNNPricerConfig
     # Note: This is a simplified test, real usage would have proper BlackScholes config
-    from spectralmc.gbm import BlackScholesConfig, SimulationParams
-    from spectralmc.models.numerical import Precision
-
     sim_params = SimulationParams(
         timesteps=100,
         network_size=1024,
@@ -139,9 +138,6 @@ async def test_checkpoint_multiple_commits(
     """Test multiple sequential commits create proper chain."""
     model = torch.nn.Linear(10, 10)
 
-    from spectralmc.gbm import BlackScholesConfig, SimulationParams
-    from spectralmc.models.numerical import Precision
-
     sim_params = SimulationParams(
         timesteps=100,
         network_size=1024,
@@ -218,9 +214,6 @@ async def test_checkpoint_content_hash_integrity(
 
     torch.manual_seed(123)
     model2.weight.data = torch.randn(5, 5)
-
-    from spectralmc.gbm import BlackScholesConfig, SimulationParams
-    from spectralmc.models.numerical import Precision
 
     sim_params = SimulationParams(
         timesteps=100,

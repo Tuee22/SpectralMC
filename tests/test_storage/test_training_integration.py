@@ -11,12 +11,6 @@ from typing import Union
 import pytest
 import torch
 
-
-# Module-level GPU requirement - test file fails immediately without GPU
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
-
-GPU_DEV: torch.device = torch.device("cuda:0")
-
 from spectralmc.cvnn_factory import (
     ActivationCfg,
     ActivationKind,
@@ -37,6 +31,11 @@ from spectralmc.models.torch import DType as TorchDTypeEnum
 from spectralmc.result import Failure, Success
 from spectralmc.sobol_sampler import BoundSpec
 from spectralmc.storage import AsyncBlockchainModelStore, commit_snapshot
+
+# Module-level GPU requirement - test file fails immediately without GPU
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
+GPU_DEV: torch.device = torch.device("cuda:0")
 
 
 def _make_test_cvnn(

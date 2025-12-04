@@ -58,9 +58,9 @@ _MAIN_THREAD_ID: int = threading.get_ident()
 # Ensure deterministic cuBLAS kernels (ignored if CUDA is absent)
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
 
-import torch
+import torch  # noqa: E402
 
-from spectralmc.models.numerical import Precision
+from spectralmc.models.numerical import Precision  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -239,9 +239,9 @@ def default_device(dev: torch.device) -> Iterator[None]:
 # --------------------------------------------------------------------------- #
 #  SafeTensor serialization helpers                                           #
 # --------------------------------------------------------------------------- #
-from pydantic import BaseModel, ConfigDict
-from safetensors.torch import load as _sf_load
-from safetensors.torch import save as _sf_save
+from pydantic import BaseModel, ConfigDict  # noqa: E402
+from safetensors.torch import load as _sf_load  # noqa: E402
+from safetensors.torch import save as _sf_save  # noqa: E402
 
 
 class TensorState(BaseModel):

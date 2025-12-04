@@ -585,9 +585,11 @@ class AsyncBlockchainModelStore:
         version_dir = version.directory_name
 
         # Step 4: Upload artifacts in parallel
-        try:
-            await asyncio.gather(
-                self._upload_bytes(f"versions/{version_dir}/checkpoint.pb", checkpoint_data),
+        upload_tasks = [
+            asyncio.create_task(
+                self._upload_bytes(f"versions/{version_dir}/checkpoint.pb", checkpoint_data)
+            ),
+            asyncio.create_task(
                 self._upload_json(
                     f"versions/{version_dir}/metadata.json",
                     {
@@ -598,16 +600,24 @@ class AsyncBlockchainModelStore:
                         "commit_timestamp": version.commit_timestamp,
                         "commit_message": version.commit_message,
                     },
-                ),
+                )
+            ),
+            asyncio.create_task(
                 self._upload_bytes(
                     f"versions/{version_dir}/content_hash.txt",
                     content_hash.encode("utf-8"),
-                ),
-            )
-        except (ClientError, OSError) as e:
-            # Rollback on upload failure
+                )
+            ),
+        ]
+
+        upload_results = await asyncio.gather(*upload_tasks, return_exceptions=True)
+        upload_errors = [res for res in upload_results if isinstance(res, BaseException)]
+        if upload_errors:
             await self._rollback_artifacts(version_dir)
-            raise CommitError(f"Failed to upload artifacts: {e}")
+            root_error = upload_errors[0]
+            if isinstance(root_error, (ClientError, OSError)):
+                raise CommitError(f"Failed to upload artifacts: {root_error}") from root_error
+            raise CommitError(f"Failed to upload artifacts: {root_error}")
 
         # Steps 5-7: Fetch chain.json + ETag, verify fast-forward, CAS write
         try:

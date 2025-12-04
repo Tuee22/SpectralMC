@@ -1,7 +1,4 @@
 # src/spectralmc/models/cpu_gpu_transfer.py
-from __future__ import annotations
-
-
 """
 Pure-functional helpers to
 
@@ -14,6 +11,8 @@ pattern-matching, and expression-level guards do the work.
 
 Fully ``mypy --strict`` clean.
 """
+
+from __future__ import annotations
 
 from collections.abc import Hashable, Mapping
 from enum import Enum

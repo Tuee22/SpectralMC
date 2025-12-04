@@ -14,6 +14,7 @@ from spectralmc.storage import (
     AsyncBlockchainModelStore,
     GarbageCollector,
     RetentionPolicy,
+    VersionNotFoundError,
     commit_snapshot,
     run_gc,
 )
@@ -212,8 +213,6 @@ async def test_gc_dry_run_vs_actual(async_store: AsyncBlockchainModelStore) -> N
     assert report_actual.bytes_freed > 0
 
     # v1 should be deleted now
-    from spectralmc.storage import VersionNotFoundError
-
     with pytest.raises(VersionNotFoundError):
         await async_store.get_version("v0000000001")
 

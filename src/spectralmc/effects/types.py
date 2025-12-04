@@ -25,6 +25,7 @@ from spectralmc.effects.gpu import (
     StreamSync,
     TensorTransfer,
 )
+from spectralmc.effects.logging import LoggingEffect, LogMessage
 from spectralmc.effects.metadata import (
     MetadataEffect,
     ReadMetadata,
@@ -58,7 +59,15 @@ from spectralmc.effects.training import (
 
 
 # Master Effect Union - enables exhaustive pattern matching across all effect types
-Effect = GPUEffect | TrainingEffect | MonteCarloEffect | StorageEffect | RNGEffect | MetadataEffect
+Effect = (
+    GPUEffect
+    | TrainingEffect
+    | MonteCarloEffect
+    | StorageEffect
+    | RNGEffect
+    | MetadataEffect
+    | LoggingEffect
+)
 
 __all__ = [
     # Master union
@@ -76,6 +85,8 @@ __all__ = [
     "OptimizerStep",
     "ComputeLoss",
     "LogMetrics",
+    "LoggingEffect",
+    "LogMessage",
     # Monte Carlo effects
     "MonteCarloEffect",
     "GenerateNormals",

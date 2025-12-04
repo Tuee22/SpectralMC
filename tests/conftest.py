@@ -9,11 +9,13 @@ All tests require GPU - missing GPU is a hard failure, not a skip.
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import signal
+import uuid
 import warnings
 from types import FrameType
-from typing import Callable, Generator
+from typing import AsyncGenerator, Callable, Generator
 
 
 # CRITICAL: Import facade BEFORE torch for deterministic algorithms
@@ -25,7 +27,9 @@ import torch
 
 import cupy as cp
 import pytest
+import botocore.exceptions
 
+from spectralmc.storage import AsyncBlockchainModelStore
 
 # Module-level GPU requirement - test suite fails immediately without GPU
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
@@ -124,14 +128,6 @@ def cleanup_gpu() -> Generator[None, None, None]:
 # =========================================================================== #
 #                   ASYNC STORAGE TEST FIXTURES                               #
 # =========================================================================== #
-
-import asyncio
-import uuid
-from typing import AsyncGenerator
-
-import botocore.exceptions
-
-from spectralmc.storage import AsyncBlockchainModelStore
 
 
 @pytest.fixture(scope="session")

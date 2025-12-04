@@ -42,46 +42,29 @@ Implementation notes
 from __future__ import annotations
 
 import asyncio
-import logging
 import math
 import time
 import warnings
 from dataclasses import dataclass
-from typing import (
-    TYPE_CHECKING,
-    Callable,
-    Iterable,
-    Protocol,
-    Sequence,
-    runtime_checkable,
-)
-
-
-if TYPE_CHECKING:
-    from spectralmc.storage import AsyncBlockchainModelStore
-
-from spectralmc.storage.errors import (
-    CommitError,
-    ConflictError,
-    NotFastForwardError,
-    StorageError,
-)
-
-
-_logger = logging.getLogger(__name__)
+from typing import Callable, Iterable, Literal, Protocol, Sequence, runtime_checkable
 
 import cupy as cp
 import numpy as np
-import torch
 from cupy.cuda import Stream as CuPyStream
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
-from torch import (
-    nn,
-    optim,
-)
-from torch.utils.tensorboard import SummaryWriter
 
 # CRITICAL: Import facade BEFORE torch for deterministic algorithms
+from spectralmc.models.torch import (
+    AdamOptimizerState,
+    AnyDType,
+    Device,
+    DType,
+    FullPrecisionDType,
+)
+import torch
+from torch import nn, optim
+from torch.utils.tensorboard import SummaryWriter
+
 from spectralmc.effects import (
     BackwardPass,
     CaptureRNGState,
@@ -92,26 +75,46 @@ from spectralmc.effects import (
     EffectSequence,
     ForwardPass,
     GenerateNormals,
+    LogMessage,
     LogMetrics,
+    LoggingInterpreter,
     OptimizerStep,
     ReadMetadata,
     SimulatePaths,
+    SpectralMCInterpreter,
     StreamSync,
     UpdateMetadata,
     WriteObject,
     sequence_effects,
 )
+from spectralmc.effects.types import Effect
 from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
 from spectralmc.models.cpu_gpu_transfer import module_state_device_dtype
 from spectralmc.models.numerical import Precision
-from spectralmc.models.torch import (
-    AdamOptimizerState,
-    AnyDType,
-    Device,
-    DType,
-    FullPrecisionDType,
-)
+from spectralmc.result import Failure, Success
+from spectralmc.serialization import compute_sha256
+from spectralmc.serialization.tensors import ModelCheckpointConverter
 from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler
+from spectralmc.storage.errors import (
+    CommitError,
+    ConflictError,
+    NotFastForwardError,
+    StorageError,
+)
+from spectralmc.storage.store import AsyncBlockchainModelStore
+
+LOGGER_NAME = __name__
+LogLevel = Literal["debug", "info", "warning", "error", "critical"]
+
+
+def _consume_log_task_exception(task: asyncio.Task[object]) -> None:
+    """Silence unexpected logging task exceptions."""
+    try:
+        task.exception()
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        return
 
 
 __all__: tuple[str, ...] = (
@@ -379,6 +382,11 @@ class GbmCVNNPricer:
                 ]
             )
 
+        # Dedicated logging interpreter (side effects executed outside business logic)
+        self._logging_interpreter: LoggingInterpreter = LoggingInterpreter(
+            default_logger_name=LOGGER_NAME
+        )
+
     # ------------------------------------------------------------------ #
     # Checkpointing                                                      #
     # ------------------------------------------------------------------ #
@@ -447,6 +455,72 @@ class GbmCVNNPricer:
         optimizer.step()
         grad_norm = float(torch.nn.utils.clip_grad_norm_(self._cvnn.parameters(), float("inf")))
         return loss, grad_norm
+
+    def _log_effect(
+        self,
+        message: str,
+        *,
+        level: LogLevel = "info",
+        exc_info: bool = False,
+    ) -> LogMessage:
+        """Build a LogMessage effect with consistent logger name."""
+        return LogMessage(
+            level=level,
+            message=message,
+            logger_name=LOGGER_NAME,
+            exc_info=exc_info,
+        )
+
+    def _log_sync_message(
+        self,
+        message: str,
+        *,
+        level: LogLevel = "info",
+        exc_info: bool = False,
+    ) -> None:
+        """Execute a logging effect in synchronous contexts."""
+        effect = self._log_effect(message, level=level, exc_info=exc_info)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self._logging_interpreter.interpret(effect))
+            return
+
+        task = loop.create_task(self._logging_interpreter.interpret(effect))
+        task.add_done_callback(_consume_log_task_exception)
+
+    async def _log_async_internal(
+        self,
+        message: str,
+        *,
+        level: LogLevel = "info",
+        exc_info: bool = False,
+    ) -> None:
+        """Execute a logging effect using the internal interpreter."""
+        effect = self._log_effect(message, level=level, exc_info=exc_info)
+        log_result = await self._logging_interpreter.interpret(effect)
+        match log_result:
+            case Failure(_):
+                return
+            case Success(_):
+                return
+
+    async def _log_async_with_interpreter(
+        self,
+        interpreter: SpectralMCInterpreter,
+        message: str,
+        *,
+        level: LogLevel = "info",
+        exc_info: bool = False,
+    ) -> None:
+        """Execute a logging effect via the master interpreter."""
+        effect = self._log_effect(message, level=level, exc_info=exc_info)
+        log_result = await interpreter.interpret(effect)
+        match log_result:
+            case Failure(_):
+                return
+            case Success(_):
+                return
 
     # ------------------------------------------------------------------ #
     # Effect builders                                                    #
@@ -639,8 +713,6 @@ class GbmCVNNPricer:
 
         # Type safety: sequence_effects expects Effect, but we've collected objects
         # Cast back to the proper tuple for the EffectSequence
-        from spectralmc.effects.types import Effect
-
         typed_effects: list[Effect] = []
         for e in all_effects:
             if isinstance(
@@ -671,6 +743,22 @@ class GbmCVNNPricer:
     # Blockchain storage integration                                     #
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _serialize_snapshot(snapshot: GbmCVNNPricerConfig) -> tuple[bytes, str]:
+        """Serialize a snapshot to checkpoint bytes and content hash."""
+        optimizer_state = snapshot.optimizer_state or AdamOptimizerState(
+            param_states={}, param_groups=[]
+        )
+        checkpoint_proto = ModelCheckpointConverter.to_proto(
+            model_state_dict=snapshot.cvnn.state_dict(),
+            optimizer_state=optimizer_state,
+            torch_cpu_rng_state=snapshot.torch_cpu_rng_state or b"",
+            torch_cuda_rng_states=snapshot.torch_cuda_rng_states or [],
+            global_step=snapshot.global_step,
+        )
+        checkpoint_bytes = checkpoint_proto.SerializeToString()
+        return checkpoint_bytes, compute_sha256(checkpoint_bytes)
+
     def _commit_to_blockchain(
         self,
         blockchain_store: AsyncBlockchainModelStore,
@@ -678,6 +766,7 @@ class GbmCVNNPricer:
         commit_message_template: str,
         loss: float,
         batch: int,
+        interpreter: SpectralMCInterpreter,
     ) -> None:
         """
         Commit current trainer snapshot to blockchain storage.
@@ -717,19 +806,16 @@ class GbmCVNNPricer:
 
             # Execute async commit synchronously
             async def _do_commit() -> None:
-                # NOTE: Function-level import required to break circular dependency:
-                # storage.__init__ -> inference.py -> gbm_trainer.py -> storage
-                # This is an acceptable exception per coding_standards.md.
-                from spectralmc.storage import commit_snapshot
-
-                version = await commit_snapshot(
-                    blockchain_store,
-                    snapshot,
-                    commit_message,
+                checkpoint_bytes, content_hash = self._serialize_snapshot(snapshot)
+                version = await blockchain_store.commit(
+                    checkpoint_data=checkpoint_bytes,
+                    content_hash=content_hash,
+                    message=commit_message,
                 )
-                _logger.info(
+                await self._log_async_internal(
                     f"Committed version {version.counter}: {version.content_hash[:8]}... "
-                    f"(step={self._global_step}, loss={loss:.6f})"
+                    f"(step={self._global_step}, loss={loss:.6f})",
+                    level="info",
                 )
 
             # Handle both sync and async contexts
@@ -737,18 +823,22 @@ class GbmCVNNPricer:
                 # Check if we're already in an event loop
                 asyncio.get_running_loop()
                 # We're in an event loop - cannot use asyncio.run(), skip commit
-                _logger.warning(
-                    f"Skipping blockchain commit at step {self._global_step}: "
-                    "Cannot commit from async context (event loop already running). "
-                    "Call commit_snapshot() manually after training completes."
+                self._log_sync_message(
+                    (
+                        f"Skipping blockchain commit at step {self._global_step}: "
+                        "Cannot commit from async context (event loop already running). "
+                        "Call AsyncBlockchainModelStore.commit() manually after training completes."
+                    ),
+                    level="warning",
                 )
             except RuntimeError:
                 # No event loop running - safe to use asyncio.run()
                 asyncio.run(_do_commit())
 
         except (CommitError, NotFastForwardError, ConflictError, StorageError) as e:
-            _logger.error(
+            self._log_sync_message(
                 f"Failed to commit to blockchain at step {self._global_step}: {e}",
+                level="error",
                 exc_info=True,
             )
             # Don't raise - training should continue even if commit fails
@@ -795,24 +885,24 @@ class GbmCVNNPricer:
                 batch=batch,
             )
 
-            # Execute async commit
-            # NOTE: Function-level import required to break circular dependency:
-            # storage.__init__ -> inference.py -> gbm_trainer.py -> storage
-            from spectralmc.storage import commit_snapshot
-
-            version = await commit_snapshot(
-                blockchain_store,
-                snapshot,
-                commit_message,
+            checkpoint_bytes, content_hash = self._serialize_snapshot(snapshot)
+            version = await blockchain_store.commit(
+                checkpoint_data=checkpoint_bytes,
+                content_hash=content_hash,
+                message=commit_message,
             )
-            _logger.info(
+            await self._log_async_with_interpreter(
+                interpreter,
                 f"Committed version {version.counter}: {version.content_hash[:8]}... "
-                f"(step={self._global_step}, loss={loss:.6f})"
+                f"(step={self._global_step}, loss={loss:.6f})",
+                level="info",
             )
 
         except (CommitError, NotFastForwardError, ConflictError, StorageError) as e:
-            _logger.error(
+            await self._log_async_with_interpreter(
+                interpreter,
                 f"Failed to commit to blockchain at step {self._global_step}: {e}",
+                level="error",
                 exc_info=True,
             )
             # Don't raise - training should continue even if commit fails
@@ -921,7 +1011,10 @@ class GbmCVNNPricer:
                 and commit_interval is not None
                 and current_global_step % commit_interval == 0
             ):
-                _logger.info(f"Periodic commit at step {current_global_step}")
+                self._log_sync_message(
+                    f"Periodic commit at step {current_global_step}",
+                    level="info",
+                )
                 # Temporarily sync self._* for snapshot
                 self._global_step = current_global_step
                 self._sobol_skip = current_sobol_skip
@@ -952,7 +1045,10 @@ class GbmCVNNPricer:
 
         # ── Final blockchain commit ─────────────────────────────────── #
         if blockchain_store is not None and auto_commit:
-            _logger.info(f"Final commit after training at step {current_global_step}")
+            self._log_sync_message(
+                f"Final commit after training at step {current_global_step}",
+                level="info",
+            )
             self._commit_to_blockchain(
                 blockchain_store,
                 adam,
@@ -1007,11 +1103,6 @@ class GbmCVNNPricer:
             >>> result = await trainer.train_via_effects(config)
             >>> print(f"Final loss: {result.final_loss:.6f}")
         """
-        from spectralmc.effects import (
-            SpectralMCInterpreter,
-        )
-        from spectralmc.result import Failure, Success
-
         # Validate blockchain parameters
         if (auto_commit or commit_interval is not None) and blockchain_store is None:
             raise ValueError(
@@ -1096,13 +1187,18 @@ class GbmCVNNPricer:
                 and commit_interval is not None
                 and current_global_step % commit_interval == 0
             ):
-                _logger.info(f"Periodic commit at step {current_global_step}")
+                await self._log_async_with_interpreter(
+                    interpreter,
+                    f"Periodic commit at step {current_global_step}",
+                    level="info",
+                )
                 await self._async_commit_to_blockchain(
                     blockchain_store,
                     adam,
                     commit_message_template,
                     final_loss,
                     batch=current_global_step,
+                    interpreter=interpreter,
                 )
 
         # Update internal state from shared registry metadata
@@ -1134,13 +1230,18 @@ class GbmCVNNPricer:
         # Final blockchain commit
         if blockchain_store is not None and auto_commit:
             final_global_step = self._global_step + config.num_batches
-            _logger.info(f"Final commit after training at step {final_global_step}")
+            await self._log_async_with_interpreter(
+                interpreter,
+                f"Final commit after training at step {final_global_step}",
+                level="info",
+            )
             await self._async_commit_to_blockchain(
                 blockchain_store,
                 adam,
                 commit_message_template,
                 final_loss,
                 batch=config.num_batches,
+                interpreter=interpreter,
             )
 
         # Return immutable training result

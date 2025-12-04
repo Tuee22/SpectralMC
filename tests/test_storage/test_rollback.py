@@ -65,11 +65,11 @@ async def test_rollback_on_cas_failure(async_store: AsyncBlockchainModelStore) -
         result = await original_get_object(*args, **kwargs)
         if kwargs.get("Key") == "chain.json":
             # Return the old ETag to force conflict - we need to mutate the response
-            # This is safe because we control the mock, cast allows mutation
-            from typing import cast as typing_cast
-
-            mutable_result = typing_cast("dict[str, object]", result)
+            if not isinstance(result, dict):
+                raise TypeError("Expected dict response from get_object in test double")
+            mutable_result = dict(result)
             mutable_result["ETag"] = f'"{etag1}"'
+            return mutable_result
         return result
 
     # Patch get_object to return stale ETag

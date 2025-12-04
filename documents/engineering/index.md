@@ -76,7 +76,7 @@ Violating these guidelines can result in:
 
 ### Documentation
 
-6. **[Documentation Standards](documentation_standards.md)**
+6. **[Documentation Standards](../documentation_standards.md)**
    - Module documentation requirements
    - Google-style docstrings for functions and classes
    - Technical whitepaper organization
@@ -268,7 +268,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
 - ✅ `assert_never()` for exhaustiveness checks
 - ✅ Specific exception types when catching
 
-**Documentation** (see [Documentation Standards](documentation_standards.md)):
+**Documentation** (see [Documentation Standards](../documentation_standards.md)):
 - ✅ Google-style docstrings on public APIs
 
 **Code Quality** (see [Coding Standards](coding_standards.md)):
