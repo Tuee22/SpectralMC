@@ -16,7 +16,6 @@
 # For complete documentation, see documents/engineering/gpu_build.md
 
 FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
-ARG BUILD_FROM_SOURCE=false
 ARG DEBIAN_FRONTEND=noninteractive
 ENV PATH="/root/.local/bin:/usr/local/bin:$PATH"
 # Set UTF-8 locale for proper Unicode handling in CLI output
@@ -101,16 +100,16 @@ COPY docker/constraints-source.txt /tmp/constraints-source.txt
 # don't contaminate the binary path. Artefacts land in /opt and are referenced
 # later via PYTHONPATH instead of global site-packages.
 
-RUN /bin/bash -c "set -euo pipefail; if [ \"\$BUILD_FROM_SOURCE\" = \"true\" ]; then \
+RUN /bin/bash -c "set -euo pipefail; \
     echo '=== [0/3] Preparing source build toolchain and cache ==='; \
     apt-get update && apt-get install -y --no-install-recommends cmake ninja-build ccache libopenblas-dev liblapack-dev && rm -rf /var/lib/apt/lists/*; \
     ccache --max-size=20G && ccache --zero-stats; \
     mkdir -p /opt/pytorch-wheel /opt/pytorch /opt/cupy; \
     nvcc --version; python --version | grep '3.12'; \
-  else echo '=== Skipping source build; binary path will install via Poetry ==='; fi"
+  "
 
 # Build the sm_52-compatible torch wheel (PyTorch 2.4.1) and stage it under /opt/pytorch-wheel
-RUN /bin/bash -c "set -euo pipefail; if [ \"\$BUILD_FROM_SOURCE\" = \"true\" ]; then \
+RUN /bin/bash -c "set -euo pipefail; \
     echo '=== [1/3] Building PyTorch 2.4.1 (sm_52) to /opt ==='; \
     export TORCH_CUDA_ARCH_LIST='5.2' USE_CUDA=1 USE_CUDNN=1 USE_NCCL=0 MAX_JOBS=4 CUDA_HOME=/usr/local/cuda-11.8; \
     export LD_LIBRARY_PATH=/usr/local/cuda-11.8/lib64:\$LD_LIBRARY_PATH BLAS=OpenBLAS USE_LAPACK=1; \
@@ -119,7 +118,7 @@ RUN /bin/bash -c "set -euo pipefail; if [ \"\$BUILD_FROM_SOURCE\" = \"true\" ]; 
     python setup.py bdist_wheel 2>&1 | tee /tmp/pytorch-build.log; \
     cp dist/*.whl /opt/pytorch-wheel/; \
     rm -rf /tmp/pytorch; \
-  else echo '=== Skipping source build; binary path will install via Poetry ==='; fi"
+  "
 
 # ============================================================================
 # LAYER 6: Copy Application Source (shared for both build modes)
@@ -139,7 +138,7 @@ RUN echo "=== Installing SpectralMC via Poetry (incl. dev tools for check-code) 
     poetry config --list && \
     poetry install -vvv --no-interaction --with dev
 
-RUN /bin/bash -c "set -euo pipefail; if [ \"\$BUILD_FROM_SOURCE\" = \"true\" ]; then \
+RUN /bin/bash -c "set -euo pipefail; \
     echo '=== [2/3] Swapping Poetry torch/cupy for source-built artefacts ==='; \
     python -m pip uninstall -y torch cupy-cuda11x fastrlock || true; \
     PIP_CONSTRAINT= python -m pip install --no-deps --no-warn-script-location --target /opt/pytorch /opt/pytorch-wheel/*.whl; \
@@ -147,9 +146,7 @@ RUN /bin/bash -c "set -euo pipefail; if [ \"\$BUILD_FROM_SOURCE\" = \"true\" ]; 
     PIP_CONSTRAINT= python -m pip install --no-deps --no-warn-script-location --target /opt/cupy 'fastrlock>=0.8,<1.0'; \
     python -c \"import site; from pathlib import Path; pth = Path(site.getsitepackages()[0]) / 'spectralmc-opt.pth'; pth.write_text('/opt/pytorch\\n/opt/cupy\\n'); print(f'✓ Wrote {pth} to expose /opt artefacts')\"; \
     PYTHONPATH=/opt/pytorch:/opt/cupy:${PYTHONPATH:-} python -c \"import torch, cupy; print(f'✓ Staged torch {torch.__version__} (cuda={torch.version.cuda}) from /opt/pytorch'); print(f'✓ Staged cupy {cupy.__version__} from /opt/cupy')\" || { cat /tmp/pytorch-build.log; exit 1; }; \
-  else \
-    echo '=== Skipping source artefact swap; binary path will install via Poetry ==='; \
-  fi"
+  "
 
 # ============================================================================
 # LAYER 8: Enforce CLAUDE.md Testing Policies
