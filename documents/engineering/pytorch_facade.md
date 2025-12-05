@@ -1,10 +1,21 @@
+# File: documents/engineering/pytorch_facade.md
 # PyTorch Facade Pattern
+
+**Status**: Authoritative source  
+**Supersedes**: Prior PyTorch facade notes  
+**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+
+> **Purpose**: Define the required PyTorch facade usage for reproducible SpectralMC training.
+
+## Cross-References
+- [Coding Standards](coding_standards.md)
+- [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)
+- [Reproducibility Proofs](reproducibility_proofs.md)
+- [Effect Interpreter](effect_interpreter.md)
 
 ## Overview
 
 SpectralMC uses a custom PyTorch facade (`spectralmc.models.torch`) to ensure guaranteed reproducibility of training across different environments. This facade **must** be imported before any direct PyTorch imports.
-
-**Related Standards**: [Coding Standards](coding_standards.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [Reproducibility Proofs](reproducibility_proofs.md), [Effect Interpreter](effect_interpreter.md)
 
 ---
 
@@ -36,6 +47,7 @@ The facade fixes all of these issues **before** PyTorch initializes.
 **CRITICAL**: Always import the facade before any direct PyTorch imports:
 
 ```python
+# File: documents/engineering/pytorch_facade.md
 # ✅ CORRECT - Facade first
 import spectralmc.models.torch as sm_torch
 import torch  # This will be the configured version
@@ -46,6 +58,7 @@ model = nn.Linear(10, 5)
 ```
 
 ```python
+# File: documents/engineering/pytorch_facade.md
 # ❌ INCORRECT - Direct import first
 import torch  # This will raise ImportError
 import spectralmc.models.torch as sm_torch
@@ -71,6 +84,7 @@ Import spectralmc.models.torch before importing torch directly.
 The facade automatically configures PyTorch for reproducibility:
 
 ```python
+# File: documents/engineering/pytorch_facade.md
 # Automatically set by the facade:
 torch.use_deterministic_algorithms(True, warn_only=False)
 torch.backends.cudnn.deterministic = True
@@ -106,6 +120,7 @@ Deterministic mode is **slower** than default PyTorch:
 The facade enforces thread-safety requirements:
 
 ```python
+# File: documents/engineering/pytorch_facade.md
 # ✅ CORRECT - Import in main thread before spawning workers
 import spectralmc.models.torch as sm_torch
 
@@ -118,6 +133,7 @@ workers = [spawn_worker(worker_function) for _ in range(4)]
 ```
 
 ```python
+# File: documents/engineering/pytorch_facade.md
 # ❌ INCORRECT - Importing facade in worker thread
 def worker_function():
     import spectralmc.models.torch as sm_torch  # RuntimeError!
@@ -144,6 +160,7 @@ The facade provides type-safe helpers for device and dtype management:
 ### Setting Default Dtype
 
 ```python
+# File: documents/engineering/pytorch_facade.md
 import spectralmc.models.torch as sm_torch
 import torch
 
@@ -162,6 +179,7 @@ torch.set_default_dtype(torch.float64)
 ### Setting Default Device
 
 ```python
+# File: documents/engineering/pytorch_facade.md
 # ✅ CORRECT - Type-safe device helper
 with sm_torch.default_device(sm_torch.Device.cuda.to_torch()):
     model = ComplexLinear(128, 64)  # Parameters created on CUDA
@@ -175,6 +193,7 @@ torch.set_default_device("cuda")  # Accepts any string, error-prone
 The facade provides a type-safe `Device` enum:
 
 ```python
+# File: documents/engineering/pytorch_facade.md
 from spectralmc.models.torch import Device
 
 # Type-safe device specification
@@ -192,6 +211,7 @@ model = model.to(device=gpu_dev)
 Typical usage pattern in SpectralMC:
 
 ```python
+# File: documents/engineering/pytorch_facade.md
 """Training script with deterministic execution."""
 
 # STEP 1: Import facade FIRST
@@ -248,6 +268,7 @@ if __name__ == "__main__":
 Tests must also import the facade first:
 
 ```python
+# File: documents/engineering/pytorch_facade.md
 """Test module for ComplexLinear."""
 
 # Import facade before pytest
@@ -280,6 +301,7 @@ def test_complex_linear_forward():
 The facade is implemented in `src/spectralmc/models/torch.py`:
 
 ```python
+# File: documents/engineering/pytorch_facade.md
 """PyTorch facade for deterministic execution."""
 
 import os
@@ -329,6 +351,7 @@ torch = torch
 **A: Import facade at the top of the library module.** This ensures the facade is initialized when the library is first imported.
 
 ```python
+# File: documents/engineering/pytorch_facade.md
 # In src/spectralmc/my_module.py
 import spectralmc.models.torch as sm_torch  # Facade first
 import torch  # Now safe
@@ -354,6 +377,7 @@ SpectralMC represents complex numbers as **pairs of real tensors** (real, imag).
 ### Base Pattern
 
 ```python
+# File: documents/engineering/pytorch_facade.md
 class ComplexLayer(nn.Module):
     """Base pattern for complex-valued layers."""
 
@@ -383,6 +407,7 @@ class ComplexLayer(nn.Module):
 ### Example: ComplexLinear
 
 ```python
+# File: documents/engineering/pytorch_facade.md
 class ComplexLinear(nn.Module):
     """Complex-valued linear layer: W*z + b where W, z, b are complex."""
 
@@ -432,6 +457,7 @@ class ComplexLinear(nn.Module):
 Define interfaces using `Protocol` for type-safe duck typing:
 
 ```python
+# File: documents/engineering/pytorch_facade.md
 from typing import Protocol, runtime_checkable, Iterable
 import torch.nn as nn
 
@@ -453,6 +479,7 @@ class ComplexValuedModel(Protocol):
 **Usage**:
 
 ```python
+# File: documents/engineering/pytorch_facade.md
 def train_complex_model(
     model: ComplexValuedModel,
     real_data: torch.Tensor,

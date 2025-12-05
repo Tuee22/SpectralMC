@@ -1,4 +1,17 @@
+# File: documents/engineering/reproducibility_proofs.md
 # Provable Reproducibility Through Pure Code
+
+**Status**: Authoritative source  
+**Supersedes**: Prior reproducibility proof drafts  
+**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+
+> **Purpose**: Provide proofs and rationale for SpectralMC reproducibility guarantees.
+
+## Cross-References
+- [Purity Doctrine](purity_doctrine.md)
+- [Effect Interpreter](effect_interpreter.md)
+- [Immutability Doctrine](immutability_doctrine.md)
+- [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)
 
 ## Overview
 
@@ -86,6 +99,7 @@ flowchart TB
 Import order violations are caught at **import time**:
 
 ```python
+# File: documents/engineering/reproducibility_proofs.md
 # This raises ImportError immediately
 import torch  # WRONG: torch before facade
 import spectralmc.models.torch  # Too late - ImportError!
@@ -103,6 +117,7 @@ The error message explicitly states:
 Traditional code uses RNG implicitly:
 
 ```python
+# File: documents/engineering/reproducibility_proofs.md
 # BAD: Hidden global state - where does randomness come from?
 x = torch.randn(10)
 
@@ -119,6 +134,7 @@ RNG state is captured and restored explicitly as part of the training state. Fro
 
 **Capture** (lines 385-390):
 ```python
+# File: documents/engineering/reproducibility_proofs.md
 torch_cpu_rng = torch.get_rng_state().cpu().numpy().tobytes()
 torch_cuda_rng: list[bytes] | None = (
     [state.cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()]
@@ -129,6 +145,7 @@ torch_cuda_rng: list[bytes] | None = (
 
 **Restore** (lines 350-361):
 ```python
+# File: documents/engineering/reproducibility_proofs.md
 if cfg.torch_cpu_rng_state is not None:
     torch.set_rng_state(
         torch.from_numpy(np.frombuffer(cfg.torch_cpu_rng_state, dtype=np.uint8).copy())
@@ -143,35 +160,20 @@ if cfg.torch_cuda_rng_states is not None and torch.cuda.is_available():
 ### RNG State Threading Diagram
 
 ```mermaid
-sequenceDiagram
-    participant User
-    participant Pricer as GbmCVNNPricer
-    participant RNG as RNG State
-    participant Sobol as SobolSampler
-    participant Store as BlockchainStore
+flowchart TB
+    Start[Create pricer config with RNG state]
+    RestoreCPU[torch.set_rng_state(cpu_state)]
+    RestoreCUDA[torch.cuda.set_rng_state_all(cuda_states)]
+    InitSobol[Create Sobol sampler with seed/skip]
+    TrainingLoop{{Training batches}}
+    SampleSobol[Sample Sobol batch]
+    StepModel[_torch_step() executes]
+    Snapshot[Capture snapshot + RNG state]
+    Commit[commit_snapshot to blockchain store]
 
-    User->>Pricer: Create(config with rng_state)
-    Pricer->>RNG: torch.set_rng_state(cpu_state)
-    Pricer->>RNG: torch.cuda.set_rng_state_all(cuda_states)
-    Pricer->>Sobol: Create(seed, skip=sobol_skip)
-
-    loop Training Steps
-        Sobol->>Pricer: sample(batch_size)
-        Note over Sobol: skip counter += batch_size
-        RNG->>Pricer: Random values via torch
-        Note over RNG: State mutates deterministically
-        Pricer->>Pricer: _torch_step()
-    end
-
-    User->>Pricer: snapshot()
-    Pricer->>RNG: torch.get_rng_state().tobytes()
-    Pricer->>RNG: cuda.get_rng_state_all().tobytes()
-    Pricer->>Pricer: Capture sobol_skip, global_step
-    Pricer->>User: GbmCVNNPricerConfig (frozen)
-
-    User->>Store: commit_snapshot(snapshot)
-    Store->>Store: Serialize via ProtoBuf
-    Store->>Store: SHA256 content hash
+    Start --> RestoreCPU --> RestoreCUDA --> InitSobol --> TrainingLoop
+    TrainingLoop --> SampleSobol --> StepModel --> TrainingLoop
+    TrainingLoop --> Snapshot --> Commit
 ```
 
 ### Sobol Sampler: Deterministic Quasi-Random
@@ -179,6 +181,7 @@ sequenceDiagram
 The Sobol sampler ([`sobol_sampler.py`](../../src/spectralmc/sobol_sampler.py)) provides deterministic quasi-random sampling:
 
 ```python
+# File: documents/engineering/reproducibility_proofs.md
 class SobolConfig(BaseModel):
     seed: Annotated[int, Field(ge=0)]  # Deterministic seed
     skip: Annotated[int, Field(ge=0)] = 0  # Resume position
@@ -188,6 +191,7 @@ class SobolConfig(BaseModel):
 The `skip` parameter enables exact resumption from any point in the sequence:
 
 ```python
+# File: documents/engineering/reproducibility_proofs.md
 # In SobolSampler.__init__ (line 154-155):
 if config.skip:
     self._sampler.fast_forward(config.skip)
@@ -226,36 +230,32 @@ Let:
 ### Checkpoint/Restore Equivalence Diagram
 
 ```mermaid
-flowchart LR
-    subgraph Continuous["Continuous Training Run"]
-        S0_C["S_0"]
-        S1_C["S_1"]
-        S2_C["S_2"]
-        Sn_C["S_n"]
+flowchart TB
+    S0_C["S_0 continuous"]
+    S1_C["S_1 continuous"]
+    S2_C["S_2 continuous"]
+    Sn_C["S_n continuous"]
 
-        S0_C -->|"step()"| S1_C
-        S1_C -->|"step()"| S2_C
-        S2_C -->|"..."| Sn_C
-    end
+    S0_R["S_0 resume"]
+    S1_R["S_1 snapshot"]
+    CP["checkpoint.pb"]
+    S1_Restore["S_1 restored"]
+    S2_R["S_2 resume"]
+    Sn_R["S_n resume"]
 
-    subgraph Resumed["Resumed Training Run"]
-        S0_R["S_0"]
-        S1_R["S_1"]
-        CP["checkpoint.pb"]
-        S1_Restore["S_1 (restored)"]
-        S2_R["S_2"]
-        Sn_R["S_n"]
+    S0_C -->|step| S1_C
+    S1_C -->|step| S2_C
+    S2_C -->|step sequence| Sn_C
 
-        S0_R -->|"step()"| S1_R
-        S1_R -->|"snapshot()"| CP
-        CP -->|"restore()"| S1_Restore
-        S1_Restore -->|"step()"| S2_R
-        S2_R -->|"..."| Sn_R
-    end
+    S0_R -->|step| S1_R
+    S1_R -->|snapshot| CP
+    CP -->|restore| S1_Restore
+    S1_Restore -->|step| S2_R
+    S2_R -->|step sequence| Sn_R
 
-    S1_C -.->|"S_1 == S_1"| S1_R
-    S2_C -.->|"S_2 == S_2"| S2_R
-    Sn_C -.->|"S_n == S_n"| Sn_R
+    S1_C -->|state match| S1_R
+    S2_C -->|state match| S2_R
+    Sn_C -->|state match| Sn_R
 ```
 
 ### Theorem: Checkpoint/Resume Equivalence
@@ -299,6 +299,7 @@ Since these are **ALL** inputs to `step()`, checkpoint/resume equivalence is gua
 The SHA256 hash ensures checkpoint integrity:
 
 ```python
+# File: documents/engineering/reproducibility_proofs.md
 content_hash = compute_sha256(checkpoint_bytes)
 ```
 
@@ -316,6 +317,7 @@ Properties:
 All configuration objects are frozen via Pydantic:
 
 ```python
+# File: documents/engineering/reproducibility_proofs.md
 # From gbm_trainer.py:165
 model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra="forbid")
 ```
@@ -323,6 +325,7 @@ model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra="forb
 Attempting mutation fails at both **compile time** (mypy) and **runtime**:
 
 ```python
+# File: documents/engineering/reproducibility_proofs.md
 config = GbmCVNNPricerConfig(...)
 config.global_step = 100  # mypy error: Cannot assign to attribute
 
@@ -333,28 +336,31 @@ config.global_step = 100  # mypy error: Cannot assign to attribute
 
 ```mermaid
 flowchart TB
-    subgraph Compile["Compile-Time (mypy --strict)"]
-        FrozenCheck["Frozen Dataclass<br/>Mutation -> Error"]
-        ResultCheck["Result Type<br/>Ignored -> Error"]
-        AnyCheck["Any Type<br/>Used -> Error"]
-    end
+    CompileChecks[Compile-time checks<br/>(mypy --strict)]
+    ImportGuards[Import-time guards]
+    RuntimeGuards[Runtime guarantees]
+    FrozenCheck[Frozen dataclass errors on mutation]
+    ResultCheck[Result types require handling]
+    AnyCheck[No Any / cast / ignore]
+    TorchOrder[Torch import order guard]
+    ThreadCheck[Main thread required]
+    ImmutableConfig[GbmCVNNPricerConfig frozen]
+    PatternMatch[Pattern matching with assert_never]
+    EffectSequence[Effect sequencing via facade]
 
-    subgraph Import["Import-Time"]
-        TorchOrder["Torch Import Order<br/>Wrong -> ImportError"]
-        ThreadCheck["Thread Safety<br/>Violated -> ImportError"]
-    end
-
-    subgraph Runtime["Runtime Guarantees"]
-        ImmutableConfig["GbmCVNNPricerConfig<br/>(frozen=True)"]
-        PatternMatch["Pattern Matching<br/>(assert_never)"]
-        EffectSequence["Effect Sequencing<br/>(Facade determinism)"]
-    end
-
-    FrozenCheck --> ImmutableConfig
-    ResultCheck --> PatternMatch
-    AnyCheck --> EffectSequence
-    TorchOrder --> EffectSequence
-    ThreadCheck --> EffectSequence
+    CompileChecks -->|enforces| FrozenCheck
+    CompileChecks -->|enforces| ResultCheck
+    CompileChecks -->|enforces| AnyCheck
+    ImportGuards -->|enforces| TorchOrder
+    ImportGuards -->|enforces| ThreadCheck
+    FrozenCheck -->|supports| ImmutableConfig
+    ResultCheck -->|supports| PatternMatch
+    AnyCheck -->|supports| EffectSequence
+    TorchOrder -->|supports| EffectSequence
+    ThreadCheck -->|supports| EffectSequence
+    ImmutableConfig -->|feeds| RuntimeGuards
+    PatternMatch -->|feeds| RuntimeGuards
+    EffectSequence -->|feeds| RuntimeGuards
 ```
 
 ### Result Types Prevent Silent Failures
@@ -362,6 +368,7 @@ flowchart TB
 From [`result.py`](../../src/spectralmc/result.py):
 
 ```python
+# File: documents/engineering/reproducibility_proofs.md
 @dataclass(frozen=True)
 class Success(Generic[T]):
     value: T
@@ -376,6 +383,7 @@ Result = Success[T] | Failure[E]
 Pattern matching ensures exhaustive handling:
 
 ```python
+# File: documents/engineering/reproducibility_proofs.md
 result: Result[Model, LoadError] = load_model(version)
 
 match result:
@@ -415,48 +423,24 @@ SpectralMC's mypy configuration catches:
 
 ```mermaid
 flowchart TB
-    subgraph TypeLayer["Type System Layer"]
-        Frozen["Frozen Configs<br/>(Pydantic frozen=True)"]
-        ResultType["Result Types<br/>(Success | Failure)"]
-        NoAny["mypy --strict<br/>(No Any, cast, ignore)"]
-    end
+    TypeLayer[Type system: frozen configs, result types, no Any]
+    EffectLayer[Effect interpreter: facade + deterministic CUDA + thread guard]
+    StateLayer[Explicit state: RNG bytes, Sobol skip, model state, optimizer state]
+    StorageLayer[Storage: protobuf checkpoints, SHA256, blockchain history]
+    G1[G1: pure functions guarantee]
+    G2[G2: effect sequencing guarantee]
+    G3[G3: state threading guarantee]
+    G4[G4: checkpoint correctness guarantee]
+    G5[G5: integrity verification guarantee]
 
-    subgraph EffectLayer["Effect Interpreter Layer"]
-        Facade["PyTorch Facade<br/>(import-time setup)"]
-        Determinism["Deterministic CUDA<br/>(cudnn, tf32, cublas)"]
-        ThreadSafe["Thread Safety<br/>(main thread check)"]
-    end
-
-    subgraph StateLayer["Explicit State Layer"]
-        RNGCapture["RNG State<br/>(CPU + CUDA bytes)"]
-        SobolSkip["Sobol Skip<br/>(int counter)"]
-        ModelState["Model State<br/>(state_dict)"]
-        OptimState["Optimizer State<br/>(Adam momentum)"]
-    end
-
-    subgraph StorageLayer["Storage Layer"]
-        Protobuf["Protocol Buffers<br/>(ModelCheckpointProto)"]
-        SHA256["Content Addressing<br/>(SHA256 hash)"]
-        Blockchain["Blockchain Versioning<br/>(immutable history)"]
-    end
-
-    TypeLayer --> EffectLayer
-    EffectLayer --> StateLayer
-    StateLayer --> StorageLayer
-
-    subgraph Guarantees["5 Reproducibility Guarantees"]
-        G1["G1: Pure functions<br/>(same input -> same output)"]
-        G2["G2: Effect sequencing<br/>(deterministic CUDA)"]
-        G3["G3: State threading<br/>(RNG captured)"]
-        G4["G4: Checkpoint correctness<br/>(resume = continuous)"]
-        G5["G5: Integrity verification<br/>(SHA256 hash)"]
-    end
-
-    NoAny --> G1
-    Facade --> G2
-    RNGCapture --> G3
-    SobolSkip --> G4
-    SHA256 --> G5
+    TypeLayer -->|enables| EffectLayer
+    EffectLayer -->|propagates| StateLayer
+    StateLayer -->|persists| StorageLayer
+    TypeLayer -->|supports| G1
+    EffectLayer -->|supports| G2
+    StateLayer -->|supports| G3
+    StateLayer -->|supports| G4
+    StorageLayer -->|supports| G5
 ```
 
 ### The Five Guarantees

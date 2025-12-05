@@ -1,4 +1,17 @@
+# File: documents/engineering/immutability_doctrine.md
 # Immutability Doctrine
+
+**Status**: Authoritative source  
+**Supersedes**: Prior immutability doctrine drafts  
+**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+
+> **Purpose**: Define SpectralMC’s immutability rules for models, configuration, and effects.
+
+## Cross-References
+- [Purity Doctrine](purity_doctrine.md)
+- [Coding Standards](coding_standards.md)
+- [Effect Interpreter](effect_interpreter.md)
+- [Reproducibility Proofs](reproducibility_proofs.md)
 
 ## Core Principle
 
@@ -18,6 +31,7 @@ Immutability is a contract, not a suggestion. Bypassing immutability protections
 
 **Anti-pattern**:
 ```python
+# File: documents/engineering/immutability_doctrine.md
 from dataclasses import dataclass
 
 @dataclass(frozen=True)
@@ -38,6 +52,7 @@ object.__setattr__(version, "counter", 999)  # ❌ FORBIDDEN
 
 **Correct approach**:
 ```python
+# File: documents/engineering/immutability_doctrine.md
 # Create new instance instead
 new_version = ModelVersion(counter=999, hash="abc")
 ```
@@ -46,6 +61,7 @@ new_version = ModelVersion(counter=999, hash="abc")
 
 **Anti-pattern**:
 ```python
+# File: documents/engineering/immutability_doctrine.md
 version.__dict__["counter"] = 999  # ❌ FORBIDDEN
 ```
 
@@ -55,6 +71,7 @@ version.__dict__["counter"] = 999  # ❌ FORBIDDEN
 
 **Anti-pattern**:
 ```python
+# File: documents/engineering/immutability_doctrine.md
 vars(version)["counter"] = 999  # ❌ FORBIDDEN
 ```
 
@@ -64,6 +81,7 @@ vars(version)["counter"] = 999  # ❌ FORBIDDEN
 
 **Anti-pattern**:
 ```python
+# File: documents/engineering/immutability_doctrine.md
 # Attempting to modify tuple internals (not possible in Python, but illustrates intent)
 t = (1, 2, 3)
 # Any attempt to bypass tuple immutability is forbidden
@@ -73,6 +91,7 @@ t = (1, 2, 3)
 
 **Anti-pattern**:
 ```python
+# File: documents/engineering/immutability_doctrine.md
 from typing import FrozenSet
 
 internal_list = [1, 2, 3]
@@ -87,6 +106,7 @@ internal_list.append(4)  # ❌ FORBIDDEN - violates immutability assumption
 ### ✅ 1. Creating New Instances
 
 ```python
+# File: documents/engineering/immutability_doctrine.md
 @dataclass(frozen=True)
 class Config:
     timeout: int
@@ -99,6 +119,7 @@ new_config = Config(timeout=60, retries=3)  # ✅ Correct
 ### ✅ 2. Using `dataclasses.replace()`
 
 ```python
+# File: documents/engineering/immutability_doctrine.md
 from dataclasses import replace
 
 old_config = Config(timeout=30, retries=3)
@@ -108,6 +129,7 @@ new_config = replace(old_config, timeout=60)  # ✅ Correct
 ### ✅ 3. Functional Updates
 
 ```python
+# File: documents/engineering/immutability_doctrine.md
 def update_timeout(config: Config, new_timeout: int) -> Config:
     """Return new Config with updated timeout."""
     return Config(timeout=new_timeout, retries=config.retries)
@@ -123,6 +145,7 @@ def update_timeout(config: Config, new_timeout: int) -> Config:
 
 **Audit commands**:
 ```bash
+# File: documents/engineering/immutability_doctrine.md
 # Search for forbidden patterns
 grep -rn "object.__setattr__" src/ tests/ examples/
 grep -rn "__dict__\[" src/ tests/ examples/ | grep -v "# OK:"
@@ -135,6 +158,7 @@ grep -rn "vars(" src/ tests/ examples/ | grep "="
 
 **Anti-pattern** (FORBIDDEN):
 ```python
+# File: documents/engineering/immutability_doctrine.md
 def test_immutability():
     with pytest.raises(Exception):
         object.__setattr__(frozen_obj, "field", new_value)  # ❌ WRONG
@@ -142,6 +166,7 @@ def test_immutability():
 
 **Correct pattern**:
 ```python
+# File: documents/engineering/immutability_doctrine.md
 from dataclasses import FrozenInstanceError
 
 def test_immutability():
@@ -166,6 +191,7 @@ def test_immutability():
 #### 1. Blockchain Integrity (`ModelVersion`)
 
 ```python
+# File: documents/engineering/immutability_doctrine.md
 @dataclass(frozen=True)
 class ModelVersion:
     counter: int
@@ -182,6 +208,7 @@ class ModelVersion:
 #### 2. Configuration Objects
 
 ```python
+# File: documents/engineering/immutability_doctrine.md
 @dataclass(frozen=True)
 class TrainingConfig:
     learning_rate: float
@@ -196,6 +223,7 @@ class TrainingConfig:
 #### 3. Caching
 
 ```python
+# File: documents/engineering/immutability_doctrine.md
 @dataclass(frozen=True)
 class CacheKey:
     model_id: str
@@ -232,11 +260,13 @@ Replace bypasses with functional update patterns:
 
 **Before**:
 ```python
+# File: documents/engineering/immutability_doctrine.md
 object.__setattr__(frozen_obj, "field", new_value)
 ```
 
 **After**:
 ```python
+# File: documents/engineering/immutability_doctrine.md
 from dataclasses import replace
 frozen_obj = replace(frozen_obj, field=new_value)
 ```
@@ -247,12 +277,14 @@ Use normal assignment to trigger proper errors:
 
 **Before**:
 ```python
+# File: documents/engineering/immutability_doctrine.md
 with pytest.raises(Exception):
     object.__setattr__(frozen_obj, "field", new_value)
 ```
 
 **After**:
 ```python
+# File: documents/engineering/immutability_doctrine.md
 from dataclasses import FrozenInstanceError
 
 with pytest.raises(FrozenInstanceError):
@@ -276,6 +308,7 @@ Before approving any PR:
 
 **Grep audit** (run periodically):
 ```bash
+# File: documents/engineering/immutability_doctrine.md
 # Returns exit code 1 if any violations found
 if grep -r "object.__setattr__" src/; then
   echo "ERROR: Immutability bypass detected in src/"

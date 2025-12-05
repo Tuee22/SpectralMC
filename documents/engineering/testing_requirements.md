@@ -1,10 +1,22 @@
+# File: documents/engineering/testing_requirements.md
 # Testing Requirements
+
+**Status**: Authoritative source  
+**Supersedes**: Prior testing requirements drafts  
+**Referenced by**: documents/documentation_standards.md; documents/testing_architecture.md
+
+> **Purpose**: SSoT for SpectralMC testing expectations, determinism, and GPU constraints.
+
+## Cross-References
+- [Purity Doctrine](purity_doctrine.md)
+- [Coding Standards](coding_standards.md)
+- [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)
+- [PyTorch Facade](pytorch_facade.md)
+- [Documentation Standards](../documentation_standards.md)
 
 ## Overview
 
 All tests in SpectralMC must be fully typed, deterministic, and pass mypy strict mode. Tests are executed via `poetry run test-all`. All tests require GPU - silent CPU fallbacks are strictly forbidden.
-
-**Related Standards**: [Purity Doctrine](purity_doctrine.md), [Coding Standards](coding_standards.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [PyTorch Facade](pytorch_facade.md)
 
 ### Test Code Purity Exception
 
@@ -25,6 +37,7 @@ Test code should still follow purity for the **code under test** - only test inf
 All tests must be **fully typed** and **mypy-strict-clean**:
 
 ```python
+# File: documents/engineering/testing_requirements.md
 """
 End-to-end tests for spectralmc.models.torch.
 
@@ -66,6 +79,7 @@ def test_complex_linear_forward() -> None:
 **CRITICAL**: Tests must be run via `poetry run test-all`, **never** via direct `pytest`:
 
 ```bash
+# File: documents/engineering/testing_requirements.md
 # ✅ CORRECT - Via Poetry script
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
 
@@ -83,12 +97,12 @@ docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/
 
 ## Timeout Policy
 
-- **Per-test guard**: All tests have a **60s** timeout enforced by an autouse fixture
-  (`tests/conftest.py`). The limit includes setup and teardown to prevent hangs in fixtures.
-- **Overrides**: Use `@pytest.mark.timeout(seconds=...)` only when a test is *expected* to exceed
-  60s; document the reason inline and keep values as small as feasible.
-- **Suite execution**: Do **not** attach short shell-level timeouts to `poetry run test-all` during
-  development; the per-test guard handles hangs while preserving full logs.
+- **Per-test guard**: 60s autouse timeout in `tests/conftest.py`; applies to setup/teardown,
+  async tests, storage CLI calls, and GPU kernels across unit/integration/e2e suites.
+- **Overrides**: Use `@pytest.mark.timeout(seconds=...)` only when a test is expected to exceed
+  60s; keep values minimal, positive, and justified inline.
+- **Suite execution/logs**: Do not wrap `poetry run test-all` with shell-level timeouts; rely on
+  the per-test guard and preserve full logs (already enforced by `test-all` redirection).
 
 ---
 
@@ -97,6 +111,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/
 **CRITICAL**: Run code quality checks via `poetry run check-code`:
 
 ```bash
+# File: documents/engineering/testing_requirements.md
 # ✅ CORRECT - Via Poetry script (runs Ruff → Black → MyPy)
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-code
 
@@ -126,6 +141,7 @@ Beyond mypy's `strict` mode, SpectralMC enforces additional type safety via AST 
 
 Run AST checker:
 ```bash
+# File: documents/engineering/testing_requirements.md
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-types
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-types --fix  # Auto-fix
 ```
@@ -143,6 +159,7 @@ SpectralMC is a GPU-accelerated library. Silent fallbacks from GPU to CPU are st
 Use module-level assertions to fail immediately without GPU:
 
 ```python
+# File: documents/engineering/testing_requirements.md
 import torch
 
 # Module-level GPU requirement - test file fails immediately without GPU
@@ -159,6 +176,7 @@ def test_gpu_operation() -> None:
 ### Forbidden Patterns
 
 ```python
+# File: documents/engineering/testing_requirements.md
 # ❌ FORBIDDEN - Silent CPU fallback
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -180,6 +198,7 @@ def device() -> torch.device:
 ### Correct Patterns
 
 ```python
+# File: documents/engineering/testing_requirements.md
 # ✅ CORRECT - Module-level GPU assertion
 assert torch.cuda.is_available(), "CUDA required"
 GPU_DEV: torch.device = torch.device("cuda:0")
@@ -203,6 +222,7 @@ def gpu_device() -> torch.device:
 Ensure all tests are **deterministic** by setting random seeds:
 
 ```python
+# File: documents/engineering/testing_requirements.md
 import torch
 
 def test_deterministic_generation() -> None:
@@ -224,6 +244,7 @@ def test_deterministic_generation() -> None:
 ### Floating-Point Comparisons
 
 ```python
+# File: documents/engineering/testing_requirements.md
 import torch
 
 def test_numerical_computation() -> None:
@@ -247,6 +268,7 @@ def test_numerical_computation() -> None:
 Use pytest fixtures for common test setup. **Never use conditional device fallback in fixtures.**
 
 ```python
+# File: documents/engineering/testing_requirements.md
 import pytest
 import torch
 
@@ -292,6 +314,7 @@ Tests should cover:
 ### Example: Comprehensive Test
 
 ```python
+# File: documents/engineering/testing_requirements.md
 import pytest
 import torch
 from pydantic import ValidationError
@@ -327,6 +350,7 @@ def test_bound_spec_deterministic() -> None:
 For async code, use `pytest-asyncio`:
 
 ```python
+# File: documents/engineering/testing_requirements.md
 import pytest
 
 @pytest.mark.asyncio
@@ -339,6 +363,7 @@ async def test_async_function() -> None:
 Configuration in `pyproject.toml`:
 
 ```toml
+# File: documents/engineering/testing_requirements.md
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = ["asyncio: async test"]
@@ -390,6 +415,7 @@ tests/
 ### Pitfall 1: Implicit Device Fallback
 
 ```python
+# File: documents/engineering/testing_requirements.md
 # ❌ WRONG - Silent CPU fallback
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -410,6 +436,7 @@ def test_gpu_operation() -> None:
 ### Pitfall 2: Missing Type Hints
 
 ```python
+# File: documents/engineering/testing_requirements.md
 # ❌ WRONG - Missing type hints
 def test_something():
     result = compute()
@@ -425,6 +452,7 @@ def test_something() -> None:
 ### Pitfall 3: Non-Deterministic Tests
 
 ```python
+# File: documents/engineering/testing_requirements.md
 # ❌ WRONG - No seed
 def test_random_generation() -> None:
     tensor = torch.randn(10)  # Different every time
@@ -462,6 +490,7 @@ The Bash tool truncates output at 30,000 characters. Test suites may produce lar
 **ALWAYS** redirect test output to files in /tmp/, then read the complete output:
 
 ```bash
+# File: documents/engineering/testing_requirements.md
 # Step 1: Run tests with output redirection
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all > /tmp/test-output.txt 2>&1
 
@@ -474,6 +503,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all 
 ### For Specific Test Categories
 
 ```bash
+# File: documents/engineering/testing_requirements.md
 # Run specific test file
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_gbm.py > /tmp/test-gbm.txt 2>&1
 
@@ -647,6 +677,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc 
 
 **Always redirect to file for analysis**:
 ```bash
+# File: documents/engineering/testing_requirements.md
 pytest tests/test_gbm.py -v > test_output.txt 2>&1
 # Then read complete output
 ```
@@ -685,6 +716,7 @@ All storage features have comprehensive test coverage:
 
 Run storage tests:
 ```bash
+# File: documents/engineering/testing_requirements.md
 docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/test_storage/ -v
 docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/test_integrity/ -v
 ```

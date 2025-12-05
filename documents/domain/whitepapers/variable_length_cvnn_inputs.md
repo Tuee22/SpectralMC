@@ -1,4 +1,12 @@
+# File: documents/domain/whitepapers/variable_length_cvnn_inputs.md
 # Encoding Variable-Length Volatility Surfaces in Complex-Valued Neural Networks
+
+**Status**: Reference only  
+**Supersedes**: Prior volatility surface encoding drafts  
+**Referenced by**: documents/domain/index.md
+
+> **Purpose**: Summarize techniques for encoding variable-length volatility surfaces into CVNN architectures.
+> **📖 Authoritative Reference**: [../../documentation_standards.md](../../documentation_standards.md)
 
 Variable-length inputs of **(strike, maturity, implied volatility)** tuples pose a challenge for neural networks because the number of points can vary and the input is inherently **unordered**. In the context of asset pricing under a **risk-neutral measure**, these tuples represent an implied volatility surface — essentially a function of strike and maturity that encodes the risk-neutral distribution of the underlying asset’s future prices. This document surveys best practices for encoding such volatility surfaces into **complex-valued neural networks (CVNNs)**, ensuring the architecture can handle variable-length data while preserving the surface’s structure and arbitrage-free properties. We organize the discussion into theoretical techniques, applied architectures (especially from financial machine learning), and practical implementation notes.
 

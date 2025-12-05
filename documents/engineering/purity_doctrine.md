@@ -1,4 +1,17 @@
+# File: documents/engineering/purity_doctrine.md
 # Purity Doctrine
+
+**Status**: Authoritative source  
+**Supersedes**: Prior purity doctrine drafts  
+**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+
+> **Purpose**: Define SpectralMC purity expectations and separation of side effects.
+
+## Cross-References
+- [Effect Interpreter](effect_interpreter.md)
+- [Coding Standards](coding_standards.md)
+- [Reproducibility Proofs](reproducibility_proofs.md)
+- [Testing Requirements](testing_requirements.md)
 
 ## Core Principle
 
@@ -31,6 +44,7 @@ SpectralMC enforces strict purity standards for all non-test code. A **pure func
 
 **Anti-pattern**:
 ```python
+# File: documents/engineering/purity_doctrine.md
 def process_items(items: list[int]) -> list[int]:
     result = []
     for item in items:
@@ -45,6 +59,7 @@ def process_items(items: list[int]) -> list[int]:
 
 **Correct pattern** (comprehension):
 ```python
+# File: documents/engineering/purity_doctrine.md
 def process_items(items: list[int]) -> list[int]:
     return [item * 2 for item in items]
 ```
@@ -53,6 +68,7 @@ def process_items(items: list[int]) -> list[int]:
 
 **Anti-pattern**:
 ```python
+# File: documents/engineering/purity_doctrine.md
 def process(value: int | str) -> int:
     if isinstance(value, str):
         return int(value)
@@ -66,12 +82,14 @@ def process(value: int | str) -> int:
 
 **Correct pattern** (conditional expression):
 ```python
+# File: documents/engineering/purity_doctrine.md
 def process(value: int | str) -> int:
     return int(value) if isinstance(value, str) else value
 ```
 
 **Correct pattern** (match/case for complex branching):
 ```python
+# File: documents/engineering/purity_doctrine.md
 def handle_result(result: Result[Model, LoadError]) -> str:
     match result:
         case Success(model):
@@ -84,6 +102,7 @@ def handle_result(result: Result[Model, LoadError]) -> str:
 
 **Anti-pattern**:
 ```python
+# File: documents/engineering/purity_doctrine.md
 def find_first(items: list[int], predicate: Callable[[int], bool]) -> int | None:
     i = 0
     while i < len(items):
@@ -100,6 +119,7 @@ def find_first(items: list[int], predicate: Callable[[int], bool]) -> int | None
 
 **Correct pattern** (generator expression with next):
 ```python
+# File: documents/engineering/purity_doctrine.md
 def find_first(items: list[int], predicate: Callable[[int], bool]) -> int | None:
     return next((item for item in items if predicate(item)), None)
 ```
@@ -108,6 +128,7 @@ def find_first(items: list[int], predicate: Callable[[int], bool]) -> int | None
 
 **Anti-pattern**:
 ```python
+# File: documents/engineering/purity_doctrine.md
 @dataclass(frozen=True)
 class TensorTransfer:
     source_device: Device
@@ -125,6 +146,7 @@ class TensorTransfer:
 
 **Correct pattern** (factory returning Result):
 ```python
+# File: documents/engineering/purity_doctrine.md
 @dataclass(frozen=True)
 class TensorTransfer:
     """Validated tensor transfer - only constructible via factory."""
@@ -153,6 +175,7 @@ def tensor_transfer(
 
 **Anti-pattern**:
 ```python
+# File: documents/engineering/purity_doctrine.md
 def compute_price(model: Model, params: Params) -> float:
     logger.info(f"Computing price with {params}")  # Side effect!
     print(f"Model: {model.name}")  # Side effect!
@@ -166,6 +189,7 @@ def compute_price(model: Model, params: Params) -> float:
 
 **Correct pattern** (pure computation):
 ```python
+# File: documents/engineering/purity_doctrine.md
 def compute_price(model: Model, params: Params) -> float:
     """Pure price computation - no logging, no I/O."""
     return model.forward(params)
@@ -182,6 +206,7 @@ Side effects belong in the Effect Interpreter. See [Effect Interpreter](./effect
 Pattern matching on ADTs (Result, custom sum types) is **pure**:
 
 ```python
+# File: documents/engineering/purity_doctrine.md
 def describe_training_state(state: TrainingState) -> str:
     """Pure function using match/case on ADT."""
     match state:
@@ -207,6 +232,7 @@ List, dict, set, and generator comprehensions are **pure** when they:
 - Do not perform I/O
 
 ```python
+# File: documents/engineering/purity_doctrine.md
 # Pure comprehensions
 squares: list[int] = [x * x for x in range(10)]
 evens: list[int] = [x for x in items if x % 2 == 0]
@@ -222,6 +248,7 @@ logged: list[int] = [log_and_return(x) for x in items]  # Side effect!
 The ternary operator is **pure**:
 
 ```python
+# File: documents/engineering/purity_doctrine.md
 def clamp(value: float, min_val: float, max_val: float) -> float:
     """Pure clamping using conditional expressions."""
     return min_val if value < min_val else (max_val if value > max_val else value)
@@ -232,6 +259,7 @@ def clamp(value: float, min_val: float, max_val: float) -> float:
 `def`, `class`, `return`, `import` are **allowed** - they define structure, not control flow:
 
 ```python
+# File: documents/engineering/purity_doctrine.md
 from dataclasses import dataclass
 
 @dataclass(frozen=True)
@@ -251,6 +279,7 @@ The `assert_never()` function is allowed to `raise` because:
 - If it executes, it indicates a programming error (missing case)
 
 ```python
+# File: documents/engineering/purity_doctrine.md
 from typing import assert_never
 
 def handle_effect(effect: Effect) -> Result[None, EffectError]:
@@ -272,6 +301,7 @@ When dataclass construction requires validation, use **factory functions** inste
 ### Before (Impure - raises)
 
 ```python
+# File: documents/engineering/purity_doctrine.md
 @dataclass(frozen=True)
 class BoundSpec:
     lower: float
@@ -285,6 +315,7 @@ class BoundSpec:
 ### After (Pure - factory returns Result)
 
 ```python
+# File: documents/engineering/purity_doctrine.md
 @dataclass(frozen=True)
 class BoundSpec:
     """Validated bound specification - only constructible via factory."""
@@ -311,6 +342,7 @@ def bound_spec(lower: float, upper: float) -> Result[BoundSpec, InvalidBoundsErr
 ### Usage Pattern
 
 ```python
+# File: documents/engineering/purity_doctrine.md
 def use_bounds(lower: float, upper: float) -> Result[float, InvalidBoundsError]:
     """Example of using factory function."""
     match bound_spec(lower, upper):
@@ -349,6 +381,7 @@ def use_bounds(lower: float, upper: float) -> Result[float, InvalidBoundsError]:
 mypy cannot detect all purity violations. Use code review and grep audits:
 
 ```bash
+# File: documents/engineering/purity_doctrine.md
 # FORBIDDEN: for-loops in business logic (training, pricing, models)
 # Allowed only in: effects/interpreter.py, storage/, __main__.py
 grep -rn "^\s*for " src/spectralmc/ --include="*.py" \

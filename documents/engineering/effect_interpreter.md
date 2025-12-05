@@ -1,4 +1,17 @@
+# File: documents/engineering/effect_interpreter.md
 # Effect Interpreter Doctrine
+
+**Status**: Authoritative source  
+**Supersedes**: Prior effect interpreter drafts  
+**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+
+> **Purpose**: Describe SpectralMC’s Effect Interpreter pattern for isolating side effects.
+
+## Cross-References
+- [Purity Doctrine](purity_doctrine.md)
+- [Immutability Doctrine](immutability_doctrine.md)
+- [Reproducibility Proofs](reproducibility_proofs.md)
+- [Coding Standards](coding_standards.md)
 
 ## Overview
 
@@ -84,6 +97,7 @@ flowchart TB
 The following code is production-ready and follows SpectralMC's strict typing requirements (`mypy --strict`, no `Any`, `cast`, or `type: ignore`).
 
 ```python
+# File: documents/engineering/effect_interpreter.md
 """
 Effect ADT - Algebraic Data Types for all side effects in SpectralMC.
 
@@ -450,33 +464,26 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    subgraph Pure["Pure Code Layer"]
-        UserLogic[User Logic]
-        EffectBuilder[Effect Builders]
-        EffectQueue[Effect Queue]
-    end
+    UserLogic[User Logic]
+    EffectBuilder[Effect Builders]
+    EffectQueue[Effect Queue]
+    Interpreter[Effect Interpreter]
+    CUDARuntime[CUDA Runtime]
+    S3Client[S3 Client]
+    RNGState[RNG State]
 
-    subgraph Boundary["EFFECT BOUNDARY"]
-        Interpreter[Effect Interpreter]
-    end
-
-    subgraph Effectful["Effectful Layer"]
-        CUDARuntime[CUDA Runtime]
-        S3Client[S3 Client]
-        RNGState[RNG State]
-    end
-
-    UserLogic --> EffectBuilder
-    EffectBuilder --> EffectQueue
-    EffectQueue --> Interpreter
-    Interpreter --> CUDARuntime
-    Interpreter --> S3Client
-    Interpreter --> RNGState
+    UserLogic -->|builds effects| EffectBuilder
+    EffectBuilder -->|queues effects| EffectQueue
+    EffectQueue -->|hands off to interpreter| Interpreter
+    Interpreter -->|executes| CUDARuntime
+    Interpreter -->|executes| S3Client
+    Interpreter -->|executes| RNGState
 ```
 
 ### Interpreter Protocol Implementation
 
 ```python
+# File: documents/engineering/effect_interpreter.md
 """
 Effect Interpreter Protocol and implementations.
 
@@ -684,6 +691,7 @@ Effects can be composed sequentially or in parallel while maintaining purity.
 ### Sequential Composition
 
 ```python
+# File: documents/engineering/effect_interpreter.md
 @dataclass(frozen=True)
 class EffectSequence(Generic[T]):
     """Sequence of effects to execute in order.
@@ -733,6 +741,7 @@ def map_effect(
 ### Parallel Composition
 
 ```python
+# File: documents/engineering/effect_interpreter.md
 @dataclass(frozen=True)
 class EffectParallel(Generic[T]):
     """Parallel effects to execute concurrently.
@@ -772,6 +781,7 @@ def parallel_effects(*effects: Effect) -> EffectParallel[list[object]]:
 ### Monadic Bind (flat_map)
 
 ```python
+# File: documents/engineering/effect_interpreter.md
 def flat_map_effect(
     effect: Effect,
     f: Callable[[object], Effect],
@@ -810,6 +820,7 @@ The Effect ADT design uses type-level constraints and factory functions to preve
 Transfers to the same device are prevented by factory functions returning Result:
 
 ```python
+# File: documents/engineering/effect_interpreter.md
 @dataclass(frozen=True)
 class TensorTransfer:
     """Only constructible via tensor_transfer() factory."""
@@ -848,6 +859,7 @@ match tensor_transfer(Device.cpu, Device.cpu):
 Use separate types to enforce valid training state transitions:
 
 ```python
+# File: documents/engineering/effect_interpreter.md
 @dataclass(frozen=True)
 class ModelInference:
     """Model is in inference mode - backward not allowed."""
@@ -884,6 +896,7 @@ class BackwardPass:
 Prevent orphan commits by requiring parent for non-genesis versions:
 
 ```python
+# File: documents/engineering/effect_interpreter.md
 @dataclass(frozen=True)
 class GenesisCommit:
     """First commit in the chain - no parent required."""
@@ -909,6 +922,7 @@ CommitEffect = GenesisCommit | IncrementalCommit
 Enforce synchronization before tensor reads:
 
 ```python
+# File: documents/engineering/effect_interpreter.md
 @dataclass(frozen=True)
 class UnsynchronizedTensor:
     """Tensor may have pending GPU operations."""
@@ -946,6 +960,7 @@ class TensorRead:
 Mock interpreters enable testing pure effect logic without GPU hardware or network access.
 
 ```python
+# File: documents/engineering/effect_interpreter.md
 class MockInterpreter:
     """Test interpreter that records effects without execution.
 
@@ -1025,20 +1040,20 @@ flowchart TB
     NextBatch{More Batches?}
     End[Training Complete]
 
-    Start --> CaptureRNG
-    CaptureRNG --> GenNormals
-    GenNormals --> SimPaths
-    SimPaths --> FFT
-    FFT --> Forward
-    Forward --> Backward
-    Backward --> OptStep
-    OptStep --> Sync
-    Sync --> Checkpoint
-    Checkpoint -->|Yes| Commit
-    Checkpoint -->|No| NextBatch
-    Commit --> NextBatch
-    NextBatch -->|Yes| GenNormals
-    NextBatch -->|No| End
+    Start -->|start| CaptureRNG
+    CaptureRNG -->|record state| GenNormals
+    GenNormals -->|sample normals| SimPaths
+    SimPaths -->|simulate paths| FFT
+    FFT -->|transform| Forward
+    Forward -->|backprop| Backward
+    Backward -->|optimizer step| OptStep
+    OptStep -->|sync streams| Sync
+    Sync -->|evaluate checkpoint| Checkpoint
+    Checkpoint -->|checkpoint| Commit
+    Checkpoint -->|continue| NextBatch
+    Commit -->|loop| NextBatch
+    NextBatch -->|more batches| GenNormals
+    NextBatch -->|no batches| End
 ```
 
 ---
@@ -1050,6 +1065,7 @@ Training orchestration builds Effect ADTs - it does **NOT** execute side effects
 ### Anti-Pattern: Impure Training Loop
 
 ```python
+# File: documents/engineering/effect_interpreter.md
 # ❌ WRONG - Direct side effects in training
 def train_batch(model: nn.Module, data: Tensor) -> float:
     for batch in dataloader:  # VIOLATION: for loop
@@ -1071,6 +1087,7 @@ def train_batch(model: nn.Module, data: Tensor) -> float:
 ### Correct Pattern: Pure Effect Building
 
 ```python
+# File: documents/engineering/effect_interpreter.md
 # ✅ CORRECT - Pure function building Effect sequence
 def build_training_batch_effects(
     model_id: str,

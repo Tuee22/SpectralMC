@@ -1,4 +1,12 @@
+# File: documents/README.md
 # SpectralMC Documentation
+
+**Status**: Reference only  
+**Supersedes**: None  
+**Referenced by**: documents/documentation_standards.md
+
+> **Purpose**: Orientation for SpectralMC documentation audiences and folder structure.
+> **📖 Authoritative Reference**: [documentation_standards.md](documentation_standards.md)
 
 ## Overview
 
@@ -41,7 +49,7 @@ Scientific background, quantitative finance theory, and research papers.
 - [Engineering Standards Index](engineering/index.md)
 - [Deployment Guide](product/deployment.md)
 - [Training Integration](product/training_integration.md)
-- [Testing Architecture](testing-architecture.md)
+- [Testing Architecture](testing_architecture.md)
 - [SpectralMC Whitepaper](domain/whitepapers/spectralmc_whitepaper.md)
 
 ## Contributing

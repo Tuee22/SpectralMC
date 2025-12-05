@@ -1,8 +1,12 @@
+# File: documents/engineering/gpu_build.md
 # GPU Build Guide
 
-This guide documents how to build SpectralMC with GPU support, with special focus on legacy GPU compatibility (GTX 970 / Maxwell architecture).
+**Status**: Reference only  
+**Supersedes**: Prior GPU build guides  
+**Referenced by**: documents/engineering/index.md
 
-**Last Updated**: 2025-11-30
+> **Purpose**: Provide GPU build instructions with legacy GPU compatibility notes.
+> **📖 Authoritative Reference**: [docker_build_philosophy.md](docker_build_philosophy.md)
 
 **Related Standards**: [Docker Build Philosophy](docker_build_philosophy.md), [Coding Standards](coding_standards.md)
 
@@ -30,6 +34,7 @@ For users building SpectralMC on NVIDIA GeForce GTX 970 (Maxwell architecture, c
 
 **Single Command Build**:
 ```bash
+# File: documents/engineering/gpu_build.md
 cd docker && docker compose build spectralmc
 ```
 
@@ -41,7 +46,7 @@ cd docker && docker compose build spectralmc
 - **NumPy**: 2.0+ compatible
 - **LAPACK**: OpenBLAS integration
 
-**Validation Results** (Nov 30, 2025):
+**Validation Results** (sample run):
 - Total tests: **227/227 passing (100%)**
 - GPU tests: 11/11 passing
 - CPU tests: 216/216 passing
@@ -199,6 +204,7 @@ LAYER 15:  Final configuration (changes: rarely)
 **Solution**: Wheel persistence strategy
 
 ```dockerfile
+# File: documents/engineering/gpu_build.md
 # In LAYER 9: Save the built wheel
 python setup.py bdist_wheel 2>&1 | tee /tmp/pytorch-build.log && \
 mkdir -p /opt/pytorch-wheel && \
@@ -215,6 +221,7 @@ fi
 ### Build Environment Variables
 
 ```dockerfile
+# File: documents/engineering/gpu_build.md
 # CUDA architecture for GTX 970
 TORCH_CUDA_ARCH_LIST="5.2"
 
@@ -239,6 +246,7 @@ USE_LAPACK=1
 ### GTX 970 / Legacy GPU Build
 
 ```bash
+# File: documents/engineering/gpu_build.md
 # Navigate to docker directory
 cd docker
 
@@ -252,6 +260,7 @@ docker compose -f docker-compose.yml up -d
 ### Modern GPU Build
 
 ```bash
+# File: documents/engineering/gpu_build.md
 # Use the standard Dockerfile (fast binary build)
 cd docker
 docker compose up --build -d
@@ -260,6 +269,7 @@ docker compose up --build -d
 ### Rebuild from Scratch
 
 ```bash
+# File: documents/engineering/gpu_build.md
 # Remove cached layers and rebuild
 docker compose -f docker/docker-compose.yml build --no-cache spectralmc
 ```
@@ -271,6 +281,7 @@ docker compose -f docker/docker-compose.yml build --no-cache spectralmc
 ### 1. Runtime GPU Validation
 
 ```bash
+# File: documents/engineering/gpu_build.md
 docker compose -f docker/docker-compose.yml exec spectralmc python -c "
 import torch
 print(f'PyTorch: {torch.__version__}')
@@ -299,16 +310,18 @@ GPU tensor test: PASSED
 ### 2. Run Test Suite
 
 ```bash
+# File: documents/engineering/gpu_build.md
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
 ```
 
-**Expected** (as of Nov 30, 2025): 227/227 tests passing (100%)
+**Expected output**: 227/227 tests passing (100%)
 - 11/11 GPU tests passing
 - 216/216 CPU tests passing
 
 ### 3. Verify CuPy
 
 ```bash
+# File: documents/engineering/gpu_build.md
 docker compose -f docker/docker-compose.yml exec spectralmc python -c "
 import cupy as cp
 print(f'CuPy: {cp.__version__}')
@@ -334,40 +347,40 @@ flowchart TB
   NoKernel[Issue 4 - No kernel image]
   CPUOnly[Issue 5 - Defaults to CPU-only]
 
-  Start -->|GPU not detected| NoGPU
-  Start -->|Build crashes| OOM
-  Start -->|Tests fail| TestOOM
-  Start -->|Runtime error| NoKernel
-  Start -->|Quick build no CUDA| CPUOnly
+  Start -->|gpu not detected| NoGPU
+  Start -->|build crashes| OOM
+  Start -->|tests fail| TestOOM
+  Start -->|runtime error| NoKernel
+  Start -->|quick build no cuda| CPUOnly
 
-  NoGPU --> DockerBuildKit{Using BuildKit?}
-  DockerBuildKit -->|Yes| DisableBuildKit[Set DOCKER_BUILDKIT=0]
-  DockerBuildKit -->|No| CheckNvidiaDocker[Install nvidia-docker2]
-  DisableBuildKit --> RebuildAfterBuildKit[Rebuild with docker compose build]
-  CheckNvidiaDocker --> RebuildAfterDocker[Rebuild after nvidia-docker2 install]
+  NoGPU -->|check buildkit| DockerBuildKit{Using BuildKit?}
+  DockerBuildKit -->|yes| DisableBuildKit[Set DOCKER_BUILDKIT=0]
+  DockerBuildKit -->|no| CheckNvidiaDocker[Install nvidia-docker2]
+  DisableBuildKit -->|rebuild| RebuildAfterBuildKit[Rebuild with docker compose build]
+  CheckNvidiaDocker -->|rebuild| RebuildAfterDocker[Rebuild after nvidia-docker2 install]
 
-  OOM --> CheckRAM{System RAM?}
-  CheckRAM -->|Less than 16GB| ReduceJobs[Edit Dockerfile.source - Set MAX_JOBS=2]
+  OOM -->|check RAM| CheckRAM{System RAM?}
+  CheckRAM -->|less than 16GB| ReduceJobs[Edit Dockerfile.source - Set MAX_JOBS=2]
   CheckRAM -->|16GB or more| AddSwap[Add 16GB swap file]
-  ReduceJobs --> RebuildAfterRAM[Rebuild with --no-cache]
-  AddSwap --> RebuildAfterSwap[Rebuild with --no-cache]
+  ReduceJobs -->|rebuild| RebuildAfterRAM[Rebuild with --no-cache]
+  AddSwap -->|rebuild| RebuildAfterSwap[Rebuild with --no-cache]
 
-  TestOOM --> CheckVRAM{GPU VRAM?}
+  TestOOM -->|check VRAM| CheckVRAM{GPU VRAM?}
   CheckVRAM -->|2GB| ReduceBatch2GB[Edit test_gbm.py - Set BATCHES=2^16]
   CheckVRAM -->|4GB| KeepDefault[Keep default 2^17 - Should work]
   CheckVRAM -->|8GB or more| IncreaseBatch[Optional: Increase to 2^18]
-  ReduceBatch2GB --> RerunTests[Rerun tests]
-  KeepDefault --> CheckOtherIssues[Check for other GPU memory issues]
-  IncreaseBatch --> RerunTestsFaster[Rerun tests - Faster convergence]
+  ReduceBatch2GB -->|re-run| RerunTests[Rerun tests]
+  KeepDefault -->|investigate| CheckOtherIssues[Check for other GPU memory issues]
+  IncreaseBatch -->|re-run| RerunTestsFaster[Rerun tests - Faster convergence]
 
-  NoKernel --> CheckBuild{Source build ran?}
-  CheckBuild -->|No| RebuildSource[Rebuild with source Dockerfile]
-  CheckBuild -->|Yes| CheckArch[Verify TORCH_CUDA_ARCH_LIST matches GPU capability]
-  CheckArch --> ManualSourceBuild[Manual source build if mismatch]
+  NoKernel -->|check build| CheckBuild{Source build ran?}
+  CheckBuild -->|no| RebuildSource[Rebuild with source Dockerfile]
+  CheckBuild -->|yes| CheckArch[Verify TORCH_CUDA_ARCH_LIST matches GPU capability]
+  CheckArch -->|manual build| ManualSourceBuild[Manual source build if mismatch]
 
-  CPUOnly --> ForceBuild[Use Dockerfile.source]
-  ForceBuild --> UseNoBuildKit[Use DOCKER_BUILDKIT=0]
-  UseNoBuildKit --> RebuildFromSource[Rebuild - 2-4 hours for source build]
+  CPUOnly -->|force source build| ForceBuild[Use Dockerfile.source]
+  ForceBuild -->|disable buildkit| UseNoBuildKit[Use DOCKER_BUILDKIT=0]
+  UseNoBuildKit -->|rebuild| RebuildFromSource[Rebuild - 2-4 hours for source build]
 ```
 
 **See detailed solutions below for each issue.**
@@ -384,6 +397,7 @@ c++: fatal error: Killed signal terminated program cc1plus
 **Solution**: Reduce parallel jobs or add swap
 
 ```bash
+# File: documents/engineering/gpu_build.md
 # Option 1: Edit Dockerfile.source, change MAX_JOBS
 export MAX_JOBS=2  # or even 1 for very limited RAM
 
@@ -405,6 +419,7 @@ RuntimeError: CUDA error: no kernel image is available for execution on the devi
 
 **Diagnosis**:
 ```bash
+# File: documents/engineering/gpu_build.md
 docker compose exec spectralmc python -c "
 import torch
 print(f'Arch list: {torch.cuda.get_arch_list()}')
@@ -414,6 +429,7 @@ print(f'GPU capability: {torch.cuda.get_device_capability(0)}')
 
 If arch list doesn't include `sm_52`, rebuild:
 ```bash
+# File: documents/engineering/gpu_build.md
 docker compose -f docker/docker-compose.yml build --no-cache spectralmc
 ```
 
@@ -425,6 +441,7 @@ docker compose -f docker/docker-compose.yml build --no-cache spectralmc
 
 **Check**:
 ```bash
+# File: documents/engineering/gpu_build.md
 docker compose exec spectralmc cat /spectralmc/.build-marker
 ```
 
@@ -442,6 +459,7 @@ cupy.cuda.memory.OutOfMemoryError: Out of memory allocating 1,073,741,824 bytes
 **Solution**: Batch sizes are configured for 4GB minimum. If you have less VRAM, edit `tests/test_gbm.py`:
 
 ```python
+# File: documents/engineering/gpu_build.md
 # For 2GB GPUs:
 _BATCHES_PER_RUN = 2**16  # 65,536 batches
 
@@ -465,7 +483,7 @@ _BATCHES_PER_RUN = 2**18  # 262,144 batches
 
 ## Key Learnings
 
-These insights were gathered during the GTX 970 compatibility investigation (November 2025):
+These insights were gathered during the GTX 970 compatibility investigation:
 
 | Learning | Implication |
 |----------|-------------|
@@ -530,6 +548,7 @@ For production deployments requiring GTX 970 support, always use source builds.
 ## Quick Reference Card
 
 ```bash
+# File: documents/engineering/gpu_build.md
 # GTX 970 build
 cd docker && docker compose build spectralmc
 

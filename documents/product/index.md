@@ -1,4 +1,12 @@
+# File: documents/product/index.md
 # Product Documentation
+
+**Status**: Reference only  
+**Supersedes**: None  
+**Referenced by**: documents/product/deployment.md; documents/product/training_integration.md
+
+> **Purpose**: Index for SpectralMC product and operations documentation.
+> **📖 Authoritative Reference**: [../documentation_standards.md](../documentation_standards.md)
 
 ## Overview
 

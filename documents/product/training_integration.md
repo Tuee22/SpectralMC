@@ -1,4 +1,12 @@
+# File: documents/product/training_integration.md
 # Training Integration with Blockchain Storage
+
+**Status**: Reference only  
+**Supersedes**: Prior training integration guides  
+**Referenced by**: documents/product/index.md
+
+> **Purpose**: Guide SpectralMC users through training flows that integrate blockchain model versioning.
+> **📖 Authoritative Reference**: [../engineering/blockchain_storage.md](../engineering/blockchain_storage.md)
 
 This guide explains how to integrate blockchain model versioning with the GBM training loop using automatic commits.
 
@@ -25,11 +33,11 @@ SpectralMC's `GbmCVNNPricer.train()` method integrates seamlessly with blockchai
 
 ### Key Features
 
--  **Backward compatible**: Works with existing training code (blockchain storage is optional)
--  **Graceful error handling**: Commit failures are logged but don't crash training
--  **Optimizer state preservation**: Full checkpoints include Adam optimizer state
--  **Template interpolation**: Commit messages support `{step}`, `{loss}`, `{batch}` variables
--  **Async-to-sync bridge**: Uses `asyncio.run()` for seamless integration
+- **Backward compatible**: Works with existing training code (blockchain storage is optional)
+- **Graceful error handling**: Commit failures are logged but don't crash training
+- **Optimizer state preservation**: Full checkpoints include Adam optimizer state
+- **Template interpolation**: Commit messages support `{step}`, `{loss}`, `{batch}` variables
+- **Async-to-sync bridge**: Uses `asyncio.run()` for seamless integration
 
 ## Quick Start
 
@@ -38,25 +46,23 @@ SpectralMC's `GbmCVNNPricer.train()` method integrates seamlessly with blockchai
 How automatic commits integrate with the training loop:
 
 ```mermaid
-sequenceDiagram
-  participant User
-  participant Trainer as GbmCVNNPricer
-  participant Store as BlockchainStore
+flowchart TB
+  Start[Start Training]
+  Batch[Process Batch]
+  Interval{Commit Interval Met}
+  Commit[Commit Checkpoint]
+  Continue[Continue Training]
+  FinalCommit[Final Commit]
+  Complete[Training Complete]
 
-  User->>Trainer: train - auto_commit=True, commit_interval=100 -
-  loop Every Batch
-    Trainer->>Trainer: Generate batch with SobolSampler
-    Trainer->>Trainer: Run Monte Carlo simulation on GPU
-    Trainer->>Trainer: Compute FFT and CVNN loss
-    Trainer->>Trainer: Backprop and update optimizer
-    alt Batch modulo commit_interval == 0
-      Trainer->>Store: Commit checkpoint
-      Store-->>Trainer: Version committed
-    end
-  end
-  Trainer->>Store: Final commit after training completes
-  Store-->>Trainer: Final version committed
-  Trainer-->>User: Training complete with all checkpoints saved
+  Start -->|start| Batch
+  Batch -->|check interval| Interval
+  Interval -->|commit needed| Commit
+  Interval -->|keep training| Continue
+  Commit -->|resume| Continue
+  Continue -->|next batch| Batch
+  Batch -->|final batch| FinalCommit
+  FinalCommit -->|complete| Complete
 ```
 
 **Key Features**:
@@ -70,6 +76,7 @@ sequenceDiagram
 Train a model and automatically commit the final checkpoint:
 
 ```python
+# File: examples/training_with_blockchain_storage.py
 import asyncio
 import torch
 from spectralmc.gbm import BlackScholesConfig, SimulationParams
@@ -135,8 +142,8 @@ async def train_with_auto_commit():
 
         # Verify commit
         head = await store.get_head()
-        print(f" Committed version {head.counter}: {head.content_hash[:8]}")
-        print(f"  Message: {head.commit_message}")
+        print(f"Committed version {head.counter}: {head.content_hash[:8]}")
+        print(f"Message: {head.commit_message}")
 
 # Run training
 asyncio.run(train_with_auto_commit())
@@ -147,6 +154,7 @@ asyncio.run(train_with_auto_commit())
 Commit every N batches during training for long-running experiments:
 
 ```python
+# File: examples/training_with_blockchain_storage.py
 # Commit every 100 batches
 pricer.train(
     training_config,
@@ -165,30 +173,30 @@ Use this flowchart to select the right training mode for your use case:
 
 ```mermaid
 flowchart TB
-  Start{Need Version Control?}
-  Duration{Training Duration?}
-  Resume{Need Resume Capability?}
+  Start{Need Version Control}
+  Duration{Training Duration}
+  Resume{Need Resume Capability}
 
-  NoStore[Mode 1 - No Blockchain Storage]
-  FinalOnly[Mode 2 - Final Checkpoint Only]
-  Periodic[Mode 3 - Periodic Checkpoints]
-  Manual[Mode 4 - Manual Commits]
+  NoStore[Mode 1 No Storage]
+  FinalOnly[Mode 2 Final Commit]
+  Periodic[Mode 3 Periodic Checkpoints]
+  Manual[Mode 4 Manual Commits]
 
-  Start -->|No - Quick experiments| NoStore
-  Start -->|Yes| Duration
-  Duration -->|Less than 1 hour| FinalOnly
-  Duration -->|More than 1 hour| Resume
-  Resume -->|Yes - Long runs| Periodic
-  Resume -->|No - Custom logic| Manual
+  Start -->|no| NoStore
+  Start -->|yes| Duration
+  Duration -->|short| FinalOnly
+  Duration -->|long| Resume
+  Resume -->|resume needed| Periodic
+  Resume -->|custom logic| Manual
 
-  NoStore --> ConfigNoStore[pricer.train - training_config -]
-  FinalOnly --> ConfigFinal[auto_commit=True - no commit_interval]
-  Periodic --> ChooseInterval{Total Batch Count?}
-  Manual --> ConfigManual[No auto_commit - Use commit_snapshot manually]
+  NoStore -->|configure| ConfigNoStore[Use pricer.train with training_config]
+  FinalOnly -->|configure| ConfigFinal[Enable auto_commit]
+  Periodic -->|pick interval| ChooseInterval{Batch Count}
+  Manual -->|manual commits| ConfigManual[Call commit_snapshot manually]
 
-  ChooseInterval -->|Less than 1000| Interval100[commit_interval=100]
-  ChooseInterval -->|1000 to 10000| Interval500[commit_interval=500]
-  ChooseInterval -->|More than 10000| Interval1000[commit_interval=1000]
+  ChooseInterval -->|under 1000| Interval100[commit_interval=100]
+  ChooseInterval -->|1000-10000| Interval500[commit_interval=500]
+  ChooseInterval -->|over 10000| Interval1000[commit_interval=1000]
 ```
 
 **See detailed mode descriptions below.**
@@ -200,6 +208,7 @@ flowchart TB
 Existing training code continues to work without modification:
 
 ```python
+# File: examples/training_integration/no_blockchain_storage.py
 # No blockchain storage - works exactly as before
 pricer.train(training_config)
 ```
@@ -215,6 +224,7 @@ pricer.train(training_config)
 Automatically commit only after training completes:
 
 ```python
+# File: examples/training_integration/final_checkpoint.py
 pricer.train(
     training_config,
     blockchain_store=store,
@@ -234,6 +244,7 @@ pricer.train(
 Commit at regular intervals during training:
 
 ```python
+# File: examples/training_integration/periodic_checkpoints.py
 pricer.train(
     training_config,
     blockchain_store=store,
@@ -254,6 +265,7 @@ pricer.train(
 Use blockchain storage but control commits manually:
 
 ```python
+# File: examples/training_integration/manual_commit.py
 from spectralmc.storage import commit_snapshot
 
 # Train without auto_commit
@@ -281,6 +293,7 @@ async with AsyncBlockchainModelStore("my-model-bucket") as store:
 Standard `TrainingConfig` parameters:
 
 ```python
+# File: examples/training_integration/training_config.py
 training_config = TrainingConfig(
     num_batches=1000,      # Total training batches
     batch_size=32,         # Samples per batch
@@ -310,6 +323,7 @@ Use these variables in commit messages:
 **Examples**:
 
 ```python
+# File: examples/training_integration/commit_message_templates.py
 # Simple
 commit_message_template="Checkpoint at step {step}"
 
@@ -327,15 +341,16 @@ commit_message_template="Production model v{step}: loss={loss:.4f}"
 Training validates blockchain parameters before starting:
 
 ```python
-# L ERROR: auto_commit requires blockchain_store
+# File: examples/training_integration/validation_errors.py
+# ERROR: auto_commit requires blockchain_store
 pricer.train(training_config, auto_commit=True)
 # Raises: ValueError: auto_commit or commit_interval requires blockchain_store
 
-# L ERROR: commit_interval requires blockchain_store
+# ERROR: commit_interval requires blockchain_store
 pricer.train(training_config, commit_interval=100)
 # Raises: ValueError: auto_commit or commit_interval requires blockchain_store
 
-#  CORRECT
+# CORRECT
 pricer.train(training_config, blockchain_store=store, auto_commit=True)
 ```
 
@@ -344,6 +359,7 @@ pricer.train(training_config, blockchain_store=store, auto_commit=True)
 Commit failures are logged but **do not crash training**:
 
 ```python
+# File: examples/training_integration/graceful_failure.py
 # Training continues even if S3 is unreachable
 pricer.train(
     training_config,
@@ -370,17 +386,18 @@ The blockchain store has built-in retry logic:
 
 Training integration has comprehensive test coverage:
 
--  `test_training_with_auto_commit`: Final checkpoint creation
--  `test_training_with_commit_interval`: Periodic commits
--  `test_training_without_storage_backward_compat`: Legacy compatibility
--  `test_training_validation_auto_commit_requires_store`: Parameter validation
--  `test_training_commit_message_template`: Template interpolation
--  `test_training_commit_preserves_optimizer_state`: State preservation
+- `test_training_with_auto_commit`: Final checkpoint creation
+- `test_training_with_commit_interval`: Periodic commits
+- `test_training_without_storage_backward_compat`: Legacy compatibility
+- `test_training_validation_auto_commit_requires_store`: Parameter validation
+- `test_training_commit_message_template`: Template interpolation
+- `test_training_commit_preserves_optimizer_state`: State preservation
 
 Run tests:
 
 ```bash
-docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/test_storage/test_training_integration.py -v
+# File: docker/run_training_integration_tests.sh
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_storage/test_training_integration.py -v
 ```
 
 ### Manual Verification
@@ -388,6 +405,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/test_st
 After training with auto_commit, verify the commit:
 
 ```python
+# File: examples/training_integration/verify_commit.py
 async def verify_training_commit():
     async with AsyncBlockchainModelStore("my-model-bucket") as store:
         # Check HEAD
@@ -412,6 +430,7 @@ asyncio.run(verify_training_commit())
 ### Example 1: Production Training Pipeline
 
 ```python
+# File: examples/training_integration/production_pipeline.py
 async def production_training_pipeline():
     """Production training with automatic checkpointing."""
 
@@ -441,9 +460,9 @@ async def production_training_pipeline():
 
         # Verify final checkpoint
         head = await store.get_head()
-        print(f" Training complete")
-        print(f"  Final version: {head.counter}")
-        print(f"  Total checkpoints: {head.counter + 1}")
+        print("Training complete")
+        print(f"Final version: {head.counter}")
+        print(f"Total checkpoints: {head.counter + 1}")
 
         # Tag production release
         # (Manual tagging for production control)
@@ -456,6 +475,7 @@ asyncio.run(production_training_pipeline())
 ### Example 2: Experiment Tracking
 
 ```python
+# File: examples/training_integration/experiment_tracking.py
 async def experiment_tracking():
     """Track multiple experiments with version control."""
 
@@ -487,13 +507,13 @@ async def experiment_tracking():
             )
 
             head = await store.get_head()
-            print(f"   Committed as v{head.counter}")
+            print(f"Committed as v{head.counter}")
 
         # List all experiments
         print("\nAll experiments:")
         for i in range((await store.get_head()).counter + 1):
             version = await store.get_version(f"v{i:010d}")
-            print(f"  v{i}: {version.commit_message}")
+            print(f"v{i}: {version.commit_message}")
 
 asyncio.run(experiment_tracking())
 ```
@@ -505,22 +525,22 @@ asyncio.run(experiment_tracking())
 ```mermaid
 flowchart TB
   Start[Start Resume Training]
-  CheckHead{HEAD exists?}
-  NoHead[Create fresh model - Initial config]
-  HasHead[Load checkpoint from HEAD]
-  RestoreState[Restore model weights and optimizer state]
-  ContinueTraining[Continue training from global_step]
-  NewCheckpoints[Commit new checkpoints]
-  Complete[Training complete]
+  CheckHead{Head Exists}
+  NoHead[Create Fresh Model]
+  HasHead[Load From Head]
+  RestoreState[Restore Weights and Optimizer]
+  ContinueTraining[Continue Training]
+  NewCheckpoints[Commit New Checkpoints]
+  Complete[Training Complete]
 
-  Start --> CheckHead
-  CheckHead -->|No previous checkpoint| NoHead
-  CheckHead -->|Has checkpoint| HasHead
-  HasHead --> RestoreState
-  RestoreState --> ContinueTraining
-  NoHead --> ContinueTraining
-  ContinueTraining --> NewCheckpoints
-  NewCheckpoints --> Complete
+  Start -->|start| CheckHead
+  CheckHead -->|no head| NoHead
+  CheckHead -->|head found| HasHead
+  HasHead -->|restore state| RestoreState
+  RestoreState -->|resume| ContinueTraining
+  NoHead -->|initialize| ContinueTraining
+  ContinueTraining -->|commit checkpoints| NewCheckpoints
+  NewCheckpoints -->|finish| Complete
 ```
 
 **State Preservation**:
@@ -533,6 +553,7 @@ flowchart TB
 **Code Example**:
 
 ```python
+# File: examples/training_integration/resume_training.py
 async def resume_training():
     """Resume training from last checkpoint."""
 
@@ -567,7 +588,7 @@ async def resume_training():
         )
 
         new_head = await store.get_head()
-        print(f" Training resumed, now at v{new_head.counter}")
+        print(f"Training resumed, now at v{new_head.counter}")
 
 asyncio.run(resume_training())
 ```
@@ -579,6 +600,7 @@ asyncio.run(resume_training())
 Use structured commit messages for easy filtering:
 
 ```python
+# File: examples/training_integration/commit_message_conventions.py
 # Production
 commit_message_template="[PROD] v{step}: loss={loss:.4f}"
 
@@ -605,6 +627,7 @@ Choose `commit_interval` based on training duration:
 Regularly clean up old checkpoints:
 
 ```bash
+# File: scripts/gc_sample.sh
 # Keep last 20 versions, protect production releases
 python -m spectralmc.storage gc-run my-model-bucket 20 --protect-tags 5,12,42 --yes
 ```
@@ -614,6 +637,7 @@ python -m spectralmc.storage gc-run my-model-bucket 20 --protect-tags 5,12,42 --
 Tag important versions for protection from GC:
 
 ```python
+# File: examples/training_integration/production_tagging.py
 # After validating model performance
 # Manually protect version 42 by adding to protect_tags in GC policy
 ```
@@ -623,6 +647,7 @@ Tag important versions for protection from GC:
 Use TensorBoard to visualize training history:
 
 ```bash
+# File: scripts/monitor_training.sh
 python -m spectralmc.storage tensorboard-log my-model-bucket
 tensorboard --logdir=runs/
 ```
@@ -640,6 +665,7 @@ Use separate buckets for different purposes:
 If commit fails during training:
 
 ```python
+# File: examples/training_integration/error_recovery.py
 # Training completed but commit failed
 # Manually commit the final state
 pricer = GbmCVNNPricer(config)  # Your trained pricer

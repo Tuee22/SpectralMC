@@ -1,4 +1,12 @@
+# File: documents/domain/whitepapers/characteristic_function_for_stochastic_processes.md
 # Characteristic Functions for Stochastic Processes in a 2D Complex Representation
+
+**Status**: Reference only  
+**Supersedes**: Prior drafts on characteristic functionals  
+**Referenced by**: documents/domain/index.md
+
+> **Purpose**: Explain characteristic functionals for stochastic processes and their fixed-size representations for CVNNs.
+> **📖 Authoritative Reference**: [../../documentation_standards.md](../../documentation_standards.md)
 
 This document explores how **characteristic functions (CFs)**—Fourier transforms of probability distributions—can be extended to time-varying processes. We discuss the concept of **characteristic functionals**, which uniquely determine continuous-time stochastic processes, and describe practical 2D complex-valued representations that summarize marginal distributions over time. We then highlight how such representations can be used as fixed-size inputs for complex-valued neural networks (CVNNs), including ideas around wavelet or Fourier transforms along the time axis and learnable frequency selection.
 

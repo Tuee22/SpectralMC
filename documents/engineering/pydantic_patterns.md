@@ -1,10 +1,18 @@
+# File: documents/engineering/pydantic_patterns.md
 # Pydantic Best Practices
+
+**Status**: Reference only  
+**Supersedes**: Prior pydantic pattern notes  
+**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+
+> **Purpose**: Document preferred Pydantic patterns for SpectralMC configurations.
+> **📖 Authoritative Reference**: [coding_standards.md](coding_standards.md)
+
+**Related Standards**: [Coding Standards](coding_standards.md), [Documentation Standards](../documentation_standards.md)
 
 ## Overview
 
 SpectralMC uses **Pydantic v2** for all configuration and data validation. Pydantic models provide runtime type validation, immutable configurations, and seamless integration with mypy strict mode.
-
-**Related Standards**: [Coding Standards](coding_standards.md), [Documentation Standards](../documentation_standards.md)
 
 ---
 
@@ -13,6 +21,7 @@ SpectralMC uses **Pydantic v2** for all configuration and data validation. Pydan
 Use Pydantic `BaseModel` for all configuration objects and data validation:
 
 ```python
+# File: documents/engineering/pydantic_patterns.md
 from pydantic import BaseModel, ConfigDict, model_validator
 
 class BoundSpec(BaseModel):
@@ -46,6 +55,7 @@ Use `ConfigDict` to configure Pydantic model behavior. SpectralMC requires **str
 All Pydantic models **must** forbid extra fields to prevent typos and silent configuration errors:
 
 ```python
+# File: documents/engineering/pydantic_patterns.md
 from pydantic import BaseModel, ConfigDict
 
 class BlackScholesConfig(BaseModel):
@@ -65,6 +75,7 @@ class BlackScholesConfig(BaseModel):
 **Why `extra="forbid"`?**
 
 ```python
+# File: documents/engineering/pydantic_patterns.md
 # ✅ CORRECT - Raises ValidationError
 config = BlackScholesConfig(
     spot=100.0,
@@ -84,6 +95,7 @@ config = BlackScholesConfig(
 Make configuration immutable after creation:
 
 ```python
+# File: documents/engineering/pydantic_patterns.md
 model_config = ConfigDict(
     extra="forbid",
     frozen=True,  # Prevents accidental mutation
@@ -102,6 +114,7 @@ model_config = ConfigDict(
 Use `@model_validator(mode="after")` for cross-field validation:
 
 ```python
+# File: documents/engineering/pydantic_patterns.md
 from pydantic import BaseModel, ConfigDict, model_validator
 
 class BlackScholesConfig(BaseModel):
@@ -140,6 +153,7 @@ class BlackScholesConfig(BaseModel):
 Pydantic models integrate seamlessly with mypy. Always use **explicit type annotations**:
 
 ```python
+# File: documents/engineering/pydantic_patterns.md
 from typing import Dict, Type
 
 # ✅ CORRECT - Explicit typing
@@ -157,6 +171,7 @@ def create_sampler(bounds, model_class):
 **mypy plugin configuration** (`pyproject.toml`):
 
 ```toml
+# File: documents/engineering/pydantic_patterns.md
 [tool.mypy]
 plugins = ["pydantic.mypy"]
 
@@ -175,6 +190,7 @@ See [Coding Standards](coding_standards.md) for complete mypy configuration.
 Use `@field_validator` for single-field validation:
 
 ```python
+# File: documents/engineering/pydantic_patterns.md
 from pydantic import BaseModel, field_validator
 
 class MonteCarloConfig(BaseModel):
@@ -210,6 +226,7 @@ class MonteCarloConfig(BaseModel):
 Pydantic supports nested validation automatically:
 
 ```python
+# File: documents/engineering/pydantic_patterns.md
 class SimulationConfig(BaseModel):
     """Complete simulation configuration."""
 
@@ -252,6 +269,7 @@ Pydantic validates:
 Pydantic models serialize to/from JSON and dictionaries:
 
 ```python
+# File: documents/engineering/pydantic_patterns.md
 # To dictionary
 config_dict = config.model_dump()
 
@@ -274,6 +292,7 @@ config = SimulationConfig.model_validate_json(config_json)
 ### Optional Fields with Defaults
 
 ```python
+# File: documents/engineering/pydantic_patterns.md
 from typing import Optional
 
 class TrainingConfig(BaseModel):
@@ -288,6 +307,7 @@ class TrainingConfig(BaseModel):
 ### Computed Fields
 
 ```python
+# File: documents/engineering/pydantic_patterns.md
 from pydantic import computed_field
 
 class GBMConfig(BaseModel):
@@ -308,6 +328,7 @@ class GBMConfig(BaseModel):
 ### Custom Types
 
 ```python
+# File: documents/engineering/pydantic_patterns.md
 from pydantic import BaseModel, field_validator
 from pathlib import Path
 
@@ -334,6 +355,7 @@ class FileConfig(BaseModel):
 All SpectralMC configuration classes use Pydantic:
 
 ```python
+# File: documents/engineering/pydantic_patterns.md
 # From src/spectralmc/gbm_trainer.py
 class GbmCVNNPricerConfig(BaseModel):
     """Complete configuration for GBM CVNN pricer."""
@@ -361,6 +383,7 @@ class GbmCVNNPricerConfig(BaseModel):
 Pydantic models validate inputs before expensive operations:
 
 ```python
+# File: documents/engineering/pydantic_patterns.md
 def train_model(config: GbmCVNNPricerConfig) -> TrainedModel:
     """Train model with validated configuration."""
     # Pydantic already validated:
@@ -378,6 +401,7 @@ def train_model(config: GbmCVNNPricerConfig) -> TrainedModel:
 Test validation logic explicitly:
 
 ```python
+# File: documents/engineering/pydantic_patterns.md
 import pytest
 from pydantic import ValidationError
 

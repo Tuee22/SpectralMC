@@ -1,10 +1,22 @@
+# File: documents/engineering/coding_standards.md
 # Coding Standards
+
+**Status**: Authoritative source  
+**Supersedes**: Prior coding standards drafts  
+**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+
+> **Purpose**: SSoT for SpectralMC coding standards covering formatting, typing, and stubs.
+
+## Cross-References
+- [Purity Doctrine](purity_doctrine.md)
+- [Immutability Doctrine](immutability_doctrine.md)
+- [Pydantic Patterns](pydantic_patterns.md)
+- [Testing Requirements](testing_requirements.md)
+- [Documentation Standards](../documentation_standards.md)
 
 ## Overview
 
 SpectralMC enforces strict coding standards to ensure reproducibility, correctness, and maintainability. These standards cover **code formatting**, **type safety**, and **custom type stubs** for third-party libraries.
-
-**Related Standards**: [Purity Doctrine](./purity_doctrine.md), [Immutability Doctrine](./immutability_doctrine.md), [Pydantic Patterns](./pydantic_patterns.md), [Testing Requirements](./testing_requirements.md)
 
 ---
 
@@ -19,6 +31,7 @@ All Python code in SpectralMC must be formatted with **Black 25.1+**. Black is a
 Format all Python code from the project root:
 
 ```bash
+# File: documents/engineering/coding_standards.md
 # Inside Docker container
 docker compose -f docker/docker-compose.yml exec spectralmc black .
 ```
@@ -30,6 +43,7 @@ This command will automatically format all Python files in the project, includin
 To check if files would be reformatted without actually changing them:
 
 ```bash
+# File: documents/engineering/coding_standards.md
 docker compose -f docker/docker-compose.yml exec spectralmc black --check .
 ```
 
@@ -40,6 +54,7 @@ This is useful for CI/CD pipelines to verify that all code is properly formatted
 The Black version and settings are defined in `pyproject.toml`:
 
 ```toml
+# File: documents/engineering/coding_standards.md
 [tool.poetry.group.dev.dependencies]
 black = ">=25.1,<26.0"
 ```
@@ -47,6 +62,7 @@ black = ">=25.1,<26.0"
 Black is configured in `pyproject.toml` with project-specific settings:
 
 ```toml
+# File: documents/engineering/coding_standards.md
 [tool.black]
 line-length = 100
 target-version = ['py312']
@@ -89,6 +105,7 @@ All code must be Black-formatted before committing. This ensures:
 Install pre-commit hooks to automatically format code before each commit:
 
 ```bash
+# File: documents/engineering/coding_standards.md
 # Install pre-commit (one-time setup)
 docker compose -f docker/docker-compose.yml exec spectralmc pip install pre-commit
 
@@ -99,6 +116,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc pre-commit install
 Create `.pre-commit-config.yaml` in the repository root:
 
 ```yaml
+# File: documents/engineering/coding_standards.md
 repos:
   - repo: https://github.com/psf/black
     rev: 25.1.0
@@ -114,6 +132,7 @@ Now Black will automatically format files when you run `git commit`.
 In continuous integration, verify formatting with:
 
 ```bash
+# File: documents/engineering/coding_standards.md
 docker compose -f docker/docker-compose.yml exec spectralmc black --check .
 ```
 
@@ -124,6 +143,7 @@ This command exits with a non-zero code if any files need formatting, failing th
 #### Before Black
 
 ```python
+# File: documents/engineering/coding_standards.md
 def complex_multiply(real_a,imag_a,real_b,imag_b):
     real_result=real_a*real_b-imag_a*imag_b
     imag_result=real_a*imag_b+imag_a*real_b
@@ -133,6 +153,7 @@ def complex_multiply(real_a,imag_a,real_b,imag_b):
 #### After Black
 
 ```python
+# File: documents/engineering/coding_standards.md
 def complex_multiply(real_a, imag_a, real_b, imag_b):
     real_result = real_a * real_b - imag_a * imag_b
     imag_result = real_a * imag_b + imag_a * real_b
@@ -157,6 +178,7 @@ If Black's formatting seems problematic for a specific case, it's usually a sign
 **A: Black does not sort imports.** For import sorting, consider using `isort` with Black-compatible settings:
 
 ```toml
+# File: documents/engineering/coding_standards.md
 [tool.isort]
 profile = "black"
 ```
@@ -182,6 +204,7 @@ The following are **NEVER** allowed in `src/spectralmc/`:
 #### ❌ Forbidden: Function-level Imports
 
 ```python
+# File: documents/engineering/coding_standards.md
 # ❌ INCORRECT - Import inside function
 def process_data(path: str) -> bytes:
     import json  # Forbidden!
@@ -197,6 +220,7 @@ def process_data(path: str) -> bytes:
 #### ❌ Forbidden: Conditional Imports
 
 ```python
+# File: documents/engineering/coding_standards.md
 # ❌ INCORRECT - Import in try/except
 try:
     import optional_library
@@ -214,6 +238,7 @@ import optional_library  # Will crash if not installed - this is correct behavio
 #### ❌ Forbidden: TYPE_CHECKING Guards
 
 ```python
+# File: documents/engineering/coding_standards.md
 # ❌ INCORRECT - TYPE_CHECKING conditional
 from typing import TYPE_CHECKING
 
@@ -264,6 +289,7 @@ The `TYPE_CHECKING` constant from `typing` is specifically forbidden because:
 ### Verification
 
 ```bash
+# File: documents/engineering/coding_standards.md
 # Check for TYPE_CHECKING usage (should find nothing in src/)
 docker compose -f docker/docker-compose.yml exec spectralmc \
   grep -r "TYPE_CHECKING" src/spectralmc/ && echo "FOUND TYPE_CHECKING" || echo "OK"
@@ -296,6 +322,7 @@ SpectralMC enforces **strict static typing** with mypy. All code must pass `mypy
 Type-check the entire codebase from the project root:
 
 ```bash
+# File: documents/engineering/coding_standards.md
 # Inside Docker container
 docker compose -f docker/docker-compose.yml exec spectralmc mypy
 ```
@@ -305,6 +332,7 @@ This command uses the configuration in `pyproject.toml` to check all source code
 **CRITICAL**: Always run mypy from the **repository root** with **no path arguments**:
 
 ```bash
+# File: documents/engineering/coding_standards.md
 # ✅ CORRECT: Run from repo root, no path argument
 docker compose -f docker/docker-compose.yml exec spectralmc mypy
 
@@ -324,6 +352,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc mypy
 mypy is configured with **strict mode** in `pyproject.toml`:
 
 ```toml
+# File: documents/engineering/coding_standards.md
 [tool.mypy]
 mypy_path = "stubs"
 python_version = "3.12"
@@ -351,6 +380,7 @@ The following are **NEVER** allowed in `src/spectralmc/`:
 #### ❌ Forbidden: `Any` Type Annotations
 
 ```python
+# File: documents/engineering/coding_standards.md
 # ❌ INCORRECT - Explicit Any
 from typing import Any
 
@@ -365,6 +395,7 @@ def process_data(data):  # Implicitly Any
 #### ❌ Forbidden: `cast()` Function
 
 ```python
+# File: documents/engineering/coding_standards.md
 # ❌ INCORRECT - Using cast to bypass type checking
 from typing import cast
 
@@ -375,6 +406,7 @@ def get_tensor(data: object) -> torch.Tensor:
 #### ❌ Forbidden: `# type: ignore` Comments
 
 ```python
+# File: documents/engineering/coding_standards.md
 # ❌ INCORRECT - Suppressing type errors
 result = some_function()  # type: ignore
 ```
@@ -396,6 +428,7 @@ SpectralMC's mission is **bit-exact reproducibility**. Type safety is essential 
 Every function and method must have explicit type annotations for **all parameters** and the **return type**:
 
 ```python
+# File: documents/engineering/coding_standards.md
 # ✅ CORRECT - Complete type annotations
 def complex_multiply(
     real_a: float, imag_a: float, real_b: float, imag_b: float
@@ -417,6 +450,7 @@ def complex_multiply(real_a, imag_a, real_b, imag_b):
 All class attributes must be explicitly typed, including those assigned in `__init__`:
 
 ```python
+# File: documents/engineering/coding_standards.md
 # ✅ CORRECT - All attributes typed
 class ComplexLinear(nn.Module):
     real_weight: nn.Parameter
@@ -443,6 +477,7 @@ class ComplexLinear(nn.Module):
 **Note**: Attributes can be annotated at class level (without assignment) OR at assignment site in `__init__`. Both are acceptable:
 
 ```python
+# File: documents/engineering/coding_standards.md
 # Style 1: Class-level annotations
 class MyClass:
     value: int
@@ -461,6 +496,7 @@ class MyClass:
 Use grep to verify that forbidden patterns are not present:
 
 ```bash
+# File: documents/engineering/coding_standards.md
 # Check for type: ignore (should find nothing in src/)
 docker compose -f docker/docker-compose.yml exec spectralmc \
   grep -r "# type: ignore" src/spectralmc/ && echo "FOUND type:ignore" || echo "OK"
@@ -486,6 +522,7 @@ Before committing, verify:
 4. **No explicit `Any`** in `src/spectralmc/`
 
 ```bash
+# File: documents/engineering/coding_standards.md
 # Full validation
 docker compose -f docker/docker-compose.yml exec spectralmc mypy && \
   ! grep -r "# type: ignore" src/spectralmc/ && \
@@ -503,6 +540,7 @@ Type safety is **non-negotiable** for SpectralMC because:
 Type errors can silently break deterministic guarantees:
 
 ```python
+# File: documents/engineering/coding_standards.md
 # Without strict typing, this could silently accept wrong types
 def simulate(seed: int, samples: int) -> np.ndarray:
     ...
@@ -516,6 +554,7 @@ result = simulate(seed=42.5, samples=1000)  # mypy catches this!
 Numerical code with `Any` can produce **wrong results** at runtime:
 
 ```python
+# File: documents/engineering/coding_standards.md
 # Without type hints, numpy array of wrong shape could slip through
 def matmul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     # mypy + stubs ensure shapes are compatible
@@ -527,6 +566,7 @@ def matmul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 Complete types serve as **executable documentation**:
 
 ```python
+# File: documents/engineering/coding_standards.md
 # Type signature documents inputs, outputs, and constraints
 def gbm_path(
     spot: float,
@@ -555,6 +595,7 @@ Strong types enable **confident large-scale changes**:
 Use `| None` (Python 3.10+ union syntax):
 
 ```python
+# File: documents/engineering/coding_standards.md
 # ✅ CORRECT - Python 3.10+ syntax
 def get_bias(model: nn.Module) -> torch.Tensor | None:
     ...
@@ -570,6 +611,7 @@ def get_bias(model: nn.Module) -> Optional[torch.Tensor]:
 Use built-in generics (Python 3.9+):
 
 ```python
+# File: documents/engineering/coding_standards.md
 # ✅ CORRECT - Built-in generics
 def process_batch(data: list[torch.Tensor]) -> dict[str, float]:
     ...
@@ -583,6 +625,7 @@ def process_batch(data: List[torch.Tensor]) -> Dict[str, float]:
 #### TypeVar for Generics
 
 ```python
+# File: documents/engineering/coding_standards.md
 from typing import TypeVar
 
 T = TypeVar("T")
@@ -610,6 +653,7 @@ If mypy reports incompatible types:
 3. Use type narrowing (isinstance checks) if needed
 
 ```python
+# File: documents/engineering/coding_standards.md
 # ✅ CORRECT - Type narrowing via conditional expression (pure)
 def process(value: int | str) -> int:
     return int(value) if isinstance(value, str) else value
@@ -693,6 +737,7 @@ stubs/
 The `mypy_path` in `pyproject.toml` points to `stubs/`:
 
 ```toml
+# File: documents/engineering/coding_standards.md
 [tool.mypy]
 mypy_path = "stubs"
 ```
@@ -710,6 +755,7 @@ Stubs must have **zero occurrences** of:
 - ❌ No `# type: ignore` comments
 
 ```python
+# File: documents/engineering/coding_standards.md
 # ❌ INCORRECT - Contains Any
 from typing import Any
 
@@ -726,6 +772,7 @@ def forward(input: torch.Tensor) -> torch.Tensor: ...
 Include **only the APIs actually used** by SpectralMC. Don't stub the entire library:
 
 ```python
+# File: documents/engineering/coding_standards.md
 # ✅ CORRECT - Only used classes/functions
 class Linear(Module):
     def __init__(self, in_features: int, out_features: int, bias: bool = True) -> None: ...
@@ -743,6 +790,7 @@ class Linear(Module):
 All stubs must include docstrings explaining their purpose and scope:
 
 ```python
+# File: documents/engineering/coding_standards.md
 """
 Strict, project-specific stub for the **top-level** :pymod:`torch` namespace.
 
@@ -759,6 +807,7 @@ Last updated: 2025-01-09
 #### Complete Stub: `stubs/torch/__init__.pyi`
 
 ```python
+# File: documents/engineering/coding_standards.md
 """
 Strict, project‑specific stub for the **top‑level** :pymod:`torch` namespace.
 
@@ -857,6 +906,7 @@ When adding a new third-party dependency to SpectralMC:
 #### Step 1: Create Stub Directory
 
 ```bash
+# File: documents/engineering/coding_standards.md
 mkdir -p stubs/new_library
 touch stubs/new_library/__init__.pyi
 ```
@@ -866,6 +916,7 @@ touch stubs/new_library/__init__.pyi
 Identify which functions/classes you're using:
 
 ```bash
+# File: documents/engineering/coding_standards.md
 # Find all imports of the library
 grep -r "from new_library import" src/spectralmc/
 grep -r "import new_library" src/spectralmc/
@@ -876,6 +927,7 @@ Stub **only those APIs**, not the entire library.
 #### Step 3: Write Type-Pure Stubs
 
 ```python
+# File: documents/engineering/coding_standards.md
 """
 Strict stub for new_library.
 
@@ -897,6 +949,7 @@ class ClassWeUse:
 #### Step 4: Verify with mypy
 
 ```bash
+# File: documents/engineering/coding_standards.md
 docker compose -f docker/docker-compose.yml exec spectralmc mypy
 ```
 
@@ -931,6 +984,7 @@ Update stubs when:
 Stubs are checked by mypy automatically when type-checking `src/` and `tests/`:
 
 ```bash
+# File: documents/engineering/coding_standards.md
 # Stub errors will appear as mypy errors
 docker compose -f docker/docker-compose.yml exec spectralmc mypy
 ```
@@ -942,6 +996,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc mypy
 Use `Protocol` for structural subtyping:
 
 ```python
+# File: documents/engineering/coding_standards.md
 from typing import Protocol
 
 class SupportsTrain(Protocol):
@@ -954,6 +1009,7 @@ class SupportsTrain(Protocol):
 Use `@overload` for functions with multiple signatures:
 
 ```python
+# File: documents/engineering/coding_standards.md
 from typing import overload
 
 @overload
@@ -968,6 +1024,7 @@ def zeros(*args: int | tuple[int, ...], dtype: dtype | None = None) -> Tensor: .
 #### TypeVar for Generics
 
 ```python
+# File: documents/engineering/coding_standards.md
 from typing import TypeVar
 
 T = TypeVar("T")
@@ -1021,6 +1078,7 @@ ADTs represent **sum types** - types that can be one of several variants. In Spe
 **Primary Example: S3 Operations**
 
 ```python
+# File: documents/engineering/coding_standards.md
 from dataclasses import dataclass
 from typing import Literal
 
@@ -1086,6 +1144,7 @@ S3OperationError = (
 Beyond errors, use ADTs to model domain states:
 
 ```python
+# File: documents/engineering/coding_standards.md
 @dataclass(frozen=True)
 class TrainingInProgress:
     kind: Literal["TrainingInProgress"] = "TrainingInProgress"
@@ -1118,6 +1177,7 @@ The `Result[T, E]` type represents operations that can succeed with value `T` or
 **Definition**:
 
 ```python
+# File: documents/engineering/coding_standards.md
 from dataclasses import dataclass
 from typing import TypeVar, Generic
 
@@ -1156,6 +1216,7 @@ type Result[T, E] = Success[T] | Failure[E]
 **S3 Get Object**:
 
 ```python
+# File: documents/engineering/coding_standards.md
 async def get_object_safe(
     client: S3Client, bucket: str, key: str
 ) -> Result[bytes, S3OperationError]:
@@ -1183,6 +1244,7 @@ async def get_object_safe(
 **Model Loading**:
 
 ```python
+# File: documents/engineering/coding_standards.md
 async def load_model_version(
     store: AsyncBlockchainModelStore, version_counter: int
 ) -> Result[ModelSnapshot, LoadError]:
@@ -1229,6 +1291,7 @@ Python 3.10+ `match/case` enables type-safe, exhaustive error handling.
 **Basic Pattern**:
 
 ```python
+# File: documents/engineering/coding_standards.md
 from typing import assert_never
 
 result = await get_object_safe(client, bucket, key)
@@ -1265,6 +1328,7 @@ match result:
 The `assert_never()` function provides **compile-time exhaustiveness checking**:
 
 ```python
+# File: documents/engineering/coding_standards.md
 from typing import Never
 
 def assert_never(value: Never) -> Never:
@@ -1280,6 +1344,7 @@ def assert_never(value: Never) -> Never:
 **Example**:
 
 ```python
+# File: documents/engineering/coding_standards.md
 # If we add a new variant to S3OperationError:
 @dataclass(frozen=True)
 class S3RateLimited:
@@ -1305,6 +1370,7 @@ S3OperationError = (
 Combine Result and ADT pattern matching:
 
 ```python
+# File: documents/engineering/coding_standards.md
 def _find_broken_link(
     versions: list[ModelVersion],
 ) -> ModelVersion | None:
@@ -1366,6 +1432,7 @@ SpectralMC enforces **zero tolerance for exception swallowing**. All exceptions 
 #### ❌ Bare except with pass
 
 ```python
+# File: documents/engineering/coding_standards.md
 try:
     operation()
 except:
@@ -1375,6 +1442,7 @@ except:
 #### ❌ Broad except with default return
 
 ```python
+# File: documents/engineering/coding_standards.md
 try:
     result = operation()
 except Exception:
@@ -1384,6 +1452,7 @@ except Exception:
 #### ❌ Catching and ignoring
 
 ```python
+# File: documents/engineering/coding_standards.md
 try:
     result = operation()
 except SomeError:
@@ -1393,6 +1462,7 @@ except SomeError:
 #### ❌ Catching to return None
 
 ```python
+# File: documents/engineering/coding_standards.md
 def get_value(key: str) -> Value | None:
     try:
         return fetch(key)
@@ -1405,6 +1475,7 @@ def get_value(key: str) -> Value | None:
 #### ✅ Convert to Result type
 
 ```python
+# File: documents/engineering/coding_standards.md
 async def get_object(bucket: str, key: str) -> Result[bytes, S3OperationError]:
     try:
         response = await client.get_object(Bucket=bucket, Key=key)
@@ -1416,6 +1487,7 @@ async def get_object(bucket: str, key: str) -> Result[bytes, S3OperationError]:
 #### ✅ Log and re-raise
 
 ```python
+# File: documents/engineering/coding_standards.md
 try:
     result = operation()
 except SpecificError as e:
@@ -1426,6 +1498,7 @@ except SpecificError as e:
 #### ✅ Catch specific exceptions with specific handling
 
 ```python
+# File: documents/engineering/coding_standards.md
 try:
     await store._s3_client.create_bucket(Bucket=bucket_name)
 except botocore.exceptions.ClientError as e:
@@ -1440,6 +1513,7 @@ except botocore.exceptions.ClientError as e:
 #### ✅ Transform and re-raise with context
 
 ```python
+# File: documents/engineering/coding_standards.md
 try:
     result = low_level_operation()
 except LowLevelError as e:
@@ -1456,6 +1530,7 @@ In test setup/teardown code ONLY, specific exception handlers are acceptable whe
 Example (acceptable):
 
 ```python
+# File: documents/engineering/coding_standards.md
 # In test teardown - cleanup should not fail the test
 try:
     await store._s3_client.delete_bucket(Bucket=bucket_name)
@@ -1473,6 +1548,7 @@ except botocore.exceptions.ClientError:
 For cases where you need to convert Result to exception (e.g., at system boundaries):
 
 ```python
+# File: documents/engineering/coding_standards.md
 from typing import NoReturn
 
 def _raise(error: E) -> NoReturn:
@@ -1523,6 +1599,7 @@ async def cmd_verify(bucket: str) -> int:
 Transform errors between layers explicitly:
 
 ```python
+# File: documents/engineering/coding_standards.md
 @dataclass(frozen=True)
 class VerificationError:
     """High-level verification error."""
@@ -1565,6 +1642,7 @@ class VerificationError:
 **❌ NEVER use these patterns**:
 
 ```python
+# File: documents/engineering/coding_standards.md
 # ❌ Exception-based error handling for expected errors
 def load_model(version: int) -> ModelSnapshot:
     if version not in available_versions:
@@ -1604,6 +1682,7 @@ class Operation:
 **✅ ALWAYS use these patterns**:
 
 ```python
+# File: documents/engineering/coding_standards.md
 # ✅ Result type for expected errors (pure - conditional expression)
 def load_model(version: int) -> Result[ModelSnapshot, LoadError]:
     return (
@@ -1657,6 +1736,7 @@ See [Purity Doctrine](./purity_doctrine.md) for the complete purity standards in
 ### Testing Result Types
 
 ```python
+# File: documents/engineering/coding_standards.md
 async def test_get_object_success():
     """Test successful S3 get returns Success."""
     result = await get_object_safe(mock_client, "my-bucket", "my-key")
@@ -1686,6 +1766,7 @@ async def test_get_object_not_found():
 Verify pattern matching is exhaustive:
 
 ```python
+# File: documents/engineering/coding_standards.md
 def test_pattern_matching_exhaustiveness():
     """Verify all S3OperationError variants are handled."""
     # This test should fail type checking if new variant added
@@ -1737,6 +1818,7 @@ For advanced functional programming patterns beyond Result types and basic ADTs:
 
 **Example**:
 ```python
+# File: documents/engineering/coding_standards.md
 # ❌ Silent failure
 try:
     result = monte_carlo_simulation(params)
@@ -1764,6 +1846,7 @@ except NumericalInstabilityError as e:
 
 **Example**:
 ```python
+# File: documents/engineering/coding_standards.md
 # ❌ False success (also has for loop - impure)
 def train_model(model, data):
     for epoch in range(100):
@@ -1862,6 +1945,7 @@ Only third-party library internals may use deprecated code if:
 
 **Example** (current exceptions):
 ```toml
+# File: documents/engineering/coding_standards.md
 [tool.pytest.ini_options]
 filterwarnings = [
     # Botocore datetime.utcnow() - AWS SDK internal (boto/botocore#3201)
@@ -1876,6 +1960,7 @@ filterwarnings = [
 Run these checks on the 1st of each month:
 
 ```bash
+# File: documents/engineering/coding_standards.md
 # 1. Check for dependency updates
 docker compose -f docker/docker-compose.yml exec spectralmc poetry show --outdated
 
@@ -1908,6 +1993,7 @@ Block merge if ANY of these are present:
 
 **DLPack API (COMPLETED)**:
 ```python
+# File: documents/engineering/coding_standards.md
 # ❌ DEPRECATED (removed in CuPy 14+)
 capsule = cupy_array.toDlpack()
 torch_tensor = torch.utils.dlpack.from_dlpack(capsule)
@@ -1918,6 +2004,7 @@ torch_tensor = torch.from_dlpack(cupy_array)
 
 **NumPy Type Aliases (already correct)**:
 ```python
+# File: documents/engineering/coding_standards.md
 # ❌ REMOVED in NumPy 2.0
 Type[np.float]    # Don't use
 Type[np.int]      # Don't use
@@ -1940,6 +2027,7 @@ When updating major dependencies (PyTorch, NumPy, CuPy):
 
 2. **Test in isolation**
    ```bash
+   # File: documents/engineering/coding_standards.md
    git checkout -b deps/pytorch-upgrade
    poetry update torch  # ONE dependency at a time
    docker compose -f docker/docker-compose.yml exec spectralmc \
@@ -1948,6 +2036,7 @@ When updating major dependencies (PyTorch, NumPy, CuPy):
 
 3. **Verify no new deprecations**
    ```bash
+   # File: documents/engineering/coding_standards.md
    docker compose -f docker/docker-compose.yml exec spectralmc \
      pytest tests/ -W error::DeprecationWarning
    ```
@@ -1984,6 +2073,7 @@ SpectralMC's coding standards ensure:
 Before committing code:
 
 ```bash
+# File: documents/engineering/coding_standards.md
 # Inside Docker container
 docker compose -f docker/docker-compose.yml exec spectralmc black .
 docker compose -f docker/docker-compose.yml exec spectralmc mypy

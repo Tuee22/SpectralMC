@@ -1,10 +1,21 @@
+# File: documents/engineering/cpu_gpu_compute_policy.md
 # CPU/GPU Compute Policy
+
+**Status**: Authoritative source  
+**Supersedes**: Prior CPU/GPU compute policy drafts  
+**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+
+> **Purpose**: Define device placement rules for deterministic CPU setup followed by GPU execution.
+
+## Cross-References
+- [PyTorch Facade](pytorch_facade.md)
+- [Coding Standards](coding_standards.md)
+- [Testing Requirements](testing_requirements.md)
+- [Reproducibility Proofs](reproducibility_proofs.md)
 
 ## Overview
 
 SpectralMC uses a **two-phase architecture**: deterministic CPU initialization → GPU compute. This policy ensures bit-exact reproducibility while maintaining GPU performance.
-
-**Related Standards**: [PyTorch Facade](pytorch_facade.md), [Coding Standards](coding_standards.md), [Testing Requirements](testing_requirements.md)
 
 ---
 
@@ -15,6 +26,7 @@ SpectralMC uses a **two-phase architecture**: deterministic CPU initialization �
 Models are built on CPU with deterministic Sobol-based weight initialization:
 
 ```python
+# File: documents/engineering/cpu_gpu_compute_policy.md
 from spectralmc.cvnn_factory import build_model
 from spectralmc.models.torch import Device, default_device, default_dtype
 import torch
@@ -34,6 +46,7 @@ assert next(model.parameters()).device.type == "cpu"
 After initialization, transfer model to GPU for all training and inference:
 
 ```python
+# File: documents/engineering/cpu_gpu_compute_policy.md
 # Transfer to GPU
 gpu_dev = Device.cuda.to_torch()
 model = model.to(gpu_dev)
@@ -88,6 +101,7 @@ CPU compute is **acceptable** for these non-computational operations:
 **Pattern**: `.cpu()` before serialization, `.to(device)` after loading
 
 ```python
+# File: documents/engineering/cpu_gpu_compute_policy.md
 # Checkpoint saving (CPU transfer acceptable)
 def save_checkpoint(model: nn.Module, path: str) -> None:
     """Save model checkpoint to disk."""
@@ -128,6 +142,7 @@ All **computational** operations must run on GPU:
 **Enforcement**: Raises `RuntimeError` if model not on CUDA device
 
 ```python
+# File: documents/engineering/cpu_gpu_compute_policy.md
 # In gbm_trainer.py
 def train(self, config: TrainingConfig) -> None:
     """Train model (GPU required)."""
@@ -147,6 +162,7 @@ def train(self, config: TrainingConfig) -> None:
 **Validation**: Debug-mode warnings if CPU tensors detected
 
 ```python
+# File: documents/engineering/cpu_gpu_compute_policy.md
 def forward(self, real: Tensor, imag: Tensor) -> tuple[Tensor, Tensor]:
     """Forward pass (GPU expected)."""
     if __debug__:
@@ -174,6 +190,7 @@ def forward(self, real: Tensor, imag: Tensor) -> tuple[Tensor, Tensor]:
 Tests must use GPU by default and fail explicitly if CUDA unavailable:
 
 ```python
+# File: documents/engineering/cpu_gpu_compute_policy.md
 # tests/test_cvnn.py - CORRECT
 import pytest
 import torch
@@ -200,6 +217,7 @@ def test_complex_linear() -> None:
 **Avoid**: Conditional device fallback (silent CPU execution)
 
 ```python
+# File: documents/engineering/cpu_gpu_compute_policy.md
 # ❌ WRONG - Silent CPU fallback
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -212,6 +230,7 @@ device = torch.device("cuda:0")  # Fails if CUDA unavailable
 When CPU testing is intentional, explicitly specify device:
 
 ```python
+# File: documents/engineering/cpu_gpu_compute_policy.md
 # Intentional CPU test - CORRECT
 @pytest.mark.cpu
 def test_cpu_serialization() -> None:
@@ -231,6 +250,7 @@ def test_cpu_serialization() -> None:
 Use `__debug__` guards for zero-overhead production validation:
 
 ```python
+# File: documents/engineering/cpu_gpu_compute_policy.md
 def _validate_device(tensor: torch.Tensor, name: str) -> None:
     """Validate tensor is on CUDA (debug mode only)."""
     if tensor.device.type != "cuda":
@@ -288,6 +308,7 @@ If you suspect unintended CPU compute:
 ### 1. Check Test Device Defaults
 
 ```bash
+# File: documents/engineering/cpu_gpu_compute_policy.md
 grep "CPU_DEV" tests/*.py  # Should find nothing
 
 # Should be GPU_DEV instead
@@ -297,6 +318,7 @@ grep "GPU_DEV" tests/*.py
 ### 2. Enable Debug Mode Validation
 
 ```bash
+# File: documents/engineering/cpu_gpu_compute_policy.md
 # Run without -O flag (enables __debug__ checks)
 docker compose -f docker/docker-compose.yml exec spectralmc \
   python -m pytest tests/test_cvnn.py -v
@@ -308,6 +330,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc \
 ### 3. Verify Model Device After Factory
 
 ```python
+# File: documents/engineering/cpu_gpu_compute_policy.md
 from spectralmc.cvnn_factory import build_model
 import torch
 
@@ -321,6 +344,7 @@ print(f"Model device after transfer: {next(model.parameters()).device}")  # cuda
 ### 4. Check for Conditional Fallbacks
 
 ```bash
+# File: documents/engineering/cpu_gpu_compute_policy.md
 # Search for conditional device logic
 grep -r 'if torch.cuda.is_available()' src/ tests/
 

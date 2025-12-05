@@ -1,4 +1,12 @@
+# File: documents/product/notebook_content_summary.md
 # Notebook Content Migration
+
+**Status**: Reference only  
+**Supersedes**: Removed exploratory notebooks  
+**Referenced by**: documents/product/index.md
+
+> **Purpose**: Preserve durable guidance from removed notebooks without reintroducing notebook artifacts.
+> **📖 Authoritative Reference**: [../documentation_standards.md](../documentation_standards.md)
 
 All exploratory Jupyter notebooks have been removed. The essential guidance below captures the durable content previously stored in notebooks.
 
@@ -16,4 +24,3 @@ All exploratory Jupyter notebooks have been removed. The essential guidance belo
 
 ## Removed Scratch Notebooks
 - `async_normals.ipynb`, `bs_sampling_test.ipynb`, `cvnn.ipynb`, `discrete_fourier_transform.ipynb`, `error_duplication.ipynb`, `error_investigation.ipynb`, `gbm.ipynb`, `sobol_sampler.ipynb`, `test_gbm_train.ipynb` contained exploratory code or partial experiments now superseded by the summaries above and existing white papers in `documents/`.
-

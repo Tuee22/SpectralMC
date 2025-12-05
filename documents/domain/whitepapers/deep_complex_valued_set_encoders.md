@@ -1,5 +1,12 @@
+# File: documents/domain/whitepapers/deep_complex_valued_set_encoders.md
+# Deep Complex-Valued Set Encoders for Dupire Local Volatility Option Pricing
 
-# Deep Complex‑Valued Set Encoders for Dupire Local Volatility Option Pricing
+**Status**: Reference only  
+**Supersedes**: Prior set encoder explorations  
+**Referenced by**: documents/domain/index.md
+
+> **Purpose**: Survey complex-valued set encoder approaches for variable-length local volatility surfaces.
+> **📖 Authoritative Reference**: [../../documentation_standards.md](../../documentation_standards.md)
 
 ---
 
@@ -42,6 +49,7 @@ $$\varphi(u) = \mathbb{E}\big[e^{i u X_T}\big]$$
 so we keep tensors **complex throughout** and use the *modReLU* activation:
 
 ```python
+# File: examples/cvnn/modrelu.py
 def modrelu(z, b):
     r = torch.abs(z)
     return torch.relu(r + b) * torch.exp(1j * torch.angle(z))
@@ -70,6 +78,7 @@ $$x_i = \sigma^{\text{loc}}_i \;\otimes\; \text{RFF}(m_i,T_i) \;\in\; \mathbb{C}
 
 ### 2.3  Minimal PyTorch Snippet
 ```python
+# File: examples/cvnn/complex_rff.py
 class ComplexRFF(nn.Module):
     def __init__(self, d=12, base=1.0):
         super().__init__()
@@ -114,10 +123,12 @@ give explicit pair interactions; Pooling‑by‑Multi‑Head Attention extracts 
 ## 4  End‑to‑End PyTorch Walk‑through
 
 ```python
+# File: examples/cvnn/complex_pointnet_stub.py
 # ComplexLinear, ModReLU, ComplexPointNet, CharFuncHead defined as in text …
 ```
 
 ```python
+# File: examples/cvnn/complex_pointnet_training.py
 def fake_batch(B=16, N=40, D=12):
     m   = torch.randn(B, N)
     T   = 2.0 * torch.rand(B, N)
@@ -153,4 +164,3 @@ for step in range(200):
 <a name="conclusion"></a>
 ## 6  Conclusion
 Fully complex, permutation‑invariant encoders built on **PointNet** or **Set Transformer**, combined with **Random Fourier Features** and *modReLU*, offer an elegant path to neural Dupire pricers that output characteristic functions.
-

@@ -1,10 +1,20 @@
+# File: documents/engineering/docker_build_philosophy.md
 # Docker Build Philosophy
+
+**Status**: Authoritative source  
+**Supersedes**: Prior docker build philosophy drafts  
+**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+
+> **Purpose**: Define the dual-mode Docker build approach for SpectralMC across GPU generations.
+
+## Cross-References
+- [GPU Build Guide](gpu_build.md)
+- [Coding Standards](coding_standards.md)
+- [Documentation Standards](../documentation_standards.md)
 
 ## Overview
 
 SpectralMC uses a **dual-mode Docker build strategy** to support both modern GPUs (binary packages) and legacy Maxwell GPUs like the GTX 970 (source builds). This document explains the build philosophy, Poetry-first dependency management, and layer optimization strategies.
-
-**Related Standards**: [Coding Standards](coding_standards.md), [GPU Build Guide](gpu_build.md)
 
 ---
 
@@ -29,6 +39,7 @@ SpectralMC supports two build modes controlled by the `BUILD_FROM_SOURCE` enviro
 **When to use**: Modern GPUs with compute capability ≥ 6.0 (Pascal, Volta, Turing, Ampere, Ada, Hopper, Blackwell)
 
 ```bash
+# File: documents/engineering/docker_build_philosophy.md
 # Standard build (fast, pre-compiled packages)
 cd docker && docker compose up --build -d
 ```
@@ -47,6 +58,7 @@ cd docker && docker compose up --build -d
 **When to use**: Legacy Maxwell GPUs with compute capability 5.2 (GTX 970, GTX 980)
 
 ```bash
+# File: documents/engineering/docker_build_philosophy.md
 # Source build for GTX 970 (sm_52 support)
 BUILD_FROM_SOURCE=true docker compose up --build -d
 ```
@@ -84,6 +96,7 @@ SpectralMC uses **Poetry** as the single source of truth for all Python dependen
 There is exactly **one** pip command in SpectralMC Dockerfiles:
 
 ```dockerfile
+# File: documents/engineering/docker_build_philosophy.md
 RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 && \
     python -m pip install --upgrade pip setuptools wheel poetry
 ```
@@ -100,6 +113,7 @@ After this line, **only Poetry commands** are used for all dependencies.
 Poetry's virtual environment behavior is controlled by `poetry.toml` at the repository root:
 
 ```toml
+# File: documents/engineering/docker_build_philosophy.md
 [virtualenvs]
 create = false
 ```
@@ -130,6 +144,7 @@ SpectralMC **does NOT copy `poetry.lock`** into Docker images. The lockfile is r
 ### Configuration
 
 ```dockerfile
+# File: documents/engineering/docker_build_philosophy.md
 # ✅ CORRECT - Only copy pyproject.toml
 COPY pyproject.toml ./
 
@@ -147,6 +162,7 @@ poetry.lock
 
 **`.gitignore`**:
 ```python
+# File: documents/engineering/docker_build_philosophy.md
 # poetry
 #   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
 #   This is especially recommended for binary packages to ensure reproducibility, and is more
@@ -174,6 +190,7 @@ The `BUILD_FROM_SOURCE` environment variable controls which build path is taken.
 
 **In docker-compose.yml**:
 ```yaml
+# File: documents/engineering/docker_build_philosophy.md
 services:
   spectralmc:
     build:
@@ -183,6 +200,7 @@ services:
 
 **On command line**:
 ```bash
+# File: documents/engineering/docker_build_philosophy.md
 # Binary build (default)
 docker compose -f docker/docker-compose.yml up --build -d
 
@@ -200,6 +218,7 @@ SpectralMC uses **separate Dockerfiles** for binary and source builds:
 The `docker-compose.yml` file uses shell parameter expansion to select the correct Dockerfile:
 
 ```yaml
+# File: documents/engineering/docker_build_philosophy.md
 spectralmc:
   build:
     dockerfile: docker/${BUILD_FROM_SOURCE:+Dockerfile.source}${BUILD_FROM_SOURCE:-Dockerfile}
@@ -344,6 +363,7 @@ This layout ensures the costly compile step is cached independently, and the pos
 ### Want to force rebuild from scratch
 
 ```bash
+# File: documents/engineering/docker_build_philosophy.md
 # Clear Docker build cache
 docker builder prune -a
 

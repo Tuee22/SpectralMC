@@ -1,4 +1,12 @@
+# File: documents/product/deployment.md
 # SpectralMC Blockchain Storage - Production Deployment Guide
+
+**Status**: Reference only  
+**Supersedes**: Prior blockchain storage deployment guides  
+**Referenced by**: documents/product/index.md; documents/testing_architecture.md
+
+> **Purpose**: Provide deployment guidance for SpectralMC blockchain storage across AWS S3 and MinIO environments.
+> **📖 Authoritative Reference**: [../engineering/blockchain_storage.md](../engineering/blockchain_storage.md)
 
 This guide covers production deployment of SpectralMC's blockchain model storage system.
 
@@ -22,14 +30,14 @@ SpectralMC blockchain storage uses S3-compatible object storage for model versio
 
 ```mermaid
 flowchart TB
-  TrainingNode[Training Node - GPU Server]
-  S3Bucket[S3 / MinIO Bucket - Model Versions]
-  InferenceClient[Inference Client - Pinned/Tracking Modes]
-  InferenceNode[Inference Node - CPU/GPU]
+  TrainingNode[Training Node GPU]
+  ModelBucket[Model Bucket]
+  InferenceClient[Inference Client]
+  InferenceNode[Inference Node]
 
-  TrainingNode -->|Commit Checkpoint| S3Bucket
-  S3Bucket -->|Load Version| InferenceClient
-  InferenceClient -->|Serve Predictions| InferenceNode
+  TrainingNode -->|Commit| ModelBucket
+  ModelBucket -->|Load Version| InferenceClient
+  InferenceClient -->|Serve| InferenceNode
 ```
 
 **Key Components**:
@@ -46,6 +54,7 @@ flowchart TB
 
 **1. Create S3 Bucket**:
 ```bash
+# File: scripts/deployment/create_bucket.sh
 aws s3api create-bucket \
     --bucket spectralmc-models-prod \
     --region us-west-2 \
@@ -54,6 +63,7 @@ aws s3api create-bucket \
 
 **2. Enable Versioning** (optional, for additional safety):
 ```bash
+# File: scripts/deployment/enable_versioning.sh
 aws s3api put-bucket-versioning \
     --bucket spectralmc-models-prod \
     --versioning-configuration Status=Enabled
@@ -61,6 +71,7 @@ aws s3api put-bucket-versioning \
 
 **3. Configure Lifecycle Policy** (cost optimization):
 ```json
+// File: lifecycle-policy.json
 {
   "Rules": [
     {
@@ -83,6 +94,7 @@ aws s3api put-bucket-versioning \
 
 Apply policy:
 ```bash
+# File: scripts/deployment/apply_lifecycle_policy.sh
 aws s3api put-bucket-lifecycle-configuration \
     --bucket spectralmc-models-prod \
     --lifecycle-configuration file://lifecycle-policy.json
@@ -90,6 +102,7 @@ aws s3api put-bucket-lifecycle-configuration \
 
 **4. Enable Server-Side Encryption**:
 ```bash
+# File: scripts/deployment/enable_server_side_encryption.sh
 aws s3api put-bucket-encryption \
     --bucket spectralmc-models-prod \
     --server-side-encryption-configuration '{
@@ -123,20 +136,20 @@ flowchart TB
   GCPolicy[GC Policy - Read/Delete]
   AdminPolicy[Admin Policy - Full Access]
 
-  Start -->|Runs training jobs| Training
-  Start -->|Serves predictions| Inference
-  Start -->|Cleanup old versions| GC
-  Start -->|Management tasks| Admin
+  Start -->|runs training jobs| Training
+  Start -->|serves predictions| Inference
+  Start -->|cleanup old versions| GC
+  Start -->|management tasks| Admin
 
-  Training --> TrainingPolicy
-  Inference --> InferencePolicy
-  GC --> GCPolicy
-  Admin --> AdminPolicy
+  Training -->|select policy| TrainingPolicy
+  Inference -->|select policy| InferencePolicy
+  GC -->|select policy| GCPolicy
+  Admin -->|select policy| AdminPolicy
 
-  TrainingPolicy --> TrainingPerms[ListBucket - GetObject - PutObject - DeleteObject]
-  InferencePolicy --> InferencePerms[ListBucket - GetObject only]
-  GCPolicy --> GCPerms[ListBucket - GetObject - DeleteObject]
-  AdminPolicy --> AdminPerms[Full S3 permissions]
+  TrainingPolicy -->|apply permissions| TrainingPerms[ListBucket - GetObject - PutObject - DeleteObject]
+  InferencePolicy -->|apply permissions| InferencePerms[ListBucket - GetObject only]
+  GCPolicy -->|apply permissions| GCPerms[ListBucket - GetObject - DeleteObject]
+  AdminPolicy -->|apply permissions| AdminPerms[Full S3 permissions]
 ```
 
 **Policy Summary**:
@@ -152,6 +165,7 @@ flowchart TB
 
 **Training Node Policy** (read/write access):
 ```json
+// File: iam/training_node_policy.json
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -174,6 +188,7 @@ flowchart TB
 
 **Inference Node Policy** (read-only access):
 ```json
+// File: iam/inference_node_policy.json
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -194,6 +209,7 @@ flowchart TB
 
 **Garbage Collection Policy** (delete access):
 ```json
+// File: iam/gc_policy.json
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -217,6 +233,7 @@ flowchart TB
 
 **Option 1: IAM Roles** (Recommended for EC2/ECS):
 ```python
+# File: examples/deployment/iam_role_usage.py
 # No explicit credentials needed - uses instance role
 from spectralmc.storage import AsyncBlockchainModelStore
 
@@ -227,6 +244,7 @@ async with AsyncBlockchainModelStore("spectralmc-models-prod") as store:
 
 **Option 2: AWS Secrets Manager**:
 ```bash
+# File: scripts/deployment/store_s3_credentials.sh
 # Store credentials in Secrets Manager
 aws secretsmanager create-secret \
     --name spectralmc/s3-credentials \
@@ -237,6 +255,7 @@ aws secretsmanager create-secret \
 ```
 
 ```python
+# File: examples/deployment/load_s3_credentials.py
 import boto3
 import json
 
@@ -261,30 +280,30 @@ Choose the right storage backend for your deployment:
 
 ```mermaid
 flowchart TB
-  Start{Deployment Type?}
-  Cloud[Cloud Deployment]
-  OnPrem[On-Premise or Private Cloud]
+  Start{Deployment Type}
+  Cloud[Cloud]
+  OnPrem[On Prem]
 
-  CloudProvider{Cloud Provider?}
-  AWS[AWS Infrastructure]
-  OtherCloud[GCP, Azure, or Other]
+  CloudProvider{Cloud Provider}
+  AWS[AWS]
+  OtherCloud[Other Cloud]
 
-  UseS3[Use AWS S3]
-  UseMinIO[Use MinIO S3-Compatible]
+  UseS3[Use S3]
+  UseMinIO[Use MinIO]
 
-  Start -->|Cloud-based| Cloud
-  Start -->|On-premise or air-gapped| OnPrem
+  Start -->|cloud| Cloud
+  Start -->|premises| OnPrem
 
-  Cloud --> CloudProvider
-  CloudProvider -->|AWS| AWS
-  CloudProvider -->|Non-AWS| OtherCloud
+  Cloud -->|choose provider| CloudProvider
+  CloudProvider -->|aws| AWS
+  CloudProvider -->|other cloud| OtherCloud
 
-  AWS --> UseS3
-  OtherCloud --> UseMinIO
-  OnPrem --> UseMinIO
+  AWS -->|select backend| UseS3
+  OtherCloud -->|select backend| UseMinIO
+  OnPrem -->|select backend| UseMinIO
 
-  UseS3 --> S3Config[endpoint_url=null - Use AWS SDK default]
-  UseMinIO --> MinIOConfig[endpoint_url=http://minio:9000]
+  UseS3 -->|configure endpoint| S3Config[S3 Endpoint]
+  UseMinIO -->|configure endpoint| MinIOConfig[MinIO Endpoint]
 ```
 
 **AWS S3 Advantages**:
@@ -304,7 +323,8 @@ flowchart TB
 ### Bucket Naming Convention
 
 Use separate buckets per environment:
-```
+```text
+# File: config/bucket_names.txt
 spectralmc-models-dev        # Development
 spectralmc-models-staging    # Staging
 spectralmc-models-prod       # Production
@@ -314,6 +334,7 @@ spectralmc-models-prod       # Production
 
 **Development** (`config/dev.yaml`):
 ```yaml
+# File: config/dev.yaml
 storage:
   bucket_name: spectralmc-models-dev
   region: us-west-2
@@ -330,6 +351,7 @@ garbage_collection:
 
 **Production** (`config/prod.yaml`):
 ```yaml
+# File: config/prod.yaml
 storage:
   bucket_name: spectralmc-models-prod
   region: us-west-2
@@ -354,6 +376,7 @@ For on-premise or private cloud deployments, use MinIO:
 ### Docker Compose (High Availability)
 
 ```yaml
+# File: docker/minio/docker-compose.yaml
 version: '3.8'
 
 services:
@@ -424,11 +447,13 @@ volumes:
 
 **Enable Erasure Coding** (data redundancy):
 ```bash
+# File: scripts/deployment/enable_erasure_coding.sh
 mc admin config set myminio/ storage_class standard=EC:4
 ```
 
 **Configure Replication** (multi-site):
 ```bash
+# File: scripts/deployment/configure_replication.sh
 mc admin bucket remote add myminio/spectralmc-models-prod \
     https://dr-site.example.com/spectralmc-models-prod \
     --service replication
@@ -460,6 +485,7 @@ mc admin bucket remote add myminio/spectralmc-models-prod \
 
 Enable CloudWatch logging for S3:
 ```bash
+# File: scripts/deployment/enable_bucket_logging.sh
 aws s3api put-bucket-logging \
     --bucket spectralmc-models-prod \
     --bucket-logging-status file://logging.json
@@ -467,6 +493,7 @@ aws s3api put-bucket-logging \
 
 `logging.json`:
 ```json
+// File: logging.json
 {
   "LoggingEnabled": {
     "TargetBucket": "spectralmc-logs",
@@ -481,6 +508,7 @@ aws s3api put-bucket-logging \
 
 1. **High Storage Growth**:
 ```bash
+# File: scripts/deployment/alarm_high_storage_growth.sh
 aws cloudwatch put-metric-alarm \
     --alarm-name spectralmc-high-storage-growth \
     --alarm-description "Alert when storage grows >10GB/day" \
@@ -504,6 +532,7 @@ aws cloudwatch put-metric-alarm \
 
 **1. S3 Cross-Region Replication**:
 ```bash
+# File: scripts/deployment/enable_replication.sh
 aws s3api put-bucket-replication \
     --bucket spectralmc-models-prod \
     --replication-configuration file://replication.json
@@ -511,6 +540,7 @@ aws s3api put-bucket-replication \
 
 `replication.json`:
 ```json
+// File: replication.json
 {
   "Role": "arn:aws:iam::123456789012:role/s3-replication-role",
   "Rules": [{
@@ -529,11 +559,13 @@ aws s3api put-bucket-replication \
 
 **2. Export to Glacier** (long-term):
 ```bash
+# File: scripts/deployment/export_to_glacier.sh
 # Use lifecycle policy (see S3 Configuration section)
 ```
 
 **3. Local Backup** (critical versions):
 ```bash
+# File: scripts/deployment/export_local_backup.sh
 # Export specific versions
 python -m spectralmc.storage export spectralmc-models-prod \
     --versions 42,50,60 \
@@ -546,32 +578,32 @@ python -m spectralmc.storage export spectralmc-models-prod \
 
 ```mermaid
 flowchart TB
-  Incident[Incident Detected - Bucket Missing]
-  Assess{Backup Available?}
-  NoBackup[CRITICAL - No backup - Data loss]
-  HasBackup[Cross-region replica exists]
+  Incident[Bucket Missing]
+  Assess{Backup Available}
+  NoBackup[No Backup Data Loss]
+  HasBackup[Replica Available]
 
-  Restore[1. Restore from DR bucket]
-  Verify[2. Verify chain integrity]
-  CheckIntegrity{Chain Valid?}
-  Corrupted[3a. Identify corruption point]
-  Valid[3b. Chain verified OK]
-  UpdateClients[4. Update inference clients]
-  Monitor[5. Monitor for 24 hours]
+  Restore[Restore From DR]
+  Verify[Verify Chain Integrity]
+  CheckIntegrity{Chain Valid}
+  Corrupted[Identify Corruption]
+  Valid[Chain Verified]
+  UpdateClients[Update Inference Clients]
+  Monitor[Monitor 24 Hours]
   Complete[Recovery Complete]
 
-  Incident --> Assess
-  Assess -->|No backup| NoBackup
-  Assess -->|Replica available| HasBackup
-  HasBackup --> Restore
-  Restore --> Verify
-  Verify --> CheckIntegrity
-  CheckIntegrity -->|Corruption found| Corrupted
-  CheckIntegrity -->|All valid| Valid
-  Corrupted --> UpdateClients
-  Valid --> UpdateClients
-  UpdateClients --> Monitor
-  Monitor --> Complete
+  Incident -->|triage| Assess
+  Assess -->|no backup| NoBackup
+  Assess -->|backup exists| HasBackup
+  HasBackup -->|restore data| Restore
+  Restore -->|verify| Verify
+  Verify -->|validate chain| CheckIntegrity
+  CheckIntegrity -->|invalid| Corrupted
+  CheckIntegrity -->|valid| Valid
+  Corrupted -->|notify clients| UpdateClients
+  Valid -->|notify clients| UpdateClients
+  UpdateClients -->|watch| Monitor
+  Monitor -->|close| Complete
 ```
 
 **Recovery Steps**:
@@ -580,11 +612,13 @@ flowchart TB
 
 1. **Restore from cross-region replica**:
 ```bash
+# File: scripts/deployment/restore_from_replica.sh
 aws s3 sync s3://spectralmc-models-dr s3://spectralmc-models-prod
 ```
 
 2. **Verify chain integrity**:
 ```bash
+# File: scripts/deployment/verify_restored_chain.sh
 python -m spectralmc.storage verify spectralmc-models-prod --detailed
 ```
 
@@ -615,33 +649,33 @@ Choose GC policy based on cost vs safety tradeoffs:
 
 ```mermaid
 flowchart TB
-  Start{Storage Cost Priority?}
-  LowCost[Low cost priority]
-  Balance[Balanced approach]
-  HighSafety[High safety priority]
+  Start{Storage Cost Priority}
+  LowCost[Low Cost]
+  Balance[Balanced]
+  HighSafety[High Safety]
 
-  CheckExpType{Experiment Type?}
-  Production[Production models only]
-  Research[Research and experiments]
+  CheckExpType{Experiment Type}
+  Production[Production Only]
+  Research[Research and Experiments]
 
-  Aggressive[Aggressive GC - keep_versions=5]
-  Moderate[Moderate GC - keep_versions=20]
-  Conservative[Conservative GC - keep_versions=50]
+  Aggressive[Aggressive keep_versions=5]
+  Moderate[Moderate keep_versions=20]
+  Conservative[Conservative keep_versions=50]
 
-  Start -->|Minimize storage cost| LowCost
-  Start -->|Balance cost and safety| Balance
-  Start -->|Maximize version history| HighSafety
+  Start -->|minimize cost| LowCost
+  Start -->|balance| Balance
+  Start -->|maximize history| HighSafety
 
-  LowCost --> CheckExpType
-  CheckExpType -->|Production only| Aggressive
-  CheckExpType -->|Mix of both| Moderate
+  LowCost -->|choose workload| CheckExpType
+  CheckExpType -->|production| Aggressive
+  CheckExpType -->|mixed| Moderate
 
-  Balance --> Moderate
-  HighSafety --> Conservative
+  Balance -->|standard policy| Moderate
+  HighSafety -->|protect history| Conservative
 
-  Aggressive --> AggressiveConfig[keep_min=3 - protect_tags=prod only]
-  Moderate --> ModerateConfig[keep_min=5 - protect_tags=releases]
-  Conservative --> ConservativeConfig[keep_min=10 - protect_tags=all]
+  Aggressive -->|apply config| AggressiveConfig[keep_min=3 protect_tags=prod]
+  Moderate -->|apply config| ModerateConfig[keep_min=5 protect_tags=releases]
+  Conservative -->|apply config| ConservativeConfig[keep_min=10 protect_tags=all]
 ```
 
 **Policy Comparison**:
@@ -654,6 +688,7 @@ flowchart TB
 
 **Aggressive** (low storage cost, higher risk):
 ```yaml
+# File: config/gc/aggressive.yaml
 keep_versions: 5
 keep_min_versions: 3
 protect_tags: [latest_production]
@@ -661,6 +696,7 @@ protect_tags: [latest_production]
 
 **Conservative** (higher storage cost, lower risk):
 ```yaml
+# File: config/gc/conservative.yaml
 keep_versions: 50
 keep_min_versions: 10
 protect_tags: [all_production_releases]
@@ -697,6 +733,7 @@ protect_tags: [all_production_releases]
 ### Debug Commands
 
 ```bash
+# File: scripts/deployment/debug_commands.sh
 # Verify chain integrity
 python -m spectralmc.storage verify my-bucket --detailed
 

@@ -1,4 +1,12 @@
+# File: documents/domain/index.md
 # Domain Knowledge
+
+**Status**: Reference only  
+**Supersedes**: None  
+**Referenced by**: documents/README.md
+
+> **Purpose**: Index for SpectralMC domain and research whitepapers.
+> **📖 Authoritative Reference**: [../documentation_standards.md](../documentation_standards.md)
 
 ## Overview
 

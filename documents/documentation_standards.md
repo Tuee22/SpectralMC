@@ -10,6 +10,12 @@
 
 ---
 
+## Cross-References
+
+- [engineering/index.md](engineering/index.md) — Engineering standards index and SSoT pointers
+- [documents/README.md](README.md) — Documentation navigation and folder layout
+- [CLAUDE.md](../CLAUDE.md) — Agent quick reference aligned to this SSoT
+
 ## 1. Philosophy and SSoT
 
 - **SSoT-first**: One canonical document per topic; overlays list *only* deltas and link back.
@@ -163,7 +169,7 @@ Function docstrings:
 # File: documents/example.md
 # Title
 **Status**: Reference only
-> **📖 Authoritative Reference**: [Canonical Doc](documents/documentation_standards.md)
+> **📖 Authoritative Reference**: [Canonical Doc](documentation_standards.md)
 
 ## Quick Summary
 [short overview + links]

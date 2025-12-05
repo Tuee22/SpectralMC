@@ -1,4 +1,16 @@
+# File: documents/engineering/blockchain_storage.md
 # Blockchain Model Versioning
+
+**Status**: Authoritative source  
+**Supersedes**: Prior blockchain storage notes  
+**Referenced by**: documents/product/deployment.md
+
+> **Purpose**: Summarize the blockchain model versioning approach used in SpectralMC.
+
+## Cross-References
+- [effect_interpreter.md](effect_interpreter.md)
+- [../product/deployment.md](../product/deployment.md)
+- [../product/training_integration.md](../product/training_integration.md)
 
 ## Overview
 
@@ -58,31 +70,28 @@ my-model-bucket/
 ## Atomic Commit Protocol (10-step CAS)
 
 ```mermaid
-sequenceDiagram
-  participant Client
-  participant S3
-  participant HEAD as chain.json
+flowchart TB
+  Start[Read chain.json + ETag]
+  BuildMeta[Build version metadata + content hash]
+  UploadCheckpoint[Upload checkpoint.pb]
+  UploadMeta[Upload metadata.json]
+  UploadHash[Upload content_hash.txt]
+  UpdateHead[CAS update chain.json (If-Match ETag)]
+  CommitSuccess[Commit succeeds]
+  Conflict[412 Precondition Failed]
+  Rollback[Delete uploaded files]
+  Retry[Retry with backoff]
 
-  Client->>S3: 1. Read chain.json
-  S3-->>Client: current_head with ETag
-  Client->>Client: 2. Create new version metadata
-  Client->>Client: 3. Compute SHA256 content_hash
-  Client->>Client: 4. Link parent_hash to previous version
-  Client->>S3: 5. Upload checkpoint.pb
-  S3-->>Client: 200 OK
-  Client->>S3: 6. Upload metadata.json
-  S3-->>Client: 200 OK
-  Client->>S3: 7. Upload content_hash.txt
-  S3-->>Client: 200 OK
-  Client->>S3: 8. CAS update chain.json with If-Match ETag
-  alt Success
-    S3-->>Client: 200 OK - Commit successful
-    Client->>Client: 9. Success - Version committed
-  else Conflict - Concurrent commit detected
-    S3-->>Client: 412 Precondition Failed
-    Client->>S3: 10a. Delete uploaded files - Rollback
-    Client->>Client: 10b. Retry from step 1 with backoff
-  end
+  Start -->|read head| BuildMeta
+  BuildMeta -->|prepare metadata| UploadCheckpoint
+  UploadCheckpoint -->|upload checkpoint| UploadMeta
+  UploadMeta -->|upload metadata| UploadHash
+  UploadHash -->|upload hash| UpdateHead
+  UpdateHead -->|200 OK| CommitSuccess
+  UpdateHead -->|412| Conflict
+  Conflict -->|cleanup| Rollback
+  Rollback -->|retry strategy| Retry
+  Retry -->|restart sequence| Start
 ```
 
 ### CAS Guarantees
@@ -99,6 +108,7 @@ sequenceDiagram
 ### Committing Models
 
 ```python
+# File: documents/engineering/blockchain_storage.md
 from spectralmc.storage import AsyncBlockchainModelStore, commit_snapshot
 
 # Initialize async store (S3)
@@ -117,6 +127,7 @@ async with AsyncBlockchainModelStore("my-model-bucket") as store:
 ### Loading Models
 
 ```python
+# File: documents/engineering/blockchain_storage.md
 from spectralmc.storage import load_snapshot_from_checkpoint
 from spectralmc.result import Success, Failure
 
@@ -164,26 +175,27 @@ flowchart TB
   MultiPinned[Multiple Pinned Clients - Different Versions]
   Tracking[Tracking Mode - Auto-Update to Latest]
 
-  Start -->|Production| Production
-  Start -->|Development or Staging| Development
+  Start -->|production| Production
+  Start -->|development or staging| Development
 
-  Production --> StabilityNeeded
-  StabilityNeeded -->|Yes| ABTest
-  StabilityNeeded -->|No - Can tolerate updates| Tracking
+  Production -->|assess stability| StabilityNeeded
+  StabilityNeeded -->|stability critical| ABTest
+  StabilityNeeded -->|can update| Tracking
 
-  ABTest -->|No| Pinned
-  ABTest -->|Yes - Test multiple versions| MultiPinned
+  ABTest -->|single version| Pinned
+  ABTest -->|multiple versions| MultiPinned
 
-  Development --> Tracking
+  Development -->|auto update| Tracking
 
-  Pinned --> PinnedConfig[version_counter=42 - Never updates]
-  MultiPinned --> MultiConfig[Client A: v42 - Client B: v43]
-  Tracking --> TrackingConfig[version_counter=None - Polls every 30s]
+  Pinned -->|configure client| PinnedConfig[version_counter=42 - Never updates]
+  MultiPinned -->|configure clients| MultiConfig[Client A: v42 - Client B: v43]
+  Tracking -->|configure tracking| TrackingConfig[version_counter=None - Polls every 30s]
 ```
 
 ### Pinned Mode (Production)
 
 ```python
+# File: documents/engineering/blockchain_storage.md
 from spectralmc.storage import InferenceClient
 
 # Pin to specific version for production stability
@@ -202,6 +214,7 @@ async with InferenceClient(
 ### Tracking Mode (Development)
 
 ```python
+# File: documents/engineering/blockchain_storage.md
 # Auto-track latest version with hot-swapping
 async with InferenceClient(
     version_counter=None,  # Track HEAD
@@ -243,26 +256,27 @@ flowchart TB
   AllValid[All checks passed]
   CorruptionFound[CORRUPTION DETECTED]
 
-  Start --> LoadVersions
-  LoadVersions --> CheckGenesis
-  CheckGenesis -->|Valid| GenesisOK
-  CheckGenesis -->|Invalid| GenesisFail
-  GenesisOK --> IterateVersions
-  IterateVersions --> CheckParentHash
-  CheckParentHash -->|Match| ParentHashOK
-  CheckParentHash -->|Mismatch| CorruptionFound
-  ParentHashOK --> CheckCounter
-  CheckCounter -->|Sequential| CounterOK
-  CheckCounter -->|Gap or duplicate| CorruptionFound
-  CounterOK --> CheckSemver
-  CheckSemver -->|Valid| SemverOK
-  CheckSemver -->|Invalid| CorruptionFound
-  SemverOK --> AllValid
+  Start -->|load versions| LoadVersions
+  LoadVersions -->|validate genesis| CheckGenesis
+  CheckGenesis -->|valid| GenesisOK
+  CheckGenesis -->|invalid| GenesisFail
+  GenesisOK -->|iterate| IterateVersions
+  IterateVersions -->|check parent| CheckParentHash
+  CheckParentHash -->|match| ParentHashOK
+  CheckParentHash -->|mismatch| CorruptionFound
+  ParentHashOK -->|check counter| CheckCounter
+  CheckCounter -->|sequential| CounterOK
+  CheckCounter -->|gap or duplicate| CorruptionFound
+  CounterOK -->|check semver| CheckSemver
+  CheckSemver -->|valid| SemverOK
+  CheckSemver -->|invalid| CorruptionFound
+  SemverOK -->|report valid| AllValid
 ```
 
 ### Code Usage
 
 ```python
+# File: documents/engineering/blockchain_storage.md
 from spectralmc.storage import verify_chain, verify_chain_detailed
 from spectralmc.result import Success, Failure
 
@@ -301,6 +315,7 @@ async with AsyncBlockchainModelStore("my-model-bucket") as store:
 Automated cleanup of old versions:
 
 ```python
+# File: documents/engineering/blockchain_storage.md
 from spectralmc.storage import run_gc, RetentionPolicy
 
 async with AsyncBlockchainModelStore("my-model-bucket") as store:
@@ -333,6 +348,7 @@ async with AsyncBlockchainModelStore("my-model-bucket") as store:
 Log model versions and training metrics:
 
 ```python
+# File: documents/engineering/blockchain_storage.md
 from spectralmc.storage import log_blockchain_to_tensorboard
 
 async with AsyncBlockchainModelStore("my-model-bucket") as store:
@@ -360,6 +376,7 @@ Automatic blockchain commits during training via `GbmCVNNPricer.train()`.
 ### Auto-commit after training completes
 
 ```python
+# File: documents/engineering/blockchain_storage.md
 from spectralmc.gbm_trainer import GbmCVNNPricer, TrainingConfig
 from spectralmc.storage import AsyncBlockchainModelStore
 
@@ -388,6 +405,7 @@ async with AsyncBlockchainModelStore("my-model-bucket") as store:
 ### Periodic commits during training
 
 ```python
+# File: documents/engineering/blockchain_storage.md
 # Commit every 100 batches during training
 pricer.train(
     training_config,
@@ -420,6 +438,7 @@ See `examples/training_with_blockchain_storage.py` for complete example.
 ### Usage
 
 ```bash
+# File: documents/engineering/blockchain_storage.md
 # Verify chain integrity
 python -m spectralmc.storage verify my-model-bucket
 
@@ -470,6 +489,7 @@ All storage features have comprehensive test coverage:
 ### Run storage tests
 
 ```bash
+# File: documents/engineering/blockchain_storage.md
 docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/test_storage/ -v
 docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/test_integrity/ -v
 ```
