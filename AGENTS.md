@@ -7,7 +7,7 @@ This guide keeps contributions to SpectralMC consistent, type-safe, and GPU-read
 - `tests/`: GPU-only unit/integration suites (`tests/test_effects`, `tests/test_storage`, `tests/test_e2e`, `tests/test_integrity`).
 - `examples/`: Minimal runnable samples; mirror patterns used in `src/`.
 - `documents/`: Engineering/product standards (coding, purity, testing, GPU policies).
-- `docker/` and `scripts/`: Container builds, CUDA validation, and developer bootstrap.
+- `docker/`: Container builds, CUDA validation, and developer bootstrap.
 - `stubs/`: Strict third-party `.pyi` stubs (no `Any`, no `cast`, no `type: ignore`).
 - `notebooks/`: Exploratory experiments; keep outputs clean.
 
@@ -16,7 +16,6 @@ This guide keeps contributions to SpectralMC consistent, type-safe, and GPU-read
 - Full lint/format/type sweep: `docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-code`.
 - Type-only pass: `docker compose -f docker/docker-compose.yml exec spectralmc mypy`.
 - Test runner (GPU required): `docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all > /tmp/test-output.txt 2>&1`.
-- Bootstrap (installs drivers, builds container, runs tests): `./scripts/build_and_run_unit_tests.sh` from repo root.
 - Avoid `pytest` directly; always use `poetry run test-all` (arguments allowed).
 
 ## Coding Style & Naming Conventions

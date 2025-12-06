@@ -112,12 +112,10 @@ git clone https://github.com/Tuee22/SpectralMC.git
 cd SpectralMC
 ```
 
-3. Run the provided installation script, which installs Docker, the NVIDIA drivers, and the NVIDIA Container Toolkit. For example:
+3. Install Docker, the NVIDIA drivers, and the NVIDIA Container Toolkit (follow NVIDIA's installation docs). After installation, reboot to ensure the driver is active and verify Docker can access the GPU:
 ```bash
-./scripts/build_and_run_unit_tests.sh
+docker run --gpus all --rm nvidia/cuda:12.4.1-base-ubuntu24.04 nvidia-smi
 ```
-
-- This will install Docker, the Nvidia drivers, and nvidia-docker2. When finished, reboot to fully activate the driver (the script will offer to do this for you, press Ctrl-C to stop it). After rebooting, run the script again, and it will build and start the container, and execute test cases.
 
 4. To interact with the container manually:
 
@@ -318,5 +316,4 @@ Send any questions or suggestions to this email address.
     the same (valuation_namespace, val_datetime) but a later data_asof.
     -There will be something declarative for running real-time jobs, eg one per second
 -every class that allocates GPU memory has a hard cap (to manage shared memory across pricers)
-
 

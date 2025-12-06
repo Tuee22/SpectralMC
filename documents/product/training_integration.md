@@ -627,7 +627,6 @@ Choose `commit_interval` based on training duration:
 Regularly clean up old checkpoints:
 
 ```bash
-# File: scripts/gc_sample.sh
 # Keep last 20 versions, protect production releases
 python -m spectralmc.storage gc-run my-model-bucket 20 --protect-tags 5,12,42 --yes
 ```
@@ -647,7 +646,6 @@ Tag important versions for protection from GC:
 Use TensorBoard to visualize training history:
 
 ```bash
-# File: scripts/monitor_training.sh
 python -m spectralmc.storage tensorboard-log my-model-bucket
 tensorboard --logdir=runs/
 ```

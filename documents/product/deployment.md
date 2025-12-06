@@ -54,7 +54,6 @@ flowchart TB
 
 **1. Create S3 Bucket**:
 ```bash
-# File: scripts/deployment/create_bucket.sh
 aws s3api create-bucket \
     --bucket spectralmc-models-prod \
     --region us-west-2 \
@@ -63,7 +62,6 @@ aws s3api create-bucket \
 
 **2. Enable Versioning** (optional, for additional safety):
 ```bash
-# File: scripts/deployment/enable_versioning.sh
 aws s3api put-bucket-versioning \
     --bucket spectralmc-models-prod \
     --versioning-configuration Status=Enabled
@@ -94,7 +92,6 @@ aws s3api put-bucket-versioning \
 
 Apply policy:
 ```bash
-# File: scripts/deployment/apply_lifecycle_policy.sh
 aws s3api put-bucket-lifecycle-configuration \
     --bucket spectralmc-models-prod \
     --lifecycle-configuration file://lifecycle-policy.json
@@ -102,7 +99,6 @@ aws s3api put-bucket-lifecycle-configuration \
 
 **4. Enable Server-Side Encryption**:
 ```bash
-# File: scripts/deployment/enable_server_side_encryption.sh
 aws s3api put-bucket-encryption \
     --bucket spectralmc-models-prod \
     --server-side-encryption-configuration '{
@@ -244,7 +240,6 @@ async with AsyncBlockchainModelStore("spectralmc-models-prod") as store:
 
 **Option 2: AWS Secrets Manager**:
 ```bash
-# File: scripts/deployment/store_s3_credentials.sh
 # Store credentials in Secrets Manager
 aws secretsmanager create-secret \
     --name spectralmc/s3-credentials \
@@ -447,13 +442,11 @@ volumes:
 
 **Enable Erasure Coding** (data redundancy):
 ```bash
-# File: scripts/deployment/enable_erasure_coding.sh
 mc admin config set myminio/ storage_class standard=EC:4
 ```
 
 **Configure Replication** (multi-site):
 ```bash
-# File: scripts/deployment/configure_replication.sh
 mc admin bucket remote add myminio/spectralmc-models-prod \
     https://dr-site.example.com/spectralmc-models-prod \
     --service replication
@@ -485,7 +478,6 @@ mc admin bucket remote add myminio/spectralmc-models-prod \
 
 Enable CloudWatch logging for S3:
 ```bash
-# File: scripts/deployment/enable_bucket_logging.sh
 aws s3api put-bucket-logging \
     --bucket spectralmc-models-prod \
     --bucket-logging-status file://logging.json
@@ -508,7 +500,6 @@ aws s3api put-bucket-logging \
 
 1. **High Storage Growth**:
 ```bash
-# File: scripts/deployment/alarm_high_storage_growth.sh
 aws cloudwatch put-metric-alarm \
     --alarm-name spectralmc-high-storage-growth \
     --alarm-description "Alert when storage grows >10GB/day" \
@@ -532,7 +523,6 @@ aws cloudwatch put-metric-alarm \
 
 **1. S3 Cross-Region Replication**:
 ```bash
-# File: scripts/deployment/enable_replication.sh
 aws s3api put-bucket-replication \
     --bucket spectralmc-models-prod \
     --replication-configuration file://replication.json
@@ -559,13 +549,11 @@ aws s3api put-bucket-replication \
 
 **2. Export to Glacier** (long-term):
 ```bash
-# File: scripts/deployment/export_to_glacier.sh
 # Use lifecycle policy (see S3 Configuration section)
 ```
 
 **3. Local Backup** (critical versions):
 ```bash
-# File: scripts/deployment/export_local_backup.sh
 # Export specific versions
 python -m spectralmc.storage export spectralmc-models-prod \
     --versions 42,50,60 \
@@ -612,13 +600,11 @@ flowchart TB
 
 1. **Restore from cross-region replica**:
 ```bash
-# File: scripts/deployment/restore_from_replica.sh
 aws s3 sync s3://spectralmc-models-dr s3://spectralmc-models-prod
 ```
 
 2. **Verify chain integrity**:
 ```bash
-# File: scripts/deployment/verify_restored_chain.sh
 python -m spectralmc.storage verify spectralmc-models-prod --detailed
 ```
 
@@ -733,7 +719,6 @@ protect_tags: [all_production_releases]
 ### Debug Commands
 
 ```bash
-# File: scripts/deployment/debug_commands.sh
 # Verify chain integrity
 python -m spectralmc.storage verify my-bucket --detailed
 
