@@ -1,3 +1,4 @@
+# File: documents/engineering/docker_workflow.md
 # Docker Development Workflow
 
 **Status**: Authoritative source  
@@ -45,6 +46,7 @@ flowchart TB
 ## Command Patterns
 
 ```bash
+# File: documents/engineering/docker_workflow.md
 # Correct pattern (inside Docker)
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-code
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all -v
@@ -58,6 +60,7 @@ python examples/demo.py      # ❌ host python
 Optional shell alias:
 
 ```bash
+# File: documents/engineering/docker_workflow.md
 alias smc='docker compose -f docker/docker-compose.yml exec spectralmc poetry run'
 # then: smc check-code, smc test-all, smc mypy
 ```
@@ -82,7 +85,7 @@ alias smc='docker compose -f docker/docker-compose.yml exec spectralmc poetry ru
 - **Poetry cache issues**: rebuild container (`docker compose ... build --no-cache`) rather than running host installs.
 - **Permission errors on bind mounts**: restart stack; avoid modifying permissions from host for mounted dirs.
 
-## See Also
+## Cross-References
 
 - [Docker Build Philosophy](docker_build_philosophy.md) for image layout and lockfile policy.
 - [GPU Build Guide](gpu_build.md) for legacy GPUs (source build path).

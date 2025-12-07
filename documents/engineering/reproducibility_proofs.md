@@ -3,7 +3,7 @@
 
 **Status**: Authoritative source  
 **Supersedes**: Prior reproducibility proof drafts  
-**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+**Referenced by**: documents/documentation_standards.md; documents/engineering/README.md
 
 > **Purpose**: Provide proofs and rationale for SpectralMC reproducibility guarantees.
 
@@ -36,13 +36,15 @@ SpectralMC achieves **provable reproducibility** through pure functional program
 
 For training function `train`:
 
-```
+```text
+# File: documents/engineering/reproducibility_proofs.md
 train(config: C, state: S, rng: R) -> (model: M, state': S', rng': R')
 ```
 
 **Reproducibility** means:
 
-```
+```text
+# File: documents/engineering/reproducibility_proofs.md
 ∀ c, s, r: train(c, s, r) = train(c, s, r)
 ```
 
@@ -60,24 +62,24 @@ The PyTorch Facade ([`src/spectralmc/models/torch.py`](../../src/spectralmc/mode
 
 ```mermaid
 flowchart TB
-    FacadeImport["Import spectralmc.models.torch<br/>(MUST be first)"]
-    CheckTorchNotImported["Assert torch not in sys.modules<br/>(lines 37-42)"]
-    CheckMainThread["Assert single thread<br/>(lines 45-51)"]
-    CaptureThreadID["Capture _MAIN_THREAD_ID<br/>(line 53)"]
-    SetCUBLAS["Set CUBLAS_WORKSPACE_CONFIG<br/>(line 59)"]
-    ImportTorch["Import torch<br/>(line 61)"]
-    SetDeterministic["torch.use_deterministic_algorithms(True)<br/>(line 69)"]
-    ConfigCuDNN["cudnn.deterministic = True<br/>cudnn.benchmark = False<br/>cudnn.allow_tf32 = False<br/>(lines 84-87)"]
-    Ready[Deterministic Execution Ready]
+    FacadeImport[Import Facade First]
+    TorchCheck[Torch Not Imported]
+    ThreadCheck[Main Thread Only]
+    ThreadId[Capture Thread Id]
+    SetCublas[Set CUBLAS Config]
+    ImportTorch[Import Torch]
+    SetDeterministic[Enable Determinism]
+    SetCudnn[Configure CuDNN]
+    Ready[Deterministic Ready]
 
-    FacadeImport --> CheckTorchNotImported
-    CheckTorchNotImported --> CheckMainThread
-    CheckMainThread --> CaptureThreadID
-    CaptureThreadID --> SetCUBLAS
-    SetCUBLAS --> ImportTorch
+    FacadeImport --> TorchCheck
+    TorchCheck --> ThreadCheck
+    ThreadCheck --> ThreadId
+    ThreadId --> SetCublas
+    SetCublas --> ImportTorch
     ImportTorch --> SetDeterministic
-    SetDeterministic --> ConfigCuDNN
-    ConfigCuDNN --> Ready
+    SetDeterministic --> SetCudnn
+    SetCudnn --> Ready
 ```
 
 ### Theorem: Determinism via Effect Sequencing
@@ -261,7 +263,8 @@ flowchart TB
 ### Theorem: Checkpoint/Resume Equivalence
 
 **Claim**: For any checkpoint at step k < n:
-```
+```text
+# File: documents/engineering/reproducibility_proofs.md
 run(restore(snapshot(S_k)), n-k) = run(S_0, n)
 ```
 
@@ -336,8 +339,8 @@ config.global_step = 100  # mypy error: Cannot assign to attribute
 
 ```mermaid
 flowchart TB
-    CompileChecks[Compile-time checks<br/>(mypy --strict)]
-    ImportGuards[Import-time guards]
+    CompileChecks[Compile time checks strict mypy]
+    ImportGuards[Import time guards]
     RuntimeGuards[Runtime guarantees]
     FrozenCheck[Frozen dataclass errors on mutation]
     ResultCheck[Result types require handling]
@@ -401,7 +404,7 @@ SpectralMC's mypy configuration catches:
 
 | Violation | mypy Flag | Example |
 |-----------|-----------|---------|
-| `Any` types | `disallow_any_explicit = true` | `def f(x: Any)` |
+| Untyped values | `disallow_any_explicit = true` | `def f(x)` |
 | Hidden Any | `disallow_any_unimported = true` | Missing stub |
 | Mutating frozen | Pydantic validation | `cfg.x = 1` |
 | Missing match cases | Pattern matching | `assert_never()` |

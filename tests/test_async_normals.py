@@ -17,11 +17,14 @@ from __future__ import annotations
 
 import cupy as cp
 import pytest
+import torch
 from pydantic import ValidationError
 
 from spectralmc import async_normals
 from spectralmc.async_normals import BufferConfig
 from spectralmc.models.numerical import Precision
+
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 # --------------------------------------------------------------------------- #

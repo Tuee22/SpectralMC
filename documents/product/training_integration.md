@@ -195,7 +195,7 @@ flowchart TB
   Manual -->|manual commits| ConfigManual[Call commit_snapshot manually]
 
   ChooseInterval -->|under 1000| Interval100[commit_interval=100]
-  ChooseInterval -->|1000-10000| Interval500[commit_interval=500]
+  ChooseInterval -->|1000 to 10000| Interval500[commit_interval=500]
   ChooseInterval -->|over 10000| Interval1000[commit_interval=1000]
 ```
 
@@ -627,6 +627,7 @@ Choose `commit_interval` based on training duration:
 Regularly clean up old checkpoints:
 
 ```bash
+# File: documents/product/training_integration.md
 # Keep last 20 versions, protect production releases
 python -m spectralmc.storage gc-run my-model-bucket 20 --protect-tags 5,12,42 --yes
 ```
@@ -646,6 +647,7 @@ Tag important versions for protection from GC:
 Use TensorBoard to visualize training history:
 
 ```bash
+# File: documents/product/training_integration.md
 python -m spectralmc.storage tensorboard-log my-model-bucket
 tensorboard --logdir=runs/
 ```

@@ -3,7 +3,7 @@
 
 **Status**: Authoritative source  
 **Supersedes**: Prior effect interpreter drafts  
-**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+**Referenced by**: documents/documentation_standards.md; documents/engineering/README.md
 
 > **Purpose**: Describe SpectralMC’s Effect Interpreter pattern for isolating side effects.
 
@@ -436,7 +436,7 @@ The interpreter is the **only place** where effects are executed. All other code
 
 ```mermaid
 flowchart TB
-    PureCode[Pure Code - Effect Description]
+    PureCode[Pure Code Effect Description]
     EffectADT[Effect ADT Instance]
     Interpreter[SpectralMC Interpreter]
     GPUInterp[GPU Interpreter]
@@ -1035,9 +1035,9 @@ flowchart TB
     Backward[BackwardPass Effect]
     OptStep[OptimizerStep Effect]
     Sync[StreamSync Effect]
-    Checkpoint{Checkpoint Interval?}
+    Checkpoint{Checkpoint Interval}
     Commit[CommitVersion Effect]
-    NextBatch{More Batches?}
+    NextBatch{More Batches}
     End[Training Complete]
 
     Start -->|start| CaptureRNG

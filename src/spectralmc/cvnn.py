@@ -44,6 +44,8 @@ cousin so you can freely compose them.
 
 from __future__ import annotations
 
+from functools import reduce
+
 import torch
 from torch import nn
 
@@ -446,9 +448,7 @@ class ComplexSequential(nn.Module):
         self.layers = nn.ModuleList(modules)
 
     def forward(self, real: Tensor, imag: Tensor) -> tuple[Tensor, Tensor]:
-        for layer in self.layers:
-            real, imag = layer(real, imag)
-        return real, imag
+        return reduce(lambda state, layer: layer(*state), self.layers, (real, imag))
 
 
 class ComplexResidual(nn.Module):

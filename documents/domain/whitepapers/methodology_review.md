@@ -138,7 +138,8 @@ def test_cvnn_pricing_accuracy():
 ### ✅ Excellent GPU Engineering
 
 **Pure CUDA Pipeline**
-```
+```text
+# File: documents/domain/whitepapers/methodology_review.md
 Monte Carlo (Numba) → FFT (CuPy) → Training (PyTorch) → All on GPU
 ```
 

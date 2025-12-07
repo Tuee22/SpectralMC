@@ -1,6 +1,11 @@
+# File: AGENTS.md
 # Repository Guidelines
 
-This guide keeps contributions to SpectralMC consistent, type-safe, and GPU-ready.
+**Status**: Authoritative source  
+**Supersedes**: None  
+**Referenced by**: CLAUDE.md; README.md
+
+> **Purpose**: Contribution guardrails for SpectralMC agents and developers (structure, commands, safety).
 
 ## Project Structure & Module Organization
 - `src/spectralmc/`: Core runtime (effects, models, storage, serialization, proto bindings).

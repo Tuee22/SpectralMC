@@ -787,11 +787,13 @@ class GbmCVNNPricer:
             # The TensorTree API cannot be used here due to type narrowing constraints
             # with optimizer state_dict's complex nested type structure.
             state_dict = adam.state_dict()
-            for param_id in state_dict["state"]:
-                for key in state_dict["state"][param_id]:
-                    val = state_dict["state"][param_id][key]
-                    if isinstance(val, torch.Tensor):
-                        state_dict["state"][param_id][key] = val.cpu()
+            state_dict["state"] = {
+                param_id: {
+                    key: (val.cpu() if isinstance(val, torch.Tensor) else val)
+                    for key, val in param_state.items()
+                }
+                for param_id, param_state in state_dict["state"].items()
+            }
             self._optimizer_state = AdamOptimizerState.from_torch(state_dict)
 
             # Create snapshot
@@ -868,11 +870,13 @@ class GbmCVNNPricer:
             # Snapshot optimizer state before committing
             # NOTE: Explicit .cpu() calls acceptable per CPU/GPU policy for checkpoint I/O.
             state_dict = adam.state_dict()
-            for param_id in state_dict["state"]:
-                for key in state_dict["state"][param_id]:
-                    val = state_dict["state"][param_id][key]
-                    if isinstance(val, torch.Tensor):
-                        state_dict["state"][param_id][key] = val.cpu()
+            state_dict["state"] = {
+                param_id: {
+                    key: (val.cpu() if isinstance(val, torch.Tensor) else val)
+                    for key, val in param_state.items()
+                }
+                for param_id, param_state in state_dict["state"].items()
+            }
             self._optimizer_state = AdamOptimizerState.from_torch(state_dict)
 
             # Create snapshot

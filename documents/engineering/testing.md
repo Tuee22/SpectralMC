@@ -1,6 +1,7 @@
+# File: documents/engineering/testing.md
 # Testing
 
-**Status**: Authoritative source  
+**Status**: Reference only  
 **Supersedes**: testing_requirements.md drafts (file retained)  
 **Referenced by**: engineering/README.md; command_reference.md; documentation_standards.md
 

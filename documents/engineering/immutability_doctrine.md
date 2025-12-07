@@ -3,7 +3,7 @@
 
 **Status**: Authoritative source  
 **Supersedes**: Prior immutability doctrine drafts  
-**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+**Referenced by**: documents/documentation_standards.md
 
 > **Purpose**: Define SpectralMC’s immutability rules for models, configuration, and effects.
 
@@ -243,7 +243,8 @@ class CacheKey:
 Report violations as bugs with **HIGH** severity.
 
 **Bug Report Template**:
-```
+```text
+# File: documents/engineering/immutability_doctrine.md
 Title: Immutability bypass using object.__setattr__()
 Severity: HIGH
 File: src/spectralmc/storage/chain.py:42
@@ -323,10 +324,7 @@ fi
 - **PEP 557**: Data Classes (frozen parameter)
 - **Python Data Model**: `__setattr__` special method
 - **Functional Programming**: Immutability principles
-- **SpectralMC Engineering Standards**: `documents/engineering/index.md`
+- **SpectralMC Engineering Standards**: `documents/engineering/README.md`
 - [Purity Doctrine](purity_doctrine.md) - Complete purity standards (immutability is one aspect)
 
 ---
-
-**Last updated**: 2025-11-28
-**Status**: Active doctrine, zero tolerance for violations

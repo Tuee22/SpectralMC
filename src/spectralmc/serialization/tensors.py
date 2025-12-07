@@ -185,28 +185,32 @@ class AdamOptimizerStateConverter:
         """
         proto = tensors_pb2.AdamOptimizerStateProto()
 
-        # Serialize param states (map of int → AdamParamState)
-        for param_id, param_state in optimizer_state.param_states.items():
-            param_proto = tensors_pb2.AdamParamStateProto()
-            param_proto.step = param_state.step
-            param_proto.exp_avg.CopyFrom(
-                TensorStateConverter.to_proto(param_state.exp_avg.to_torch())
-            )
-            param_proto.exp_avg_sq.CopyFrom(
-                TensorStateConverter.to_proto(param_state.exp_avg_sq.to_torch())
-            )
-            proto.state[param_id].CopyFrom(param_proto)
+        proto.state.update(
+            {
+                param_id: tensors_pb2.AdamParamStateProto(
+                    step=param_state.step,
+                    exp_avg=TensorStateConverter.to_proto(param_state.exp_avg.to_torch()),
+                    exp_avg_sq=TensorStateConverter.to_proto(
+                        param_state.exp_avg_sq.to_torch()
+                    ),
+                )
+                for param_id, param_state in optimizer_state.param_states.items()
+            }
+        )
 
-        # Serialize param groups
-        for group in optimizer_state.param_groups:
-            group_proto = tensors_pb2.AdamParamGroupProto()
-            group_proto.lr = group.lr
-            group_proto.beta1 = group.betas[0]
-            group_proto.beta2 = group.betas[1]
-            group_proto.eps = group.eps
-            group_proto.weight_decay = group.weight_decay
-            group_proto.amsgrad = group.amsgrad
-            proto.param_groups.append(group_proto)
+        proto.param_groups.extend(
+            [
+                tensors_pb2.AdamParamGroupProto(
+                    lr=group.lr,
+                    beta1=group.betas[0],
+                    beta2=group.betas[1],
+                    eps=group.eps,
+                    weight_decay=group.weight_decay,
+                    amsgrad=group.amsgrad,
+                )
+                for group in optimizer_state.param_groups
+            ]
+        )
 
         return proto
 
@@ -223,25 +227,19 @@ class AdamOptimizerStateConverter:
         Returns:
             AdamOptimizerState instance
         """
-        # Deserialize param states
-        param_states: dict[int, AdamParamState] = {}
-        for param_id, param_proto in proto.state.items():
-            exp_avg_tensor = TensorStateConverter.from_proto(param_proto.exp_avg)
-            exp_avg_sq_tensor = TensorStateConverter.from_proto(param_proto.exp_avg_sq)
-
-            param_state = AdamParamState.from_torch(
+        param_states: dict[int, AdamParamState] = {
+            param_id: AdamParamState.from_torch(
                 {
                     "step": param_proto.step,
-                    "exp_avg": exp_avg_tensor,
-                    "exp_avg_sq": exp_avg_sq_tensor,
+                    "exp_avg": TensorStateConverter.from_proto(param_proto.exp_avg),
+                    "exp_avg_sq": TensorStateConverter.from_proto(param_proto.exp_avg_sq),
                 }
             )
-            param_states[param_id] = param_state
+            for param_id, param_proto in proto.state.items()
+        }
 
-        # Deserialize param groups
-        param_groups: list[AdamParamGroup] = []
-        for group_proto in proto.param_groups:
-            group = AdamParamGroup(
+        param_groups: list[AdamParamGroup] = [
+            AdamParamGroup(
                 params=[],  # Not serialized in proto
                 lr=group_proto.lr,
                 betas=(group_proto.beta1, group_proto.beta2),
@@ -249,7 +247,8 @@ class AdamOptimizerStateConverter:
                 weight_decay=group_proto.weight_decay,
                 amsgrad=group_proto.amsgrad,
             )
-            param_groups.append(group)
+            for group_proto in proto.param_groups
+        ]
 
         return AdamOptimizerState(param_states=param_states, param_groups=param_groups)
 
@@ -324,11 +323,13 @@ class ModelCheckpointConverter:
         """
         proto = tensors_pb2.ModelCheckpointProto()
 
-        # Serialize model state dict
-        for name, tensor in model_state_dict.items():
-            proto.model_state_dict[name].CopyFrom(TensorStateConverter.to_proto(tensor))
+        proto.model_state_dict.update(
+            {
+                name: TensorStateConverter.to_proto(tensor)
+                for name, tensor in model_state_dict.items()
+            }
+        )
 
-        # Serialize optimizer state
         proto.optimizer_state.CopyFrom(AdamOptimizerStateConverter.to_proto(optimizer_state))
 
         # Serialize RNG state
@@ -354,12 +355,11 @@ class ModelCheckpointConverter:
         Returns:
             Tuple of (model_state_dict, optimizer_state, cpu_rng, cuda_rngs, global_step)
         """
-        # Deserialize model state dict
-        model_state_dict: dict[str, torch.Tensor] = {}
-        for name, tensor_proto in proto.model_state_dict.items():
-            model_state_dict[name] = TensorStateConverter.from_proto(tensor_proto)
+        model_state_dict: dict[str, torch.Tensor] = {
+            name: TensorStateConverter.from_proto(tensor_proto)
+            for name, tensor_proto in proto.model_state_dict.items()
+        }
 
-        # Deserialize optimizer state
         optimizer_state = AdamOptimizerStateConverter.from_proto(proto.optimizer_state)
 
         # Deserialize RNG state

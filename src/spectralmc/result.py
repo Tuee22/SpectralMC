@@ -149,14 +149,12 @@ def collect_results(results: list[Result[T, E]]) -> Result[list[T], E]:
     Returns:
         Success(list of values) if all succeed, or first Failure
     """
-    values: list[T] = []
-    for result in results:
-        match result:
-            case Success(value):
-                values.append(value)
-            case Failure(error):
-                return Failure(error)
-    return Success(values)
+    first_failure = next((result for result in results if isinstance(result, Failure)), None)
+    return (
+        first_failure
+        if isinstance(first_failure, Failure)
+        else Success([result.value for result in results if isinstance(result, Success)])
+    )
 
 
 def partition_results(
@@ -171,12 +169,6 @@ def partition_results(
     Returns:
         Tuple of (successes, failures)
     """
-    successes: list[T] = []
-    failures: list[E] = []
-    for result in results:
-        match result:
-            case Success(value):
-                successes.append(value)
-            case Failure(error):
-                failures.append(error)
+    successes: list[T] = [result.value for result in results if isinstance(result, Success)]
+    failures: list[E] = [result.error for result in results if isinstance(result, Failure)]
     return (successes, failures)

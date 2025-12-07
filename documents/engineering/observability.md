@@ -1,6 +1,7 @@
+# File: documents/engineering/observability.md
 # Observability
 
-**Status**: Authoritative source (SpectralMC scope)  
+**Status**: Authoritative source  
 **Supersedes**: none  
 **Referenced by**: engineering/README.md
 

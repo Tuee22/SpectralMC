@@ -22,7 +22,7 @@ Engineering standards, development practices, and infrastructure guides.
 
 **Topics**: Code quality, type safety, testing, Docker, GPU builds
 
-[View Engineering Standards →](engineering/index.md)
+[View Engineering Standards →](engineering/README.md)
 
 ### product/
 
@@ -46,7 +46,7 @@ Scientific background, quantitative finance theory, and research papers.
 
 ## Quick Links
 
-- [Engineering Standards Index](engineering/index.md)
+- [Engineering Standards Hub](engineering/README.md)
 - [Deployment Guide](product/deployment.md)
 - [Training Integration](product/training_integration.md)
 - [Testing Architecture](testing_architecture.md)
@@ -61,7 +61,7 @@ When adding new documentation:
    - `product/` - User-facing guides, deployment, operations
    - `domain/` - Scientific theory, research papers, mathematical background
 
-2. **Update the index**: Add your document to the relevant `index.md`
+2. **Update the hub**: Add your document to the relevant folder README or index page
 
 3. **Follow SSoT**: Link to canonical sources, avoid duplicating information
 

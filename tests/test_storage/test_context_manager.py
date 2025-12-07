@@ -5,8 +5,11 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
 from spectralmc.storage import AsyncBlockchainModelStore
+
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 @pytest.mark.asyncio

@@ -39,6 +39,6 @@ Blockchain storage integration with GBM training loop:
 
 ## Related Documentation
 
-- [Engineering Standards](../engineering/index.md) - Development practices
+- [Engineering Standards](../engineering/README.md) - Development practices
 - [Domain Knowledge](../domain/index.md) - Scientific theory
 - [CLAUDE.md](../../CLAUDE.md) - Quick reference guide

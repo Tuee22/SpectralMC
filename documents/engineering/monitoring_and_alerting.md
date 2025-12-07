@@ -1,6 +1,7 @@
+# File: documents/engineering/monitoring_and_alerting.md
 # Monitoring and Alerting
 
-**Status**: Reference only (platform-neutral)  
+**Status**: Reference only  
 **Supersedes**: none  
 **Referenced by**: engineering/README.md (future)
 

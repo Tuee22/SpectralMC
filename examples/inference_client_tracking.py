@@ -127,7 +127,7 @@ async def main() -> None:
 
                     with torch.no_grad():
                         inputs = torch.randn(10, 5)
-                        raw_outputs = model(inputs)  # type: ignore[call-arg]
+                        raw_outputs = model(inputs)
                         # CVNN models return tuple (real, imag), extract first element
                         outputs = (
                             raw_outputs[0]

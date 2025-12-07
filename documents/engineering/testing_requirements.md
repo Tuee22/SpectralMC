@@ -375,7 +375,8 @@ markers = ["asyncio: async test"]
 
 Tests are organized by module:
 
-```
+```text
+# File: documents/engineering/testing_requirements.md
 tests/
 ├── conftest.py                # Global fixtures
 ├── test_async_normals.py      # Async normal distribution tests
@@ -511,7 +512,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all 
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_storage/ > /tmp/test-storage.txt 2>&1
 
 # Type checking
-docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc --strict > /tmp/mypy-output.txt 2>&1
+docker compose -f docker/docker-compose.yml exec spectralmc mypy > /tmp/mypy-output.txt 2>&1
 ```
 
 ### Why This Matters
@@ -678,8 +679,9 @@ docker compose -f docker/docker-compose.yml exec spectralmc mypy src/spectralmc 
 **Always redirect to file for analysis**:
 ```bash
 # File: documents/engineering/testing_requirements.md
-pytest tests/test_gbm.py -v > test_output.txt 2>&1
-# Then read complete output
+docker compose -f docker/docker-compose.yml exec spectralmc \
+  poetry run test-all tests/test_gbm.py > /tmp/test-gbm.txt 2>&1
+# Then read complete output from /tmp/test-gbm.txt
 ```
 
 - ✅ Use `torch.set_printoptions(profile="full")` to see all tensor values
@@ -717,8 +719,8 @@ All storage features have comprehensive test coverage:
 Run storage tests:
 ```bash
 # File: documents/engineering/testing_requirements.md
-docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/test_storage/ -v
-docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/test_integrity/ -v
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_storage/
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_integrity/
 ```
 
 See also: [Blockchain Storage](blockchain_storage.md) for complete storage documentation.

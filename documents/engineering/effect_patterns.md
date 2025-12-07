@@ -1,3 +1,4 @@
+# File: documents/engineering/effect_patterns.md
 # Effect Program Patterns
 
 **Status**: Authoritative source  
@@ -75,3 +76,11 @@ flowchart TB
 - Test programs with mock interpreters for pure logic; integration tests run on GPU via `test-all`.
 - Seed RNG explicitly in tests; assert device is CUDA at module scope.
 - Use exhaustive pattern matching in tests to verify all error paths.
+
+## Cross-References
+
+- [Architecture](architecture.md) — Layering and interpreter boundaries referenced by these patterns.
+- [Effect Interpreter Doctrine](effect_interpreter.md) — Execution model for the effects yielded here.
+- [Purity Doctrine](purity_doctrine.md) — Expression-only rules enforced in these generators.
+- [Code Quality](code_quality.md) — Type/purity/immutability gates applied to effect programs.
+- [Documentation Standards](../documentation_standards.md) — Metadata/link requirements when documenting new patterns.

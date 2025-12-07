@@ -22,6 +22,8 @@ from spectralmc.storage import (
 )
 from spectralmc.storage.chain import ModelVersion
 
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
 
 def test_content_hash_integrity() -> None:
     """Test that changing content invalidates hash."""

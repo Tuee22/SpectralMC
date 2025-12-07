@@ -1,4 +1,12 @@
+# File: examples/README.md
 # SpectralMC Examples
+
+**Status**: Reference only  
+**Supersedes**: None  
+**Referenced by**: README.md  
+
+> **Purpose**: Describe available SpectralMC example scripts and how to run them.
+> **📖 Authoritative Reference**: [AGENTS.md](../AGENTS.md)
 
 This directory contains example scripts demonstrating blockchain model storage functionality.
 
@@ -32,6 +40,7 @@ The serialization examples have been removed as they require deep understanding 
 All examples should be run from the project root inside the Docker container:
 
 ```bash
+# File: examples/README.md
 docker compose -f docker/docker-compose.yml exec spectralmc python examples/blockchain_storage_basic.py
 docker compose -f docker/docker-compose.yml exec spectralmc python examples/blockchain_integrity_check.py
 ```

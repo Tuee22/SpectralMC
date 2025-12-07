@@ -1,3 +1,4 @@
+# File: documents/engineering/development_workflow.md
 # Development Workflow
 
 **Status**: Authoritative source  
@@ -68,7 +69,7 @@ flowchart TB
 - Build mode (binary/source) is selected via `BUILD_FROM_SOURCE`; see [Docker Build Philosophy](docker_build_philosophy.md).
 - Host Python/Poetry/pytest are out-of-scope; use only container commands.
 
-## See Also
+## Cross-References
 
 - [Docker Workflow](docker_workflow.md)
 - [Command Reference](command_reference.md)

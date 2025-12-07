@@ -3,7 +3,7 @@
 
 **Status**: Authoritative source  
 **Supersedes**: documents/engineering/documentation_standards.md  
-**Referenced by**: CLAUDE.md, documents/engineering/index.md, documents/engineering/coding_standards.md, documents/engineering/pydantic_patterns.md
+**Referenced by**: CLAUDE.md, documents/engineering/README.md, documents/engineering/coding_standards.md, documents/engineering/pydantic_patterns.md
 
 > **Purpose**: Single source of truth for SpectralMC documentation. Aligns with the BBY
 > framework while enforcing SpectralMC’s GPU-first and type-safe constraints.
@@ -12,7 +12,7 @@
 
 ## Cross-References
 
-- [engineering/index.md](engineering/index.md) — Engineering standards index and SSoT pointers
+- [engineering/README.md](engineering/README.md) — Engineering standards hub and SSoT pointers
 - [documents/README.md](README.md) — Documentation navigation and folder layout
 - [CLAUDE.md](../CLAUDE.md) — Agent quick reference aligned to this SSoT
 
@@ -53,6 +53,8 @@ Overlays must link to the canonical doc first, then list overrides only.
 - Snake_case for file names within SpectralMC (e.g., `documentation_standards.md`).
 - Descriptive, unabbreviated names; no version numbers in filenames.
 - Keep prefixes for grouping when needed (e.g., `gpu_`, `cli_`).
+- Explicit exceptions for compatibility: top-level `README.md`, `CLAUDE.md`, and `AGENTS.md`
+  stay uppercase; keep references consistent.
 
 ## 4. Required Header Metadata
 

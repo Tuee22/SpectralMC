@@ -24,7 +24,6 @@ import spectralmc.models.torch as sm_torch
 # Module-level GPU requirement - test file fails immediately without GPU
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
-GPU_DEV: torch.device = torch.device("cuda:0")
 
 # ──────────────────────────── helpers & fixtures ────────────────────────────
 

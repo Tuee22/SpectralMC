@@ -1,8 +1,9 @@
+# File: documents/engineering/README.md
 # SpectralMC Engineering Standards
 
-**Status**: Reference hub  
-**Supersedes**: documents/engineering/index.md (alias retained)  
-**Referenced by**: documents/readme.md; documents/documentation_standards.md; CLAUDE.md
+**Status**: Reference only  
+**Supersedes**: Legacy engineering index page  
+**Referenced by**: documents/README.md; documents/documentation_standards.md; CLAUDE.md
 
 > **Purpose**: Navigation hub for SpectralMC engineering practices, coding standards, and development workflows. This page aligns filenames with effectful’s layout while keeping SpectralMC’s GPU-first scope.
 > **📖 Authoritative Reference**: [Documentation Standards](../documentation_standards.md)
@@ -20,7 +21,7 @@ flowchart TB
   Cmds[Command Reference]
   Artifacts[Build Artifact Management]
   Observability[Observability]
-  Monitoring[Monitoring & Alerting]
+  Monitoring[Monitoring Alerting]
 
   Hub --> Arch
   Hub --> CQ

@@ -1,3 +1,4 @@
+# File: documents/engineering/build_artifact_management.md
 # Build Artifact Management
 
 **Status**: Authoritative source  
@@ -45,6 +46,7 @@ Only source-of-truth inputs are versioned. Anything produced by a build step is 
 ## Regeneration Workflow (Inside Docker)
 
 ```bash
+# File: documents/engineering/build_artifact_management.md
 # Binary or source build resolves deps without host lockfiles
 docker compose -f docker/docker-compose.yml exec spectralmc poetry install
 
@@ -57,6 +59,7 @@ Artifacts produced during these steps remain inside the container.
 ## Verification
 
 ```bash
+# File: documents/engineering/build_artifact_management.md
 # Ensure artifacts are ignored
 git status --short | grep -E "poetry.lock|package-lock.json|dist/|build/|egg-info" && echo "Artifacts present (fix ignores)"
 

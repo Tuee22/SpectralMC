@@ -1,4 +1,12 @@
+# File: CLAUDE.md
 # SpectralMC Development Guide
+
+**Status**: Reference only  
+**Supersedes**: None  
+**Referenced by**: README.md; AGENTS.md  
+
+> **Purpose**: Quick-start and operational guide for SpectralMC agents; mirrors AGENTS.md constraints.
+> **📖 Authoritative Reference**: [AGENTS.md](AGENTS.md)
 
 ## Project Overview
 
@@ -87,6 +95,7 @@ SpectralMC uses blockchain-based versioning with S3 storage for production ML mo
 
 ### Docker Commands
 ```bash
+# File: CLAUDE.md
 # Start services (SpectralMC, MinIO, TensorBoard)
 cd docker && docker compose up -d
 
@@ -137,6 +146,7 @@ SpectralMC enforces strict static typing with zero compromises.
 SpectralMC uses pytest. **All tests require GPU** - silent CPU fallbacks are strictly forbidden. **All commands must run inside Docker container**:
 
 ```bash
+# File: CLAUDE.md
 # Run all tests - redirect to file for complete output
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all > /tmp/test-all.txt 2>&1
 
@@ -247,7 +257,7 @@ SpectralMC enforces a zero-tolerance policy for deprecated APIs in production co
 
 ## Engineering Standards
 
-See `documents/engineering/index.md` for comprehensive engineering standards including:
+See `documents/engineering/README.md` for comprehensive engineering standards including:
 
 - **Code Quality**: Black formatting, mypy strict mode, custom type stubs
 - **Immutability Doctrine**: Never bypass immutability guarantees (frozen dataclasses, etc.)
@@ -259,7 +269,7 @@ All code must pass `mypy --strict`, `black --check`, and `poetry run test-all` b
 
 ## Documentation
 
-- **[Engineering Standards](documents/engineering/index.md)** - Development practices and code quality
+- **[Engineering Standards](documents/engineering/README.md)** - Development practices and code quality
 - **[Product Documentation](documents/product/index.md)** - Deployment and operations guides
 - **[Domain Knowledge](documents/domain/index.md)** - Scientific theory and research papers
 

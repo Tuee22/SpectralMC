@@ -1,4 +1,12 @@
+# File: README.md
 # Spectral Monte-Carlo Learning
+
+**Status**: Reference only  
+**Supersedes**: None  
+**Referenced by**: AGENTS.md; CLAUDE.md  
+
+> **Purpose**: Overview and quickstart for SpectralMC (install, usage, commands).
+> **📖 Authoritative Reference**: [AGENTS.md](AGENTS.md)
 
 ## Overview
 
@@ -108,18 +116,21 @@ flowchart TB
 
 2. Clone this repository:
 ```bash
+# File: README.md
 git clone https://github.com/Tuee22/SpectralMC.git
 cd SpectralMC
 ```
 
 3. Install Docker, the NVIDIA drivers, and the NVIDIA Container Toolkit (follow NVIDIA's installation docs). After installation, reboot to ensure the driver is active and verify Docker can access the GPU:
 ```bash
+# File: README.md
 docker run --gpus all --rm nvidia/cuda:12.4.1-base-ubuntu24.04 nvidia-smi
 ```
 
 4. To interact with the container manually:
 
 ```bash
+# File: README.md
 cd docker
 docker compose up -d
 docker compose exec -it spectralmc bash
@@ -128,6 +139,7 @@ docker compose exec -it spectralmc bash
 This will open a bash terminal, which will allow you to explicitly call the python library, eg
 
 ```bash
+# File: README.md
 python -m spectralmc.gbm
 ```
 
@@ -139,6 +151,7 @@ python -m spectralmc.gbm
 Train models with automatic blockchain commits:
 
 ```python
+# File: README.md
 from spectralmc.gbm_trainer import GbmCVNNPricer, TrainingConfig
 from spectralmc.storage import AsyncBlockchainModelStore
 
@@ -171,6 +184,7 @@ async with AsyncBlockchainModelStore("my-model-bucket") as store:
 ### Manual Model Commits
 
 ```python
+# File: README.md
 from spectralmc.storage import AsyncBlockchainModelStore, commit_snapshot
 import torch
 
@@ -191,6 +205,7 @@ async with AsyncBlockchainModelStore("my-model-bucket") as store:
 ### Production Inference
 
 ```python
+# File: README.md
 from spectralmc.storage import InferenceClient
 
 # Pinned mode: Always serve version 42 (production stability)
@@ -208,6 +223,7 @@ async with InferenceClient(
 ### CLI Tools
 
 ```bash
+# File: README.md
 # List all versions
 python -m spectralmc.storage list-versions my-model-bucket
 
@@ -233,6 +249,7 @@ SpectralMC enforces poetry-based test execution to ensure consistency across env
 **All commands must run inside the Docker container:**
 
 ```bash
+# File: README.md
 # Start the container
 cd docker && docker compose up -d
 
@@ -266,6 +283,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all 
 - ✅ **ALWAYS** use `poetry run test-all` (with or without arguments)
 - ✅ **ALWAYS** redirect test output to files for complete analysis:
   ```bash
+  # File: README.md
   docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all > /tmp/test-output.txt 2>&1
   ```
 
@@ -281,6 +299,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all 
 Run mypy from repository root (no path arguments):
 
 ```bash
+# File: README.md
 docker compose -f docker/docker-compose.yml exec spectralmc mypy
 ```
 
@@ -316,4 +335,3 @@ Send any questions or suggestions to this email address.
     the same (valuation_namespace, val_datetime) but a later data_asof.
     -There will be something declarative for running real-time jobs, eg one per second
 -every class that allocates GPU memory has a hard cap (to manage shared memory across pricers)
-

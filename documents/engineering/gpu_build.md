@@ -3,7 +3,7 @@
 
 **Status**: Reference only  
 **Supersedes**: Prior GPU build guides  
-**Referenced by**: documents/engineering/index.md
+**Referenced by**: documents/engineering/README.md
 
 > **Purpose**: Provide GPU build instructions with legacy GPU compatibility notes.
 > **📖 Authoritative Reference**: [docker_build_philosophy.md](docker_build_philosophy.md)
@@ -113,7 +113,8 @@ Running SpectralMC on GTX 970 requires satisfying **three hard constraints simul
 
 ### The Narrow Solution Space
 
-```
+```text
+# File: documents/engineering/gpu_build.md
 PyTorch Version    | sm_52 Binary | sm_52 Source | NumPy 2.0 |
 -------------------|--------------|--------------|-----------|
 2.1.x              | NO           | YES          | NO        | ← NumPy incompatible
@@ -172,7 +173,8 @@ A: Only if that version still contains sm_52 source code AND you're willing to r
 
 The Dockerfile is organized for optimal caching:
 
-```
+```text
+# File: documents/engineering/gpu_build.md
 LAYER 1:   System dependencies (changes: never)
 LAYER 1.5: Build tools for source builds (changes: never)
 LAYER 2:   Python 3.12 installation (changes: rarely)
@@ -298,7 +300,8 @@ print(f'GPU tensor test: PASSED')
 ```
 
 **Expected output for GTX 970**:
-```
+```text
+# File: documents/engineering/gpu_build.md
 PyTorch: 2.4.0a0+gitee1b680
 CUDA available: True
 CUDA version: 11.8
@@ -340,12 +343,12 @@ Use this flowchart to quickly identify and resolve GPU build issues:
 
 ```mermaid
 flowchart TB
-  Start{Docker Build Status?}
-  NoGPU[Issue 1 - nvidia-smi not found]
-  OOM[Issue 2 - Out of Memory]
-  TestOOM[Issue 3 - CUDA OOM in tests]
-  NoKernel[Issue 4 - No kernel image]
-  CPUOnly[Issue 5 - Defaults to CPU-only]
+  Start{Docker Build Status}
+  NoGPU[Issue 1 nvidia smi not found]
+  OOM[Issue 2 Out of Memory]
+  TestOOM[Issue 3 CUDA OOM in tests]
+  NoKernel[Issue 4 No kernel image]
+  CPUOnly[Issue 5 Defaults to CPU only]
 
   Start -->|gpu not detected| NoGPU
   Start -->|build crashes| OOM
@@ -353,34 +356,34 @@ flowchart TB
   Start -->|runtime error| NoKernel
   Start -->|quick build no cuda| CPUOnly
 
-  NoGPU -->|check buildkit| DockerBuildKit{Using BuildKit?}
+  NoGPU -->|check buildkit| DockerBuildKit{Using BuildKit}
   DockerBuildKit -->|yes| DisableBuildKit[Set DOCKER_BUILDKIT=0]
-  DockerBuildKit -->|no| CheckNvidiaDocker[Install nvidia-docker2]
+  DockerBuildKit -->|no| CheckNvidiaDocker[Install nvidia docker2]
   DisableBuildKit -->|rebuild| RebuildAfterBuildKit[Rebuild with docker compose build]
-  CheckNvidiaDocker -->|rebuild| RebuildAfterDocker[Rebuild after nvidia-docker2 install]
+  CheckNvidiaDocker -->|rebuild| RebuildAfterDocker[Rebuild after nvidia docker2 install]
 
-  OOM -->|check RAM| CheckRAM{System RAM?}
-  CheckRAM -->|less than 16GB| ReduceJobs[Edit Dockerfile.source - Set MAX_JOBS=2]
+  OOM -->|check RAM| CheckRAM{System RAM}
+  CheckRAM -->|less than 16GB| ReduceJobs[Edit Dockerfile source set MAX_JOBS=2]
   CheckRAM -->|16GB or more| AddSwap[Add 16GB swap file]
-  ReduceJobs -->|rebuild| RebuildAfterRAM[Rebuild with --no-cache]
-  AddSwap -->|rebuild| RebuildAfterSwap[Rebuild with --no-cache]
+  ReduceJobs -->|rebuild| RebuildAfterRAM[Rebuild with no cache]
+  AddSwap -->|rebuild| RebuildAfterSwap[Rebuild with no cache]
 
-  TestOOM -->|check VRAM| CheckVRAM{GPU VRAM?}
-  CheckVRAM -->|2GB| ReduceBatch2GB[Edit test_gbm.py - Set BATCHES=2^16]
-  CheckVRAM -->|4GB| KeepDefault[Keep default 2^17 - Should work]
+  TestOOM -->|check VRAM| CheckVRAM{GPU VRAM}
+  CheckVRAM -->|2GB| ReduceBatch2GB[Edit test_gbm.py set BATCHES=2^16]
+  CheckVRAM -->|4GB| KeepDefault[Keep default 2^17 should work]
   CheckVRAM -->|8GB or more| IncreaseBatch[Optional: Increase to 2^18]
-  ReduceBatch2GB -->|re-run| RerunTests[Rerun tests]
+  ReduceBatch2GB -->|rerun| RerunTests[Rerun tests]
   KeepDefault -->|investigate| CheckOtherIssues[Check for other GPU memory issues]
-  IncreaseBatch -->|re-run| RerunTestsFaster[Rerun tests - Faster convergence]
+  IncreaseBatch -->|rerun| RerunTestsFaster[Rerun tests faster convergence]
 
-  NoKernel -->|check build| CheckBuild{Source build ran?}
+  NoKernel -->|check build| CheckBuild{Source Build Ran}
   CheckBuild -->|no| RebuildSource[Rebuild with source Dockerfile]
   CheckBuild -->|yes| CheckArch[Verify TORCH_CUDA_ARCH_LIST matches GPU capability]
   CheckArch -->|manual build| ManualSourceBuild[Manual source build if mismatch]
 
   CPUOnly -->|force source build| ForceBuild[Use Dockerfile.source]
   ForceBuild -->|disable buildkit| UseNoBuildKit[Use DOCKER_BUILDKIT=0]
-  UseNoBuildKit -->|rebuild| RebuildFromSource[Rebuild - 2-4 hours for source build]
+  UseNoBuildKit -->|rebuild| RebuildFromSource[Rebuild 2 to 4 hours for source build]
 ```
 
 **See detailed solutions below for each issue.**
@@ -388,7 +391,8 @@ flowchart TB
 ### Build Fails: Out of Memory During Compilation
 
 **Symptom**:
-```
+```text
+# File: documents/engineering/gpu_build.md
 c++: fatal error: Killed signal terminated program cc1plus
 ```
 
@@ -411,7 +415,8 @@ sudo swapon /swapfile
 ### Runtime Error: No Kernel Image Available
 
 **Symptom**:
-```
+```text
+# File: documents/engineering/gpu_build.md
 RuntimeError: CUDA error: no kernel image is available for execution on the device
 ```
 
@@ -450,7 +455,8 @@ Should show `BUILD_TYPE=pytorch_source_sm52`. If not, check build logs.
 ### Tests Fail: CUDA Out of Memory
 
 **Symptom**:
-```
+```text
+# File: documents/engineering/gpu_build.md
 cupy.cuda.memory.OutOfMemoryError: Out of memory allocating 1,073,741,824 bytes
 ```
 

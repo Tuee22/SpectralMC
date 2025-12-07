@@ -88,13 +88,18 @@ async def main() -> None:
             print(f"Hashes match: {original_hash == tampered_hash}")
             print("✓ Tampering detected!")
 
-            # Version immutability
-            print("\n5. Version Immutability")
-            try:
-                versions[0].counter = 999  # type: ignore[misc]
-                print("✗ Version was modified (should not happen!)")
-            except Exception as e:
-                print(f"✓ Version is immutable: {type(e).__name__}")
+    # Version immutability
+    print("\n5. Version Immutability")
+
+    def _attempt_mutation(version: object) -> None:
+        """Try mutating a frozen dataclass; should raise FrozenInstanceError."""
+        setattr(version, "counter", 999)
+
+    try:
+        _attempt_mutation(versions[0])
+        print("✗ Version was modified (should not happen!)")
+    except Exception as e:
+        print(f"✓ Version is immutable: {type(e).__name__}")
 
     print("\n✓ Integrity verification complete")
 

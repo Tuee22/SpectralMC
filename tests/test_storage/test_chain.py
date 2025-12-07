@@ -3,11 +3,15 @@
 
 from __future__ import annotations
 
+import torch
+
 from spectralmc.storage.chain import (
     ModelVersion,
     bump_semantic_version,
     create_genesis_version,
 )
+
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 def test_model_version_properties() -> None:

@@ -1,3 +1,4 @@
+# File: documents/engineering/architecture.md
 # Architecture
 
 **Status**: Authoritative source  
@@ -73,7 +74,7 @@ flowchart TB
 - When adding infrastructure, wrap it in interpreters rather than leaking host APIs into pure code.  
 - Keep docs and stubs synchronized; link new standards back to this file and the engineering hub.
 
-## Related Documentation
+## Cross-References
 
 - [Effect Interpreter Doctrine](effect_interpreter.md)
 - [Purity Doctrine](purity_doctrine.md)

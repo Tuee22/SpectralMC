@@ -1,8 +1,9 @@
+# File: documents/engineering/code_quality.md
 # Code Quality
 
 **Status**: Authoritative source  
 **Supersedes**: Prior scattered purity/type/pattern drafts  
-**Referenced by**: engineering/README.md; documents/readme.md
+**Referenced by**: engineering/README.md; documents/README.md
 
 > **Purpose**: Single source for SpectralMC code-quality doctrines: strict typing, purity, immutability, and interpreter isolation. Aligns naming with effectful while preserving SpectralMC’s GPU/storage constraints.
 
@@ -39,6 +40,14 @@ flowchart TB
 | CPU init → GPU compute rules | [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) |
 | Determinism proofs | [Reproducibility Proofs](reproducibility_proofs.md) |
 | Testing gates | [Testing](testing.md) |
+
+## Cross-References
+
+- [Architecture](architecture.md) — Layering boundaries and interpreter placement.
+- [Documentation Standards](../documentation_standards.md) — Required metadata/linking rules for this SSoT.
+- [Coding Standards](coding_standards.md) — Lint/type configuration backing these policies.
+- [Testing Requirements](testing_requirements.md) — GPU-first test contracts and timeouts.
+- [Effect Interpreter Doctrine](effect_interpreter.md) — Execution boundaries and side-effect isolation.
 
 ## Doctrines
 

@@ -43,7 +43,8 @@ Production S3-based storage with atomic CAS commits:
 
 ### S3 Storage Structure
 
-```
+```text
+# File: documents/engineering/blockchain_storage.md
 S3 Bucket Structure:
 my-model-bucket/
 ├── chain.json                    # HEAD pointer with ETag
@@ -76,7 +77,7 @@ flowchart TB
   UploadCheckpoint[Upload checkpoint.pb]
   UploadMeta[Upload metadata.json]
   UploadHash[Upload content_hash.txt]
-  UpdateHead[CAS update chain.json (If-Match ETag)]
+  UpdateHead[CAS update chain json If Match ETag]
   CommitSuccess[Commit succeeds]
   Conflict[412 Precondition Failed]
   Rollback[Delete uploaded files]
@@ -164,16 +165,16 @@ Production model serving with version control integration.
 
 ```mermaid
 flowchart TB
-  Start{Deployment Environment?}
+  Start{Deployment Environment}
   Production[Production Environment]
   Development[Development Environment]
 
-  StabilityNeeded{Stability Critical?}
-  ABTest{A/B Testing?}
+  StabilityNeeded{Stability Critical}
+  ABTest{AB Testing}
 
-  Pinned[Pinned Mode - Lock to Specific Version]
-  MultiPinned[Multiple Pinned Clients - Different Versions]
-  Tracking[Tracking Mode - Auto-Update to Latest]
+  Pinned[Pinned Mode]
+  MultiPinned[Multiple Pinned Clients]
+  Tracking[Tracking Mode]
 
   Start -->|production| Production
   Start -->|development or staging| Development
@@ -187,9 +188,9 @@ flowchart TB
 
   Development -->|auto update| Tracking
 
-  Pinned -->|configure client| PinnedConfig[version_counter=42 - Never updates]
-  MultiPinned -->|configure clients| MultiConfig[Client A: v42 - Client B: v43]
-  Tracking -->|configure tracking| TrackingConfig[version_counter=None - Polls every 30s]
+  Pinned -->|configure client| PinnedConfig[Version 42 Static]
+  MultiPinned -->|configure clients| MultiConfig[ClientA v42 ClientB v43]
+  Tracking -->|configure tracking| TrackingConfig[Track Head Poll30s]
 ```
 
 ### Pinned Mode (Production)
@@ -240,14 +241,14 @@ Detect tampering and corruption with automated verification.
 flowchart TB
   Start[Start Verification]
   LoadVersions[Load all versions from S3]
-  CheckGenesis{Genesis valid?}
-  GenesisOK[counter=0 - parent_hash empty - semver=1.0.0]
-  GenesisFail[FAIL - Invalid genesis block]
+  CheckGenesis{Genesis Valid}
+  GenesisOK[Genesis Valid]
+  GenesisFail[Genesis Invalid]
 
   IterateVersions[Iterate through versions]
-  CheckParentHash{parent_hash == prev.content_hash?}
-  CheckCounter{counter == prev.counter + 1?}
-  CheckSemver{semver progression valid?}
+  CheckParentHash{Parent Hash Matches}
+  CheckCounter{Counter Sequence}
+  CheckSemver{Semver Sequence}
 
   ParentHashOK[Merkle chain intact]
   CounterOK[Counter monotonic]
@@ -439,23 +440,29 @@ See `examples/training_with_blockchain_storage.py` for complete example.
 
 ```bash
 # File: documents/engineering/blockchain_storage.md
-# Verify chain integrity
-python -m spectralmc.storage verify my-model-bucket
+# Verify chain integrity (Docker-only)
+docker compose -f docker/docker-compose.yml exec spectralmc \
+  poetry run python -m spectralmc.storage verify my-model-bucket
 
 # List all versions
-python -m spectralmc.storage list-versions my-model-bucket
+docker compose -f docker/docker-compose.yml exec spectralmc \
+  poetry run python -m spectralmc.storage list-versions my-model-bucket
 
 # Inspect specific version
-python -m spectralmc.storage inspect my-model-bucket v0000000042
+docker compose -f docker/docker-compose.yml exec spectralmc \
+  poetry run python -m spectralmc.storage inspect my-model-bucket v0000000042
 
 # Preview garbage collection
-python -m spectralmc.storage gc-preview my-model-bucket 10
+docker compose -f docker/docker-compose.yml exec spectralmc \
+  poetry run python -m spectralmc.storage gc-preview my-model-bucket 10
 
 # Run garbage collection (keep last 10, protect v5 and v12)
-python -m spectralmc.storage gc-run my-model-bucket 10 --protect-tags 5,12 --yes
+docker compose -f docker/docker-compose.yml exec spectralmc \
+  poetry run python -m spectralmc.storage gc-run my-model-bucket 10 --protect-tags 5,12 --yes
 
 # Log to TensorBoard
-python -m spectralmc.storage tensorboard-log my-model-bucket --log-dir runs/exp1
+docker compose -f docker/docker-compose.yml exec spectralmc \
+  poetry run python -m spectralmc.storage tensorboard-log my-model-bucket --log-dir runs/exp1
 ```
 
 ### Complete CLI Commands
@@ -490,8 +497,8 @@ All storage features have comprehensive test coverage:
 
 ```bash
 # File: documents/engineering/blockchain_storage.md
-docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/test_storage/ -v
-docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/test_integrity/ -v
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_storage/
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_integrity/
 ```
 
 ---

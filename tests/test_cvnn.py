@@ -30,6 +30,7 @@ from spectralmc.models.torch import Device as _dev
 from spectralmc.models.torch import DType as _dt
 from spectralmc.models.torch import default_dtype
 
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 # ─────────────────────────── global constants ────────────────────────────
 CPU_DEV: torch.device = _dev.cpu.to_torch()

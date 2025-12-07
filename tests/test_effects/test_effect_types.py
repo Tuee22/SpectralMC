@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 
 import pytest
+import torch
 
 from spectralmc.effects import (
     BackwardPass,
@@ -34,6 +35,8 @@ from spectralmc.effects import (
     WriteObject,
 )
 from spectralmc.models.torch import Device
+
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 class TestGPUEffects:

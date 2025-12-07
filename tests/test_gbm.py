@@ -14,11 +14,14 @@ from typing import Literal, TypeAlias
 
 import numpy as np
 import pytest
+import torch
 
 from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
 from spectralmc.models.numerical import Precision
 from spectralmc.quantlib import bs_price_quantlib
 from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler
+
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 # ─────────────────────────────── type aliases ───────────────────────────────

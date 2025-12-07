@@ -3,7 +3,7 @@
 
 **Status**: Authoritative source  
 **Supersedes**: Prior docker build philosophy drafts  
-**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+**Referenced by**: documents/documentation_standards.md
 
 > **Purpose**: Define the dual-mode Docker build approach for SpectralMC across GPU generations.
 
@@ -155,7 +155,8 @@ COPY pyproject.toml ./
 Both `.dockerignore` and `.gitignore` include `poetry.lock`:
 
 **`.dockerignore`**:
-```
+```text
+# File: documents/engineering/docker_build_philosophy.md
 # Poetry - exclude lock to reduce context size, will be regenerated
 poetry.lock
 ```
@@ -242,7 +243,8 @@ SpectralMC's Dockerfile is organized to **maximize Docker build cache hits** and
 
 ### Layer Structure (Binary Build)
 
-```
+```text
+# File: documents/engineering/docker_build_philosophy.md
 ┌─────────────────────────────────────┐
 │ Layer 1-2: System Dependencies     │  Changes: NEVER
 │ - apt packages, build tools         │  Cache: Always hit
@@ -290,7 +292,8 @@ SpectralMC's Dockerfile is organized to **maximize Docker build cache hits** and
 
 The source pipeline reorders work to front-load the multi-hour C/CUDA build and keep Poetry installs cache-friendly:
 
-```
+```text
+# File: documents/engineering/docker_build_philosophy.md
 ┌───────────────────────────────────────────┐
 │ Layer 1-2: System + toolchain deps       │  Build FROM_SOURCE-only tools stay in-line
 ├───────────────────────────────────────────┤

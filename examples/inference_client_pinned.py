@@ -116,7 +116,7 @@ async def main() -> None:
                     inputs = torch.randn(10, 5)
                     # Note: For actual ComplexValuedModel, use:
                     # real, imag = model(real_in, imag_in)
-                    raw_outputs = model(inputs)  # type: ignore[call-arg]
+                    raw_outputs = model(inputs)
                     # CVNN models return tuple (real, imag), extract first element
                     outputs = (
                         raw_outputs[0]

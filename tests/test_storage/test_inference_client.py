@@ -19,6 +19,8 @@ from spectralmc.storage import (
     commit_snapshot,
 )
 
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
 
 def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPricerConfig:
     """Factory to create test configurations (GbmCVNNPricerConfig is frozen)."""

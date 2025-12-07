@@ -30,6 +30,8 @@ from spectralmc.storage.errors import (
 )
 from spectralmc.storage.gc import run_gc
 
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
 
 def make_test_snapshot(
     global_step: int = 0, model_size: tuple[int, int] = (5, 5)

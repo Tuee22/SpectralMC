@@ -3,7 +3,7 @@
 
 **Status**: Authoritative source  
 **Supersedes**: Prior PyTorch facade notes  
-**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+**Referenced by**: documents/documentation_standards.md; documents/engineering/README.md
 
 > **Purpose**: Define the required PyTorch facade usage for reproducible SpectralMC training.
 
@@ -72,7 +72,8 @@ The facade sets global PyTorch flags during import. If PyTorch is imported first
 
 If you import PyTorch before the facade, you'll see:
 
-```
+```text
+# File: documents/engineering/pytorch_facade.md
 ImportError: PyTorch must be imported via spectralmc.models.torch facade first.
 Import spectralmc.models.torch before importing torch directly.
 ```
@@ -146,7 +147,8 @@ def worker_function():
 
 If you import the facade in a worker thread:
 
-```
+```text
+# File: documents/engineering/pytorch_facade.md
 RuntimeError: spectralmc.models.torch facade must be imported in main thread
 before spawning workers. Import it at module level in your main script.
 ```

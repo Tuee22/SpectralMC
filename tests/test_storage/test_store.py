@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
 from spectralmc.result import Failure, Success
 from spectralmc.storage import AsyncBlockchainModelStore
 from spectralmc.storage.errors import VersionNotFoundError
+
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 @pytest.mark.asyncio

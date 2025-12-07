@@ -3,7 +3,7 @@
 
 **Status**: Authoritative source  
 **Supersedes**: Prior coding standards drafts  
-**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+**Referenced by**: documents/documentation_standards.md
 
 > **Purpose**: SSoT for SpectralMC coding standards covering formatting, typing, and stubs.
 
@@ -187,7 +187,7 @@ However, import sorting is **not currently enforced** in SpectralMC. Black handl
 
 #### Q: Can I use a different line length?
 
-**A: No.** SpectralMC uses Black's default 88-character line length. This is Black's recommended default and works well for most code.
+**A: No.** SpectralMC uses a 100-character line length (set in `[tool.black]`). This is the project standard; do not override it.
 
 ---
 
@@ -377,38 +377,24 @@ The `stubs` directory provides project-specific stubs for all third-party depend
 
 The following are **NEVER** allowed in `src/spectralmc/`:
 
-#### ❌ Forbidden: `Any` Type Annotations
+- Explicit or implicit untyped parameters (no `Any`).
+- Runtime casts to paper over type errors.
+- `# type: ignore` or similar suppressions.
+
+#### ✅ Correctly Typed Example
 
 ```python
 # File: documents/engineering/coding_standards.md
-# ❌ INCORRECT - Explicit Any
-from typing import Any
-
-def process_data(data: Any) -> Any:
-    return data
-
-# ❌ INCORRECT - Implicit Any from missing type hints
-def process_data(data):  # Implicitly Any
-    return data  # Implicitly Any
+def process_data(data: torch.Tensor) -> torch.Tensor:
+    return data.relu()
 ```
 
-#### ❌ Forbidden: `cast()` Function
+#### ❌ Incorrect: Missing Types
 
 ```python
 # File: documents/engineering/coding_standards.md
-# ❌ INCORRECT - Using cast to bypass type checking
-from typing import cast
-
-def get_tensor(data: object) -> torch.Tensor:
-    return cast(torch.Tensor, data)  # Forbidden!
-```
-
-#### ❌ Forbidden: `# type: ignore` Comments
-
-```python
-# File: documents/engineering/coding_standards.md
-# ❌ INCORRECT - Suppressing type errors
-result = some_function()  # type: ignore
+def process_data(data):
+    return data  # Implicitly untyped
 ```
 
 ### Why Zero Tolerance?
@@ -705,7 +691,8 @@ SpectralMC requires **zero `Any` types**, so we maintain our own stubs.
 
 Type stubs are organized in the `stubs/` directory, mirroring the package structure:
 
-```
+```text
+# File: documents/engineering/coding_standards.md
 stubs/
 ├── torch/
 │   ├── __init__.pyi
@@ -756,10 +743,8 @@ Stubs must have **zero occurrences** of:
 
 ```python
 # File: documents/engineering/coding_standards.md
-# ❌ INCORRECT - Contains Any
-from typing import Any
-
-def forward(input: Any) -> Any: ...
+# ❌ INCORRECT - Untyped stub signature
+def forward(input): ...
 
 # ✅ CORRECT - Specific types
 import torch
@@ -797,8 +782,7 @@ Strict, project-specific stub for the **top-level** :pymod:`torch` namespace.
 Only the public surface exercised by SpectralMC is declared. The stub must
 remain *type-pure*: **no** ``Any``, **no** ``cast``, **no** ``type: ignore``.
 
-Maintained as of: PyTorch 2.1.2 (CUDA 11.8)
-Last updated: 2025-01-09
+Maintained for PyTorch 2.1.2 (CUDA 11.8)
 """
 ```
 
@@ -933,8 +917,7 @@ Strict stub for new_library.
 
 Only APIs used by SpectralMC. Type-pure: no Any, no cast, no type: ignore.
 
-Maintained as of: new_library 1.2.3
-Last updated: 2025-01-XX
+Maintained for new_library 1.2.3
 """
 
 from __future__ import annotations
@@ -977,7 +960,7 @@ Update stubs when:
 1. Read library changelog for breaking changes
 2. Update stub to match new API
 3. Run mypy to verify
-4. Update "Last updated" date in docstring
+4. Refresh the stub docstring metadata to reflect the supported library version
 
 #### Testing Stubs
 
@@ -1912,7 +1895,7 @@ Note: Production training loops use the Effect Interpreter pattern. See [Effect 
 - ❌ Assuming tensors are on CUDA without checking
 - ❌ Moving tensors between devices unnecessarily
 - ❌ Not handling device in function signatures
-- ✅ Explicit device management: `device = torch.device("cuda" if torch.cuda.is_available() else "cpu")`
+- ✅ Explicit GPU requirement: `device = torch.device("cuda:0")` (fail fast if CUDA missing)
 - ✅ Keep tensors on same device throughout computation
 - ✅ Use `models/cpu_gpu_transfer.py` utilities for controlled transfers
 
@@ -1969,7 +1952,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry show --outdat
 
 # 3. Check for new deprecation warnings in tests
 docker compose -f docker/docker-compose.yml exec spectralmc \
-  pytest tests/ -W default::DeprecationWarning > /tmp/warnings.txt 2>&1
+  poetry run test-all -W default::DeprecationWarning > /tmp/warnings.txt 2>&1
 grep "DeprecationWarning" /tmp/warnings.txt | grep -v "botocore\|QuantLib"
 
 # 4. Review PyTorch/NumPy/CuPy changelogs for upcoming deprecations
@@ -2036,10 +2019,11 @@ When updating major dependencies (PyTorch, NumPy, CuPy):
 
 3. **Verify no new deprecations**
    ```bash
-   # File: documents/engineering/coding_standards.md
-   docker compose -f docker/docker-compose.yml exec spectralmc \
-     pytest tests/ -W error::DeprecationWarning
-   ```
+# File: documents/engineering/coding_standards.md
+docker compose -f docker/docker-compose.yml exec spectralmc \
+  poetry run test-all -W error::DeprecationWarning
+```text
+# File: documents/engineering/coding_standards.md
 
 ### Status: Deprecation-Free Codebase
 
@@ -2072,12 +2056,13 @@ SpectralMC's coding standards ensure:
 
 Before committing code:
 
-```bash
+```
 # File: documents/engineering/coding_standards.md
 # Inside Docker container
 docker compose -f docker/docker-compose.yml exec spectralmc black .
 docker compose -f docker/docker-compose.yml exec spectralmc mypy
-```
+```text
+# File: documents/engineering/coding_standards.md
 
 Both must pass with zero errors.
 
@@ -2087,3 +2072,4 @@ See also:
 - [Documentation Standards](../documentation_standards.md) - Docstring requirements
 - [Testing Requirements](./testing_requirements.md) - Testing anti-patterns and best practices
 - [CPU/GPU Compute Policy](./cpu_gpu_compute_policy.md) - Device placement and transfers
+```

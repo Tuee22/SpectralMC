@@ -3,7 +3,7 @@
 
 **Status**: Reference only  
 **Supersedes**: Prior pydantic pattern notes  
-**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+**Referenced by**: documents/documentation_standards.md; documents/engineering/README.md
 
 > **Purpose**: Document preferred Pydantic patterns for SpectralMC configurations.
 > **📖 Authoritative Reference**: [coding_standards.md](coding_standards.md)

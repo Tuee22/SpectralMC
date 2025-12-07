@@ -17,6 +17,8 @@ from spectralmc.storage import (
     load_snapshot_from_checkpoint,
 )
 
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
 
 @pytest.mark.asyncio
 async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -> None:

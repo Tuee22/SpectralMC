@@ -3,7 +3,7 @@
 
 **Status**: Authoritative source  
 **Supersedes**: Prior purity doctrine drafts  
-**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+**Referenced by**: documents/documentation_standards.md
 
 > **Purpose**: Define SpectralMC purity expectations and separation of side effects.
 
@@ -526,6 +526,3 @@ Mark with `# SYSTEM BOUNDARY:` comment.
 - [Reproducibility Proofs](./reproducibility_proofs.md) - How purity enables provable determinism
 
 ---
-
-**Last updated**: 2025-11-30
-**Status**: Active doctrine, zero tolerance for violations in pure code

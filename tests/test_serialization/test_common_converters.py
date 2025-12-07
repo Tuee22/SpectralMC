@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import torch
+
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import Device, DType
 from spectralmc.serialization.common import (
@@ -10,6 +12,8 @@ from spectralmc.serialization.common import (
     DTypeConverter,
     PrecisionConverter,
 )
+
+assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 def test_precision_round_trip() -> None:

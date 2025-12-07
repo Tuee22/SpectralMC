@@ -3,7 +3,7 @@
 
 **Status**: Authoritative source  
 **Supersedes**: Prior CPU/GPU compute policy drafts  
-**Referenced by**: documents/documentation_standards.md; documents/engineering/index.md
+**Referenced by**: documents/documentation_standards.md; documents/engineering/README.md
 
 > **Purpose**: Define device placement rules for deterministic CPU setup followed by GPU execution.
 
@@ -195,9 +195,8 @@ Tests must use GPU by default and fail explicitly if CUDA unavailable:
 import pytest
 import torch
 
-# Module-level GPU requirement
-if not torch.cuda.is_available():
-    pytest.skip("CUDA required for GPU compute tests", allow_module_level=True)
+# Module-level GPU requirement (fail fast if CUDA missing)
+assert torch.cuda.is_available(), "CUDA required for GPU compute tests"
 
 # Default to GPU device
 GPU_DEV: torch.device = torch.device("cuda:0")
@@ -279,7 +278,8 @@ def forward(self, real: Tensor, imag: Tensor) -> tuple[Tensor, Tensor]:
 
 Use this flowchart to determine the correct device for each operation:
 
-```
+```text
+# File: documents/engineering/cpu_gpu_compute_policy.md
 Operation Type?
 ├─ Model Initialization
 │  └─ CPU (deterministic Sobol init) → Transfer to GPU
@@ -321,7 +321,7 @@ grep "GPU_DEV" tests/*.py
 # File: documents/engineering/cpu_gpu_compute_policy.md
 # Run without -O flag (enables __debug__ checks)
 docker compose -f docker/docker-compose.yml exec spectralmc \
-  python -m pytest tests/test_cvnn.py -v
+  poetry run test-all tests/test_cvnn.py -v
 
 # Look for device validation warnings
 # UserWarning: ComplexLinear input (real) is on cpu but expected cuda.
