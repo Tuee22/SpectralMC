@@ -7,11 +7,15 @@ All tests require GPU - missing GPU is a hard failure, not a skip.
 from __future__ import annotations
 
 import torch
+from typing import TypeVar
+
+from spectralmc.result import Failure, Result, Success
 
 from spectralmc.models.torch import (
     AdamOptimizerState,
     AdamParamGroup,
     AdamParamState,
+    TensorState,
 )
 from spectralmc.serialization.tensors import (
     AdamOptimizerStateConverter,
@@ -23,6 +27,20 @@ from spectralmc.serialization.tensors import (
 # Module-level GPU requirement - test file fails immediately without GPU
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
+
+T = TypeVar("T")
+
+
+def _expect_success(result: Result[T, object]) -> T:
+    match result:
+        case Success(value):
+            return value
+        case Failure(error):
+            raise AssertionError(f"Unexpected failure: {error}")
+
+
+def _tensor_from_state(state: TensorState) -> torch.Tensor:
+    return _expect_success(state.to_torch())
 
 
 def test_tensor_state_round_trip_float32() -> None:
@@ -98,19 +116,23 @@ def test_adam_optimizer_state_round_trip() -> None:
     """Test AdamOptimizerStateConverter round-trip."""
     # Create sample optimizer state
     param_states = {
-        0: AdamParamState.from_torch(
-            {
-                "step": 10,
-                "exp_avg": torch.randn(5, 5),
-                "exp_avg_sq": torch.randn(5, 5),
-            }
+        0: _expect_success(
+            AdamParamState.from_torch(
+                {
+                    "step": 10,
+                    "exp_avg": torch.randn(5, 5),
+                    "exp_avg_sq": torch.randn(5, 5),
+                }
+            )
         ),
-        1: AdamParamState.from_torch(
-            {
-                "step": 10,
-                "exp_avg": torch.randn(3, 3),
-                "exp_avg_sq": torch.randn(3, 3),
-            }
+        1: _expect_success(
+            AdamParamState.from_torch(
+                {
+                    "step": 10,
+                    "exp_avg": torch.randn(3, 3),
+                    "exp_avg_sq": torch.randn(3, 3),
+                }
+            )
         ),
     }
 
@@ -128,7 +150,7 @@ def test_adam_optimizer_state_round_trip() -> None:
     original = AdamOptimizerState(param_states=param_states, param_groups=param_groups)
 
     # Round trip
-    proto = AdamOptimizerStateConverter.to_proto(original)
+    proto = _expect_success(AdamOptimizerStateConverter.to_proto(original))
     recovered = AdamOptimizerStateConverter.from_proto(proto)
 
     # Verify param states
@@ -139,14 +161,14 @@ def test_adam_optimizer_state_round_trip() -> None:
 
         assert rec_state.step == orig_state.step
         assert torch.allclose(
-            rec_state.exp_avg.to_torch(),
-            orig_state.exp_avg.to_torch(),
+            _tensor_from_state(rec_state.exp_avg),
+            _tensor_from_state(orig_state.exp_avg),
             rtol=1e-6,
             atol=1e-9,
         )
         assert torch.allclose(
-            rec_state.exp_avg_sq.to_torch(),
-            orig_state.exp_avg_sq.to_torch(),
+            _tensor_from_state(rec_state.exp_avg_sq),
+            _tensor_from_state(orig_state.exp_avg_sq),
             rtol=1e-6,
             atol=1e-9,
         )
@@ -223,19 +245,23 @@ def test_model_checkpoint_round_trip() -> None:
 
     # Create optimizer state
     param_states = {
-        0: AdamParamState.from_torch(
-            {
-                "step": 100,
-                "exp_avg": torch.randn(10, 5),
-                "exp_avg_sq": torch.randn(10, 5),
-            }
+        0: _expect_success(
+            AdamParamState.from_torch(
+                {
+                    "step": 100,
+                    "exp_avg": torch.randn(10, 5),
+                    "exp_avg_sq": torch.randn(10, 5),
+                }
+            )
         ),
-        1: AdamParamState.from_torch(
-            {
-                "step": 100,
-                "exp_avg": torch.randn(10),
-                "exp_avg_sq": torch.randn(10),
-            }
+        1: _expect_success(
+            AdamParamState.from_torch(
+                {
+                    "step": 100,
+                    "exp_avg": torch.randn(10),
+                    "exp_avg_sq": torch.randn(10),
+                }
+            )
         ),
     }
 
@@ -259,8 +285,10 @@ def test_model_checkpoint_round_trip() -> None:
     global_step = 1000
 
     # Round trip
-    proto = ModelCheckpointConverter.to_proto(
-        model_state_dict, optimizer_state, cpu_rng, cuda_rngs, global_step
+    proto = _expect_success(
+        ModelCheckpointConverter.to_proto(
+            model_state_dict, optimizer_state, cpu_rng, cuda_rngs, global_step
+        )
     )
 
     rec_model, rec_opt, rec_cpu_rng, rec_cuda_rngs, rec_step = ModelCheckpointConverter.from_proto(

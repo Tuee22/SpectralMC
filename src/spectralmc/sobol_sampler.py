@@ -38,6 +38,15 @@ from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from scipy.stats.qmc import Sobol
 
+from spectralmc.errors.sampler import (
+    DimensionMismatch,
+    InvalidBounds,
+    NegativeSamples,
+    SamplerValidationFailed,
+)
+from spectralmc.result import Failure, Result, Success
+from spectralmc.validation import validate_model
+
 
 __all__: list[str] = ["BoundSpec", "SobolConfig", "SobolSampler"]
 
@@ -103,26 +112,7 @@ class BoundSpec(BaseModel):
 
 
 class SobolSampler(Generic[PointT]):
-    """Generate Sobol points and validate them via a Pydantic model.
-
-    Parameters
-    ----------
-    pydantic_class
-        The Pydantic model that defines the *schema* of each sample.
-    dimensions
-        Mapping ``field_name → BoundSpec``.  The keys **must** match the
-        field names in ``pydantic_class``; order is irrelevant.
-    config
-        :class:`SobolConfig` instance containing seed and skip parameters.
-        Validation is performed by Pydantic at construction time.
-
-    Notes
-    -----
-    * All internal computations are in **float64** - the native precision
-      of both SciPy's Sobol engine and Python floats.
-    * The class holds no mutable state aside from the SciPy engine; if you
-      need checkpoints, serialise ``skip`` and reconstruct later.
-    """
+    """Generate Sobol points and validate them via a Pydantic model."""
 
     # ------------------------------------------------------------------ #
     # Construction                                                       #
@@ -130,64 +120,85 @@ class SobolSampler(Generic[PointT]):
 
     def __init__(
         self,
+        *,
+        fields: list[str],
+        lower: NDArray[np.float64],
+        upper: NDArray[np.float64],
+        model: type[PointT],
+        sampler: Sobol,
+    ) -> None:
+        self._fields = fields
+        self._lower = lower
+        self._upper = upper
+        self._model = model
+        self._sampler = sampler
+
+    @classmethod
+    def create(
+        cls,
         pydantic_class: type[PointT],
         dimensions: dict[str, BoundSpec],
         *,
         config: SobolConfig,
-    ) -> None:
+    ) -> Result[SobolSampler[PointT], DimensionMismatch | InvalidBounds]:
+        """Pure factory for SobolSampler."""
 
-        # Field names in deterministic order
-        self._fields: list[str] = list(pydantic_class.model_fields)
-        if set(self._fields) != set(dimensions.keys()):
-            raise ValueError("dimension keys do not match model fields")
+        fields: list[str] = list(pydantic_class.model_fields)
+        if set(fields) != set(dimensions.keys()):
+            return Failure(
+                DimensionMismatch(
+                    expected_fields=tuple(fields),
+                    provided_fields=tuple(dimensions.keys()),
+                )
+            )
 
-        # Vectorised bounds
-        self._lower: NDArray[np.float64] = np.array(
-            [dimensions[f].lower for f in self._fields], dtype=np.float64
+        try:
+            lower = np.array([dimensions[f].lower for f in fields], dtype=np.float64)
+            upper = np.array([dimensions[f].upper for f in fields], dtype=np.float64)
+            sampler = Sobol(d=len(fields), scramble=True, seed=config.seed)
+            if config.skip:
+                sampler.fast_forward(config.skip)
+        except Exception as exc:  # pragma: no cover - SciPy-specific edge
+            return Failure(InvalidBounds(message=str(exc)))
+
+        return Success(
+            cls(fields=fields, lower=lower, upper=upper, model=pydantic_class, sampler=sampler)
         )
-        self._upper: NDArray[np.float64] = np.array(
-            [dimensions[f].upper for f in self._fields], dtype=np.float64
-        )
-
-        self._model: type[PointT] = pydantic_class
-        self._sampler: Sobol = Sobol(d=len(self._fields), scramble=True, seed=config.seed)
-        if config.skip:
-            self._sampler.fast_forward(config.skip)
 
     # ------------------------------------------------------------------ #
     # Private helpers                                                    #
     # ------------------------------------------------------------------ #
 
-    def _construct(self, row: NDArray[np.float64]) -> PointT:
+    def _construct(self, row: NDArray[np.float64]) -> Result[PointT, SamplerValidationFailed]:
         """Create a validated model instance from one coordinate row."""
         data = {name: float(row[i]) for i, name in enumerate(self._fields)}
-        return self._model(**data)
+        match validate_model(self._model, **data):
+            case Success(model):
+                return Success(model)
+            case Failure(error):
+                return Failure(SamplerValidationFailed(error=error))
 
     # ------------------------------------------------------------------ #
     # Public API                                                         #
     # ------------------------------------------------------------------ #
 
-    def sample(self, n_samples: int) -> list[PointT]:
-        """Return a list of Sobol points.
-
-        Args:
-            n_samples: Non-negative number of points.  ``0`` returns ``[]``.
-
-        Returns
-        -------
-        list[PointT]
-            Instances of ``pydantic_class`` in generation order.
-
-        Raises
-        ------
-        ValueError
-            If ``n_samples`` is negative.
-        """
+    def sample(
+        self, n_samples: int
+    ) -> Result[list[PointT], NegativeSamples | SamplerValidationFailed]:
+        """Return a list of Sobol points."""
         if n_samples < 0:
-            raise ValueError("`n_samples` must be non-negative")
+            return Failure(NegativeSamples(n_samples=n_samples))
         if n_samples == 0:
-            return []
+            return Success([])
 
         raw: NDArray[np.float64] = self._sampler.random(n_samples)
         scaled: NDArray[np.float64] = self._lower + (self._upper - self._lower) * raw
-        return [self._construct(row) for row in scaled]
+
+        results: list[PointT] = []
+        for row in scaled:
+            match self._construct(row):
+                case Success(model):
+                    results.append(model)
+                case Failure(error):
+                    return Failure(error)
+        return Success(results)

@@ -9,7 +9,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 import torch
 
-from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.gbm import build_black_scholes_config, build_simulation_params
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
 from spectralmc.result import Failure, Success
@@ -162,7 +162,7 @@ def test_hash_length_consistency() -> None:
 
 def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPricerConfig:
     """Factory to create test configurations."""
-    sim_params = SimulationParams(
+    match build_simulation_params(
         timesteps=100,
         network_size=1024,
         batches_per_mc_run=8,
@@ -171,13 +171,21 @@ def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPri
         buffer_size=10000,
         skip=0,
         dtype=Precision.float32,
-    )
+    ):
+        case Failure(err):
+            pytest.fail(f"SimulationParams creation failed: {err}")
+        case Success(sim_params):
+            pass
 
-    bs_config = BlackScholesConfig(
+    match build_black_scholes_config(
         sim_params=sim_params,
         simulate_log_return=True,
         normalize_forwards=True,
-    )
+    ):
+        case Failure(err):
+            pytest.fail(f"BlackScholesConfig creation failed: {err}")
+        case Success(bs_config):
+            pass
 
     cpu_rng_state = torch.get_rng_state().numpy().tobytes()
 

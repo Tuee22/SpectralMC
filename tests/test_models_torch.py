@@ -14,18 +14,29 @@ All tests are fully typed and mypy-strict-clean.
 
 from __future__ import annotations
 
-from typing import Mapping
+from typing import Mapping, TypeVar
 
 import torch
 
 import spectralmc.models.torch as sm_torch
+from spectralmc.result import Failure, Result, Success
 
 
 # Module-level GPU requirement - test file fails immediately without GPU
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
-
 # ──────────────────────────── helpers & fixtures ────────────────────────────
+
+
+T = TypeVar("T")
+
+
+def _expect_success(result: Result[T, object]) -> T:
+    match result:
+        case Success(value):
+            return value
+        case Failure(error):
+            raise AssertionError(f"Unexpected failure: {error}")
 
 
 def _make_parameters() -> list[torch.nn.Parameter]:
@@ -73,7 +84,7 @@ def test_default_device_nested() -> None:
 def test_tensor_state_roundtrip() -> None:
     t_orig: torch.Tensor = torch.arange(10, dtype=torch.float32)
     ts: sm_torch.TensorState = sm_torch.TensorState.from_torch(t_orig)
-    t_round: torch.Tensor = ts.to_torch()
+    t_round: torch.Tensor = _expect_success(ts.to_torch())
     assert torch.equal(t_orig, t_round)
     # from_bytes must succeed on the same payload
     ts2: sm_torch.TensorState = sm_torch.TensorState.from_bytes(ts.data)
@@ -90,11 +101,14 @@ def test_adam_optimizer_state_roundtrip() -> None:
     opt.step()
 
     # Capture the optimiser state directly from its `state_dict`
-    state: sm_torch.AdamOptimizerState = sm_torch.AdamOptimizerState.from_torch(opt.state_dict())
+    state: sm_torch.AdamOptimizerState = _expect_success(
+        sm_torch.AdamOptimizerState.from_torch(opt.state_dict())
+    )
 
     # Restore into a fresh optimiser instance
     new_opt = torch.optim.Adam(params, lr=0.001)
-    new_opt.load_state_dict(state.to_torch())
+    state_dict = _expect_success(state.to_torch())
+    new_opt.load_state_dict(state_dict)
 
     # All parameter steps should be identical
     for group_old, group_new in zip(opt.param_groups, new_opt.param_groups):

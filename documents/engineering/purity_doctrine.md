@@ -439,6 +439,27 @@ Before approving any PR in business logic (training, pricing, models):
 | **Test Code** (`tests/`) | Relaxed | assert, pytest fixtures, setup |
 | **System Boundaries** (`__main__.py`, HTTP handlers) | Relaxed | Logging, argument parsing |
 
+### CUDA kernels (performance-focused exception)
+
+CUDA kernels may use imperative constructs (`for`/`while`/`if`) for performance **while staying semantically pure**:
+
+- No side effects beyond writing to their designated output buffers.
+- Do not mutate input-only arguments.
+- Return values must be pure data (no hidden handles or global state).
+
+### Pydantic validation (pure boundary)
+
+Pydantic raises `ValidationError` internally. Keep call sites pure by wrapping
+construction in a helper that returns `Result[Model, ValidationError]` (see
+`src/spectralmc/validation.py::validate_model`). Use that wrapper instead of
+letting validation exceptions propagate; handle the Failure via `match/case`.
+
+### Import failures (fail-fast allowed)
+
+Import-time guards for hard dependencies may raise (e.g., missing PyTorch/CuPy).
+These are considered configuration errors; it is acceptable for the program to
+fail fast rather than return `Result` in such cases.
+
 ### Business Logic Must Be Pure
 
 Training orchestration, pricing logic, and model code **MUST be pure**:

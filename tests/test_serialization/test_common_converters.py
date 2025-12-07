@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import Device, DType
+from spectralmc.result import Failure, Success
 from spectralmc.serialization.common import (
     DeviceConverter,
     DTypeConverter,
@@ -21,7 +23,11 @@ def test_precision_round_trip() -> None:
     for precision in (Precision.float32, Precision.float64):
         proto = PrecisionConverter.to_proto(precision)
         result = PrecisionConverter.from_proto(proto)
-        assert result == precision
+        match result:
+            case Success(value):
+                assert value == precision
+            case Failure(error):
+                pytest.fail(f"precision conversion failed: {error}")
 
 
 def test_device_round_trip() -> None:

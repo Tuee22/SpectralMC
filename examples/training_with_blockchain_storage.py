@@ -18,7 +18,7 @@ import asyncio
 import torch
 import torch.nn as nn
 
-from spectralmc.gbm import BlackScholesConfig, SimulationParams, BlackScholes
+from spectralmc.gbm import BlackScholes, build_black_scholes_config, build_simulation_params
 from spectralmc.gbm_trainer import (
     GbmCVNNPricerConfig,
     GbmCVNNPricer,
@@ -51,7 +51,7 @@ def create_simple_cvnn(
 def create_training_config() -> GbmCVNNPricerConfig:
     """Create initial training configuration."""
     # Simulation parameters
-    sim_params = SimulationParams(
+    match build_simulation_params(
         timesteps=100,
         network_size=1024,
         batches_per_mc_run=8,
@@ -60,14 +60,22 @@ def create_training_config() -> GbmCVNNPricerConfig:
         buffer_size=10000,
         skip=0,
         dtype=Precision.float32,
-    )
+    ):
+        case Failure(err):
+            raise RuntimeError(f"Failed to build SimulationParams: {err}")
+        case Success(sim_params):
+            pass
 
     # Black-Scholes configuration
-    bs_config = BlackScholesConfig(
+    match build_black_scholes_config(
         sim_params=sim_params,
         simulate_log_return=True,
         normalize_forwards=True,
-    )
+    ):
+        case Failure(err):
+            raise RuntimeError(f"Failed to build BlackScholesConfig: {err}")
+        case Success(bs_config):
+            pass
 
     # Create model
     model = create_simple_cvnn()
@@ -192,10 +200,14 @@ async def train_with_blockchain() -> None:
                     d=0.0,
                 )
 
-                results = loaded_pricer.predict_price([test_input])
-                print(f"   - Test input: spot=100, strike=100, T=1.0, vol=0.2")
-                print(f"   - Predicted call price: ${results[0].call_price:.4f}")
-                print(f"   - Predicted put price: ${results[0].put_price:.4f}")
+                match loaded_pricer.predict_price([test_input]):
+                    case Success(results):
+                        print(f"   - Test input: spot=100, strike=100, T=1.0, vol=0.2")
+                        print(f"   - Predicted call price: ${results[0].call_price:.4f}")
+                        print(f"   - Predicted put price: ${results[0].put_price:.4f}")
+                    case Failure(error):
+                        print(f"   - Inference failed: {error}")
+                        return
             case Failure(error):
                 print(f"\nError retrieving HEAD pointer: {error}")
                 print("Cannot proceed with model loading. Skipping inference demo.")
@@ -250,10 +262,13 @@ async def demonstrate_inference_client() -> None:
                 d=0.01,
             )
 
-            results = pricer.predict_price([test_input])
-            print(f"\n2. Inference results:")
-            print(f"   - Call price: ${results[0].call_price:.4f}")
-            print(f"   - Put price: ${results[0].put_price:.4f}")
+            match pricer.predict_price([test_input]):
+                case Success(results):
+                    print(f"\n2. Inference results:")
+                    print(f"   - Call price: ${results[0].call_price:.4f}")
+                    print(f"   - Put price: ${results[0].put_price:.4f}")
+                case Failure(error):
+                    print(f"\n2. Inference failed: {error}")
 
     print("\n" + "=" * 80)
     print("InferenceClient example complete!")

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import torch
+from typing import TypeVar
 
 # CRITICAL: Import facade BEFORE torch for deterministic algorithms
 from spectralmc.effects import (
@@ -13,13 +14,26 @@ from spectralmc.effects import (
     WriteObject,
     sequence_effects,
 )
+from spectralmc.errors.serialization import SerializationResult
 from spectralmc.gbm_trainer import ComplexValuedModel, GbmCVNNPricerConfig
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.proto import tensors_pb2
+from spectralmc.result import Failure, Success
 from spectralmc.serialization import compute_sha256
 from spectralmc.serialization.tensors import ModelCheckpointConverter
 from spectralmc.storage.chain import ModelVersion
 from spectralmc.storage.store import AsyncBlockchainModelStore
+
+
+S = TypeVar("S")
+
+
+def _expect_serialization(result: SerializationResult[S]) -> S:
+    match result:
+        case Success(value):
+            return value
+        case Failure(error):
+            raise RuntimeError(f"Failed to serialize checkpoint: {error}")
 
 
 def create_checkpoint_from_snapshot(
@@ -51,12 +65,14 @@ def create_checkpoint_from_snapshot(
     global_step = snapshot.global_step
 
     # Serialize to protobuf
-    checkpoint_proto = ModelCheckpointConverter.to_proto(
-        model_state_dict=model_state_dict,
-        optimizer_state=optimizer_state,
-        torch_cpu_rng_state=cpu_rng_state,
-        torch_cuda_rng_states=cuda_rng_states,
-        global_step=global_step,
+    checkpoint_proto = _expect_serialization(
+        ModelCheckpointConverter.to_proto(
+            model_state_dict=model_state_dict,
+            optimizer_state=optimizer_state,
+            torch_cpu_rng_state=cpu_rng_state,
+            torch_cuda_rng_states=cuda_rng_states,
+            global_step=global_step,
+        )
     )
 
     # Serialize to bytes

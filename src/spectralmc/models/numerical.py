@@ -92,10 +92,7 @@ _PRECISION_STR_TO_NP: dict[str, _NPDTypeRet] = {
 _NP_TO_PRECISION_STR: dict[_NPDTypeLike, str] = {
     obj: name
     for name in _PRECISION_NAMES
-    for obj in (
-        getattr(np, name),  # scalar class
-        np.dtype(getattr(np, name)),  # dtype instance
-    )
+    for obj in (getattr(np, name), np.dtype(getattr(np, name)))
 }
 
 # str  -> cupy.dtype
@@ -107,11 +104,7 @@ _PRECISION_STR_TO_CP: dict[str, _CPDTypeRet] = {
 _CP_TO_PRECISION_STR: dict[_CPDTypeLike, str] = {
     obj: name
     for name in _PRECISION_NAMES
-    for obj in (
-        getattr(cp, name),  # CuPy scalar class
-        cp.dtype(getattr(cp, name)),  # CuPy dtype instance
-        getattr(np, name),  # NumPy scalar alias (runtime-equal)
-    )
+    for obj in (getattr(cp, name), cp.dtype(getattr(cp, name)), getattr(np, name))
 }
 
 # float → complex bijection and its programmatic inverse

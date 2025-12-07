@@ -6,6 +6,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from spectralmc.errors.serialization import InvalidTensorState, SerializationResult
 from spectralmc.models.torch import (
     AdamOptimizerState,
     AdamParamGroup,
@@ -17,6 +18,7 @@ from spectralmc.models.torch import (
 )
 from spectralmc.proto import tensors_pb2
 from spectralmc.serialization.common import DeviceConverter, DTypeConverter
+from spectralmc.result import Failure, Success
 
 
 class TensorStateConverter:
@@ -61,8 +63,11 @@ class TensorStateConverter:
         proto.dtype = DTypeConverter.to_proto(dtype_enum)
 
         # Device
-        device_enum = Device.from_torch(tensor.device)
-        proto.device = DeviceConverter.to_proto(device_enum)
+        match Device.from_torch(tensor.device):
+            case Failure(error):
+                return Failure(InvalidTensorState(message=str(error)))
+            case Success(device_enum):
+                proto.device = DeviceConverter.to_proto(device_enum)
 
         # Data - serialize via numpy
         # NOTE: .cpu() is acceptable here per CPU/GPU policy - this is serialization
@@ -173,7 +178,7 @@ class AdamOptimizerStateConverter:
     @staticmethod
     def to_proto(
         optimizer_state: AdamOptimizerState,
-    ) -> tensors_pb2.AdamOptimizerStateProto:
+    ) -> SerializationResult[tensors_pb2.AdamOptimizerStateProto]:
         """
         Serialize AdamOptimizerState to protobuf.
 
@@ -185,18 +190,22 @@ class AdamOptimizerStateConverter:
         """
         proto = tensors_pb2.AdamOptimizerStateProto()
 
-        proto.state.update(
-            {
-                param_id: tensors_pb2.AdamParamStateProto(
-                    step=param_state.step,
-                    exp_avg=TensorStateConverter.to_proto(param_state.exp_avg.to_torch()),
-                    exp_avg_sq=TensorStateConverter.to_proto(
-                        param_state.exp_avg_sq.to_torch()
-                    ),
-                )
-                for param_id, param_state in optimizer_state.param_states.items()
-            }
-        )
+        for param_id, param_state in optimizer_state.param_states.items():
+            entry = tensors_pb2.AdamParamStateProto(step=param_state.step)
+
+            match param_state.exp_avg.to_torch():
+                case Failure(error):
+                    return Failure(InvalidTensorState(message=str(error)))
+                case Success(exp_avg_tensor):
+                    entry.exp_avg.CopyFrom(TensorStateConverter.to_proto(exp_avg_tensor))
+
+            match param_state.exp_avg_sq.to_torch():
+                case Failure(error):
+                    return Failure(InvalidTensorState(message=str(error)))
+                case Success(exp_avg_sq_tensor):
+                    entry.exp_avg_sq.CopyFrom(TensorStateConverter.to_proto(exp_avg_sq_tensor))
+
+            proto.state[param_id].CopyFrom(entry)
 
         proto.param_groups.extend(
             [
@@ -212,7 +221,7 @@ class AdamOptimizerStateConverter:
             ]
         )
 
-        return proto
+        return Success(proto)
 
     @staticmethod
     def from_proto(
@@ -307,7 +316,7 @@ class ModelCheckpointConverter:
         torch_cpu_rng_state: bytes,
         torch_cuda_rng_states: list[bytes],
         global_step: int,
-    ) -> tensors_pb2.ModelCheckpointProto:
+    ) -> SerializationResult[tensors_pb2.ModelCheckpointProto]:
         """
         Serialize complete model checkpoint to protobuf.
 
@@ -330,7 +339,11 @@ class ModelCheckpointConverter:
             }
         )
 
-        proto.optimizer_state.CopyFrom(AdamOptimizerStateConverter.to_proto(optimizer_state))
+        match AdamOptimizerStateConverter.to_proto(optimizer_state):
+            case Failure(error):
+                return Failure(error)
+            case Success(optimizer_proto):
+                proto.optimizer_state.CopyFrom(optimizer_proto)
 
         # Serialize RNG state
         proto.rng_state.CopyFrom(
@@ -340,7 +353,7 @@ class ModelCheckpointConverter:
         # Global step
         proto.global_step = global_step
 
-        return proto
+        return Success(proto)
 
     @staticmethod
     def from_proto(

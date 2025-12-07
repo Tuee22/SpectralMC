@@ -12,7 +12,7 @@
 
 ## Overview
 
-SpectralMC uses **Pydantic v2** for all configuration and data validation. Pydantic models provide runtime type validation, immutable configurations, and seamless integration with mypy strict mode.
+SpectralMC uses **Pydantic v2** for all configuration and data validation. Pydantic models provide runtime type validation, immutable configurations, and seamless integration with mypy strict mode. Validation must stay **pure**: build models via `validate_model(...) -> Result[TModel, ValidationError]` instead of letting exceptions escape into business logic.
 
 ---
 
@@ -182,6 +182,37 @@ warn_required_dynamic_aliases = true
 ```
 
 See [Coding Standards](coding_standards.md) for complete mypy configuration.
+
+---
+
+## Pure Pydantic usage via Result
+
+Pydantic raises `ValidationError` on invalid input. To keep SpectralMC code pure,
+wrap construction in a Result helper instead of letting exceptions escape:
+
+```python
+# File: documents/engineering/pydantic_patterns.md
+import pytest
+from spectralmc.validation import validate_model
+from spectralmc.result import Success, Failure
+
+match validate_model(BoundSpec, lower=0.0, upper=1.0):
+    case Success(bounds):
+        ...
+    case Failure(error):
+        # handle ValidationError in a pure branch
+        ...
+```
+
+This keeps branching expression-oriented (`match/case`) and avoids try/except in
+business logic while preserving Pydantic's rich error messages. Reuse the helper
+for configs as well (e.g., `ConcurrentNormGeneratorConfig.create(...)` calls
+`validate_model` under the hood) so every call site returns `Result[T, ValidationError]`.
+
+### Import-time failures stay fail-fast
+
+Hard dependency imports (e.g., PyTorch/CuPy) may legitimately raise on misconfig.
+Do **not** wrap these in `Result`; fail fast so configuration errors are obvious.
 
 ---
 
@@ -398,34 +429,42 @@ def train_model(config: GbmCVNNPricerConfig) -> TrainedModel:
 
 ## Testing Pydantic Models
 
-Test validation logic explicitly:
+Test validation logic explicitly, but keep call sites pure by using `validate_model`:
 
 ```python
 # File: documents/engineering/pydantic_patterns.md
-import pytest
-from pydantic import ValidationError
+from spectralmc.validation import validate_model
+from spectralmc.result import Success, Failure
 
 def test_bound_spec_validation():
     """Test BoundSpec rejects invalid bounds."""
-    # Valid bounds
-    bounds = BoundSpec(lower=0.0, upper=1.0)
-    assert bounds.lower == 0.0
-    assert bounds.upper == 1.0
+    match validate_model(BoundSpec, lower=0.0, upper=1.0):
+        case Success(bounds):
+            assert bounds.lower == 0.0
+            assert bounds.upper == 1.0
+        case Failure(err):
+            pytest.fail(f"Unexpected validation failure: {err}")
 
-    # Invalid bounds (lower >= upper)
-    with pytest.raises(ValidationError, match="lower.*less than.*upper"):
-        BoundSpec(lower=1.0, upper=0.0)
+    match validate_model(BoundSpec, lower=1.0, upper=0.0):
+        case Failure(err):
+            assert "lower" in str(err)
+        case Success(_):
+            pytest.fail("expected lower < upper validation failure")
 
 def test_config_forbids_extra_fields():
     """Test configuration rejects unknown fields."""
-    with pytest.raises(ValidationError, match="Extra inputs"):
-        BlackScholesConfig(
-            spot=100.0,
-            rate=0.05,
-            volatility=0.2,
-            maturity=1.0,
-            unknown_field=42,  # Should be rejected
-        )
+    match validate_model(
+        BlackScholesConfig,
+        spot=100.0,
+        rate=0.05,
+        volatility=0.2,
+        maturity=1.0,
+        unknown_field=42,
+    ):
+        case Failure(err):
+            assert "Extra inputs" in str(err)
+        case Success(_):
+            pytest.fail("expected unknown field validation failure")
 ```
 
 ---

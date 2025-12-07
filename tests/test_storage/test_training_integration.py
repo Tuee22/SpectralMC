@@ -6,7 +6,7 @@ All tests require GPU - missing GPU is a hard failure, not a skip.
 
 from __future__ import annotations
 
-from typing import Union
+from typing import TypeVar, Union
 
 import pytest
 import torch
@@ -19,7 +19,7 @@ from spectralmc.cvnn_factory import (
     LinearCfg,
     build_model,
 )
-from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.gbm import build_black_scholes_config, build_simulation_params
 from spectralmc.gbm_trainer import (
     ComplexValuedModel,
     GbmCVNNPricer,
@@ -28,13 +28,23 @@ from spectralmc.gbm_trainer import (
 )
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import DType as TorchDTypeEnum
-from spectralmc.result import Failure, Success
+from spectralmc.result import Failure, Result, Success
 from spectralmc.sobol_sampler import BoundSpec
 from spectralmc.storage import AsyncBlockchainModelStore, commit_snapshot
 
+T = TypeVar("T")
+
+
+def _expect_success(result: Result[T, object]) -> T:
+    match result:
+        case Success(value):
+            return value
+        case Failure(error):
+            raise AssertionError(f"Unexpected CVNN factory failure: {error}")
+
+
 # Module-level GPU requirement - test file fails immediately without GPU
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
-
 
 
 def _make_test_cvnn(
@@ -57,12 +67,14 @@ def _make_test_cvnn(
         ],
         seed=seed,
     )
-    return build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg).to(device, dtype)
+    return _expect_success(build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg)).to(
+        device, dtype
+    )
 
 
 def make_test_config(model: ComplexValuedModel, global_step: int = 0) -> GbmCVNNPricerConfig:
     """Factory to create test configurations."""
-    sim_params = SimulationParams(
+    match build_simulation_params(
         timesteps=10,  # Reduced from 100: match test_e2e_storage.py pattern
         network_size=128,  # Reduced from 1024: sufficient for CVNN operation
         batches_per_mc_run=2,  # Reduced from 8: minimum for mean calculation
@@ -71,13 +83,21 @@ def make_test_config(model: ComplexValuedModel, global_step: int = 0) -> GbmCVNN
         buffer_size=256,  # Reduced from 10000: conservative async buffer (was 3.82 GB, now 1.26 MB)
         skip=0,
         dtype=Precision.float32,
-    )
+    ):
+        case Failure(err):
+            raise AssertionError(f"SimulationParams creation failed: {err}")
+        case Success(sim_params):
+            pass
 
-    bs_config = BlackScholesConfig(
+    match build_black_scholes_config(
         sim_params=sim_params,
         simulate_log_return=True,
         normalize_forwards=True,
-    )
+    ):
+        case Failure(err):
+            raise AssertionError(f"BlackScholesConfig creation failed: {err}")
+        case Success(bs_config):
+            pass
 
     cpu_rng_state = torch.get_rng_state().numpy().tobytes()
     cuda_rng_states = [state.cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()]

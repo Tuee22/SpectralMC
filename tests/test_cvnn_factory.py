@@ -27,6 +27,8 @@ from spectralmc.cvnn_factory import (
     build_model,
 )
 from spectralmc.models.torch import DType  # ← project's strongly-typed dtype enum
+from spectralmc.result import Failure, Result, Success
+from typing import TypeVar
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -76,6 +78,23 @@ def _assert_state_dict_equal(a: dict[str, Tensor], b: dict[str, Tensor]) -> None
             assert torch.equal(t1, t2), f"Mismatch in {k}"
 
 
+T = TypeVar("T")
+
+
+def _expect_success(result: Result[T, object]) -> T:
+    match result:
+        case Success(value):
+            return value
+        case Failure(error):
+            raise AssertionError(f"Unexpected CVNN factory failure: {error}")
+
+
+def _build_test_model(cfg: CVNNConfig, *, dtype: DType) -> nn.Module:
+    return _expect_success(build_model(n_inputs=N_IN, n_outputs=N_OUT, cfg=cfg)).to(
+        _DEVICE_CUDA, dtype.to_torch()
+    )
+
+
 def _example_cfg(dtype: DType = DType.float32, seed: int = 314159) -> CVNNConfig:
     """A representative, yet compact, CVNN topology."""
     return CVNNConfig(
@@ -111,11 +130,7 @@ def _single_train_step(
     dtype: DType,
 ) -> dict[str, Tensor]:
     """Materialise → forward → backward → optimiser step → return state-dict."""
-    model: nn.Module = build_model(
-        n_inputs=N_IN,
-        n_outputs=N_OUT,
-        cfg=cfg,
-    ).to(_DEVICE_CUDA)
+    model: nn.Module = _build_test_model(cfg, dtype=dtype)
 
     model.train()
 
@@ -158,11 +173,7 @@ def _single_train_step(
 def test_device_and_dtype_placement(dtype: DType) -> None:
     """Every parameter must respect the requested CUDA device and dtype."""
     cfg = _example_cfg(dtype)
-    model = build_model(
-        n_inputs=N_IN,
-        n_outputs=N_OUT,
-        cfg=cfg,
-    ).to(_DEVICE_CUDA)
+    model = _build_test_model(cfg, dtype=dtype)
 
     for p in model.parameters():
         assert p.is_cuda, "Parameter not on CUDA device"
@@ -174,11 +185,7 @@ def test_forward_backward_pass(dtype: DType) -> None:
     """A complete forward + backward pass should yield finite gradients."""
     cfg = _example_cfg(dtype)
 
-    model = build_model(
-        n_inputs=N_IN,
-        n_outputs=N_OUT,
-        cfg=cfg,
-    ).to(_DEVICE_CUDA)
+    model = _build_test_model(cfg, dtype=dtype)
     model.train()
 
     x_r = _rand(

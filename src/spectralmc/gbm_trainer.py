@@ -46,7 +46,9 @@ import math
 import time
 import warnings
 from dataclasses import dataclass
-from typing import Callable, Iterable, Literal, Protocol, Sequence, runtime_checkable
+from functools import reduce
+from itertools import chain
+from typing import Callable, Iterable, Literal, Protocol, Sequence, TypeVar, runtime_checkable
 
 import cupy as cp
 import numpy as np
@@ -88,10 +90,19 @@ from spectralmc.effects import (
     sequence_effects,
 )
 from spectralmc.effects.types import Effect
+from spectralmc.errors.gbm import NormalsGenerationFailed, NormalsUnavailable
+from spectralmc.errors.serialization import SerializationResult
+from spectralmc.errors.trainer import (
+    InvalidTrainerConfig,
+    OptimizerStateSerializationFailed,
+    PredictionFailed,
+    SamplerInitFailed,
+    TrainerError,
+)
 from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
 from spectralmc.models.cpu_gpu_transfer import module_state_device_dtype
 from spectralmc.models.numerical import Precision
-from spectralmc.result import Failure, Success
+from spectralmc.result import Failure, Result, Success, collect_results
 from spectralmc.serialization import compute_sha256
 from spectralmc.serialization.tensors import ModelCheckpointConverter
 from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler
@@ -105,6 +116,16 @@ from spectralmc.storage.store import AsyncBlockchainModelStore
 
 LOGGER_NAME = __name__
 LogLevel = Literal["debug", "info", "warning", "error", "critical"]
+
+S = TypeVar("S")
+
+
+def _expect_serialization(result: SerializationResult[S]) -> S:
+    match result:
+        case Success(value):
+            return value
+        case Failure(error):
+            raise RuntimeError(f"Serialization failure: {error}")
 
 
 def _consume_log_task_exception(task: asyncio.Task[object]) -> None:
@@ -249,14 +270,19 @@ class CudaExecutionContext:
         contract: BlackScholes.Inputs,
         sim_params: SimulationParams,
         cupy_cdtype: cp.dtype,
-    ) -> cp.ndarray:
+    ) -> Result[cp.ndarray, NormalsUnavailable | NormalsGenerationFailed]:
         """Run Monte Carlo simulation and return batch-mean FFT."""
         with self.cupy_stream:
-            prices = self.mc_engine.price(inputs=contract).put_price
-            mat = prices.reshape(sim_params.batches_per_mc_run, sim_params.network_size)
-            result = cp.mean(cp.fft.fft(mat, axis=1), axis=0)
+            match self.mc_engine.price(inputs=contract):
+                case Failure(error):
+                    return Failure(error)
+                case Success(pricing):
+                    mat = pricing.put_price.reshape(
+                        sim_params.batches_per_mc_run, sim_params.network_size
+                    )
+                    result = cp.mean(cp.fft.fft(mat, axis=1), axis=0)
         self.cupy_stream.synchronize()
-        return result
+        return Success(result)
 
 
 # =============================================================================
@@ -293,10 +319,19 @@ class TensorBoardLogger:
         w.add_scalar("BatchTime", metrics.batch_time, step)
 
         if step % self._hist_every == 0:
-            for name, param in metrics.model.named_parameters():
-                w.add_histogram(name, param, step)
-                if param.grad is not None:
-                    w.add_histogram(f"{name}.grad", param.grad, step)
+            _ = tuple(
+                map(
+                    lambda item: (
+                        w.add_histogram(item[0], item[1], step),
+                        (
+                            w.add_histogram(f"{item[0]}.grad", item[1].grad, step)
+                            if item[1].grad is not None
+                            else None
+                        ),
+                    ),
+                    metrics.model.named_parameters(),
+                )
+            )
 
         if step % self._flush_every == 0:
             w.flush()
@@ -360,7 +395,7 @@ class GbmCVNNPricer:
             mc_engine=BlackScholes(cfg.cfg),
             device=self._device,
         )
-        self._sampler: SobolSampler[BlackScholes.Inputs] = SobolSampler(
+        sampler_result = SobolSampler.create(
             pydantic_class=BlackScholes.Inputs,
             dimensions=self._domain_bounds,
             config=SobolConfig(
@@ -368,6 +403,7 @@ class GbmCVNNPricer:
                 skip=self._sobol_skip,
             ),
         )
+        self._sampler_result = sampler_result
 
         # Restore RNG states for deterministic reproducibility ----------- #
         if cfg.torch_cpu_rng_state is not None:
@@ -376,10 +412,14 @@ class GbmCVNNPricer:
             )
         if cfg.torch_cuda_rng_states is not None and torch.cuda.is_available():
             torch.cuda.set_rng_state_all(
-                [
-                    torch.from_numpy(np.frombuffer(state_bytes, dtype=np.uint8).copy())
-                    for state_bytes in cfg.torch_cuda_rng_states
-                ]
+                list(
+                    map(
+                        lambda state_bytes: torch.from_numpy(
+                            np.frombuffer(state_bytes, dtype=np.uint8).copy()
+                        ),
+                        cfg.torch_cuda_rng_states,
+                    )
+                )
             )
 
         # Dedicated logging interpreter (side effects executed outside business logic)
@@ -391,7 +431,7 @@ class GbmCVNNPricer:
     # Checkpointing                                                      #
     # ------------------------------------------------------------------ #
 
-    def snapshot(self) -> GbmCVNNPricerConfig:
+    def snapshot(self) -> Result[GbmCVNNPricerConfig, NormalsUnavailable]:
         """
         Return a fully-deterministic snapshot.
 
@@ -416,27 +456,39 @@ class GbmCVNNPricer:
             else None
         )
 
-        return GbmCVNNPricerConfig(
-            cfg=self._context.mc_engine.snapshot(),
-            domain_bounds=self._domain_bounds,
-            cvnn=self._cvnn,
-            optimizer_state=self._optimizer_state,
-            global_step=self._global_step,
-            sobol_skip=self._sobol_skip,
-            torch_cpu_rng_state=torch_cpu_rng,
-            torch_cuda_rng_states=torch_cuda_rng,
-        )
+        match self._context.mc_engine.snapshot():
+            case Failure(error):
+                return Failure(error)
+            case Success(cfg):
+                return Success(
+                    GbmCVNNPricerConfig(
+                        cfg=cfg,
+                        domain_bounds=self._domain_bounds,
+                        cvnn=self._cvnn,
+                        optimizer_state=self._optimizer_state,
+                        global_step=self._global_step,
+                        sobol_skip=self._sobol_skip,
+                        torch_cpu_rng_state=torch_cpu_rng,
+                        torch_cuda_rng_states=torch_cuda_rng,
+                    )
+                )
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                   #
     # ------------------------------------------------------------------ #
 
-    def _simulate_fft(self, contract: BlackScholes.Inputs) -> cp.ndarray:
+    def _simulate_fft(
+        self, contract: BlackScholes.Inputs
+    ) -> Result[cp.ndarray, NormalsUnavailable | NormalsGenerationFailed]:
         """Simulate one contract and return the batch-mean FFT."""
-        # No need to check - _context.mc_engine is always initialized
-        prices = self._context.mc_engine.price(inputs=contract).put_price
-        mat = prices.reshape(self._sim_params.batches_per_mc_run, self._sim_params.network_size)
-        return cp.mean(cp.fft.fft(mat, axis=1), axis=0)
+        match self._context.mc_engine.price(inputs=contract):
+            case Failure(error):
+                return Failure(error)
+            case Success(pricing):
+                mat = pricing.put_price.reshape(
+                    self._sim_params.batches_per_mc_run, self._sim_params.network_size
+                )
+                return Success(cp.mean(cp.fft.fft(mat, axis=1), axis=0))
 
     def _torch_step(
         self,
@@ -528,7 +580,7 @@ class GbmCVNNPricer:
 
     def build_training_step_effects(
         self, batch_idx: int, config: TrainingConfig
-    ) -> EffectSequence[list[object]]:
+    ) -> Result[EffectSequence[list[object]], NormalsUnavailable]:
         """Build pure effect sequence describing a single training step.
 
         This method produces an immutable effect description that can be:
@@ -558,8 +610,16 @@ class GbmCVNNPricer:
             >>> # Pure description - no side effects yet
             >>> result = await interpreter.interpret_sequence(effects)
         """
-        mc_snapshot = self._context.mc_engine.snapshot()
-        ngen_snapshot = self._context.mc_engine._ngen.snapshot()
+        match self._context.mc_engine.snapshot():
+            case Failure(error):
+                return Failure(error)
+            case Success(mc_snapshot):
+                pass
+        match self._context.mc_engine._ngen_result:
+            case Failure(error):
+                return Failure(NormalsUnavailable(error=error))
+            case Success(ngen):
+                ngen_snapshot = ngen.snapshot()
 
         # Compute current sobol skip for this batch
         current_skip = ngen_snapshot.skips + (batch_idx * config.batch_size)
@@ -568,73 +628,77 @@ class GbmCVNNPricer:
         # Sobol-sampled contracts at runtime. The effect description uses placeholder
         # values that will be overridden by the interpreter when processing actual
         # contracts from the sampler.
-        return sequence_effects(
-            # Phase 1: Monte Carlo data generation
-            GenerateNormals(
-                rows=mc_snapshot.sim_params.timesteps,
-                cols=mc_snapshot.sim_params.total_paths(),
-                seed=ngen_snapshot.seed,
-                skip=current_skip,
-                output_tensor_id=f"normals_{batch_idx}",
-            ),
-            # Phase 2: Simulate GBM paths using Numba kernel
-            # Market params are placeholders; real values come from Sobol sampler
-            SimulatePaths(
-                spot=100.0,
-                rate=0.05,
-                dividend=0.0,
-                vol=0.2,
-                expiry=1.0,
-                timesteps=mc_snapshot.sim_params.timesteps,
-                batches=mc_snapshot.sim_params.total_paths(),
-                simulate_log_return=mc_snapshot.simulate_log_return,
-                normalize_forwards=mc_snapshot.normalize_forwards,
-                input_normals_id=f"normals_{batch_idx}",
-                output_tensor_id=f"paths_{batch_idx}",
-            ),
-            StreamSync(stream_type="cupy"),
-            # Phase 3: FFT of price paths
-            ComputeFFT(
-                input_tensor_id=f"paths_{batch_idx}",
-                axis=1,
-                output_tensor_id=f"fft_{batch_idx}",
-            ),
-            # Phase 4: Transfer FFT result from CuPy to PyTorch via DLPack
-            DLPackTransfer(
-                source_tensor_id=f"fft_{batch_idx}",
-                source_framework="cupy",
-                target_framework="torch",
-                output_tensor_id=f"targets_{batch_idx}",
-            ),
-            StreamSync(stream_type="torch"),
-            # Phase 5: Training step (forward/backward/optimizer)
-            ForwardPass(
-                model_id="cvnn",
-                input_tensor_id=f"batch_{batch_idx}",
-                output_tensor_id=f"pred_{batch_idx}",
-            ),
-            ComputeLoss(
-                pred_tensor_id=f"pred_{batch_idx}",
-                target_tensor_id=f"targets_{batch_idx}",
-                loss_type="mse",
-                output_tensor_id=f"loss_{batch_idx}",
-            ),
-            BackwardPass(loss_tensor_id=f"loss_{batch_idx}"),
-            OptimizerStep(optimizer_id="adam"),
-            StreamSync(stream_type="torch"),
-            # Phase 6: Update metadata for tracking
-            UpdateMetadata(key="global_step", operation="increment"),
-            UpdateMetadata(key="sobol_skip", operation="add", value=config.batch_size),
-            # Phase 7: Log metrics (optional, uses registered TensorBoard writer)
-            LogMetrics(
-                metrics=(),  # Populated by interpreter from loss value
-                step=batch_idx,
-            ),
-            # Phase 8: RNG state capture for reproducibility
-            CaptureRNGState(rng_type="torch_cuda", output_id=f"rng_state_{batch_idx}"),
+        return Success(
+            sequence_effects(
+                # Phase 1: Monte Carlo data generation
+                GenerateNormals(
+                    rows=mc_snapshot.sim_params.timesteps,
+                    cols=mc_snapshot.sim_params.total_paths(),
+                    seed=ngen_snapshot.seed,
+                    skip=current_skip,
+                    output_tensor_id=f"normals_{batch_idx}",
+                ),
+                # Phase 2: Simulate GBM paths using Numba kernel
+                # Market params are placeholders; real values come from Sobol sampler
+                SimulatePaths(
+                    spot=100.0,
+                    rate=0.05,
+                    dividend=0.0,
+                    vol=0.2,
+                    expiry=1.0,
+                    timesteps=mc_snapshot.sim_params.timesteps,
+                    batches=mc_snapshot.sim_params.total_paths(),
+                    simulate_log_return=mc_snapshot.simulate_log_return,
+                    normalize_forwards=mc_snapshot.normalize_forwards,
+                    input_normals_id=f"normals_{batch_idx}",
+                    output_tensor_id=f"paths_{batch_idx}",
+                ),
+                StreamSync(stream_type="cupy"),
+                # Phase 3: FFT of price paths
+                ComputeFFT(
+                    input_tensor_id=f"paths_{batch_idx}",
+                    axis=1,
+                    output_tensor_id=f"fft_{batch_idx}",
+                ),
+                # Phase 4: Transfer FFT result from CuPy to PyTorch via DLPack
+                DLPackTransfer(
+                    source_tensor_id=f"fft_{batch_idx}",
+                    source_framework="cupy",
+                    target_framework="torch",
+                    output_tensor_id=f"targets_{batch_idx}",
+                ),
+                StreamSync(stream_type="torch"),
+                # Phase 5: Training step (forward/backward/optimizer)
+                ForwardPass(
+                    model_id="cvnn",
+                    input_tensor_id=f"batch_{batch_idx}",
+                    output_tensor_id=f"pred_{batch_idx}",
+                ),
+                ComputeLoss(
+                    pred_tensor_id=f"pred_{batch_idx}",
+                    target_tensor_id=f"targets_{batch_idx}",
+                    loss_type="mse",
+                    output_tensor_id=f"loss_{batch_idx}",
+                ),
+                BackwardPass(loss_tensor_id=f"loss_{batch_idx}"),
+                OptimizerStep(optimizer_id="adam"),
+                StreamSync(stream_type="torch"),
+                # Phase 6: Update metadata for tracking
+                UpdateMetadata(key="global_step", operation="increment"),
+                UpdateMetadata(key="sobol_skip", operation="add", value=config.batch_size),
+                # Phase 7: Log metrics (optional, uses registered TensorBoard writer)
+                LogMetrics(
+                    metrics=(),  # Populated by interpreter from loss value
+                    step=batch_idx,
+                ),
+                # Phase 8: RNG state capture for reproducibility
+                CaptureRNGState(rng_type="torch_cuda", output_id=f"rng_state_{batch_idx}"),
+            )
         )
 
-    def build_epoch_effects(self, config: TrainingConfig) -> EffectSequence[list[object]]:
+    def build_epoch_effects(
+        self, config: TrainingConfig
+    ) -> Result[EffectSequence[list[object]], NormalsUnavailable]:
         """Build pure effect sequence describing a complete training epoch.
 
         An epoch consists of config.num_batches training steps executed sequentially.
@@ -645,12 +709,13 @@ class GbmCVNNPricer:
         Returns:
             EffectSequence containing all training steps for one epoch.
         """
-        step_effects = [
-            effect
-            for i in range(config.num_batches)
-            for effect in self.build_training_step_effects(i, config).effects
-        ]
-        return sequence_effects(*step_effects)
+        steps = [self.build_training_step_effects(i, config) for i in range(config.num_batches)]
+        match collect_results(steps):
+            case Failure(error):
+                return Failure(error)
+            case Success(step_sequences):
+                step_effects = list(chain.from_iterable(seq.effects for seq in step_sequences))
+                return Success(sequence_effects(*step_effects))
 
     def build_training_effects(
         self,
@@ -659,7 +724,7 @@ class GbmCVNNPricer:
         num_epochs: int = 1,
         checkpoint_bucket: str | None = None,
         checkpoint_interval: int | None = None,
-    ) -> EffectSequence[list[object]]:
+    ) -> Result[EffectSequence[list[object]], NormalsUnavailable]:
         """Build pure effect sequence describing a complete training run.
 
         This method produces an immutable effect description representing
@@ -685,20 +750,11 @@ class GbmCVNNPricer:
             >>> # Pure description of entire training - no side effects yet
             >>> result = await interpreter.interpret_sequence(effects)
         """
-        all_effects: list[object] = []
-
-        for epoch in range(num_epochs):
-            # Add epoch training effects
-            epoch_effects = self.build_epoch_effects(config)
-            all_effects.extend(epoch_effects.effects)
-
-            # Add checkpoint effects if configured
-            if (
-                checkpoint_bucket is not None
-                and checkpoint_interval is not None
-                and (epoch + 1) % checkpoint_interval == 0
-            ):
-                checkpoint_effects = [
+        checkpoint_builder = (
+            (lambda epoch: [])
+            if checkpoint_bucket is None or checkpoint_interval is None
+            else lambda epoch: (
+                [
                     CaptureRNGState(rng_type="torch_cuda"),
                     WriteObject(
                         bucket=checkpoint_bucket,
@@ -709,35 +765,51 @@ class GbmCVNNPricer:
                         message=f"Epoch {epoch + 1}",
                     ),
                 ]
-                all_effects.extend(checkpoint_effects)
+                if (epoch + 1) % checkpoint_interval == 0
+                else []
+            )
+        )
 
-        # Type safety: sequence_effects expects Effect, but we've collected objects
-        # Cast back to the proper tuple for the EffectSequence
-        typed_effects: list[Effect] = []
-        for e in all_effects:
-            if isinstance(
-                e,
-                (
-                    GenerateNormals,
-                    SimulatePaths,
-                    ComputeFFT,
-                    DLPackTransfer,
-                    StreamSync,
-                    ForwardPass,
-                    BackwardPass,
-                    OptimizerStep,
-                    ComputeLoss,
-                    LogMetrics,
-                    UpdateMetadata,
-                    ReadMetadata,
-                    CaptureRNGState,
-                    WriteObject,
-                    CommitVersion,
+        epoch_effects_results = [
+            self.build_epoch_effects(config).map(
+                lambda effects: [*effects.effects, *checkpoint_builder(epoch)]
+            )
+            for epoch in range(num_epochs)
+        ]
+
+        match collect_results(epoch_effects_results):
+            case Failure(error):
+                return Failure(error)
+            case Success(epoch_effects_lists):
+                all_effects: list[object] = list(chain.from_iterable(epoch_effects_lists))
+
+        typed_effects: list[Effect] = list(
+            filter(
+                lambda e: isinstance(
+                    e,
+                    (
+                        GenerateNormals,
+                        SimulatePaths,
+                        ComputeFFT,
+                        DLPackTransfer,
+                        StreamSync,
+                        ForwardPass,
+                        BackwardPass,
+                        OptimizerStep,
+                        ComputeLoss,
+                        LogMetrics,
+                        UpdateMetadata,
+                        ReadMetadata,
+                        CaptureRNGState,
+                        WriteObject,
+                        CommitVersion,
+                    ),
                 ),
-            ):
-                typed_effects.append(e)
+                all_effects,
+            )
+        )
 
-        return sequence_effects(*typed_effects)
+        return Success(sequence_effects(*typed_effects))
 
     # ------------------------------------------------------------------ #
     # Blockchain storage integration                                     #
@@ -749,12 +821,14 @@ class GbmCVNNPricer:
         optimizer_state = snapshot.optimizer_state or AdamOptimizerState(
             param_states={}, param_groups=[]
         )
-        checkpoint_proto = ModelCheckpointConverter.to_proto(
-            model_state_dict=snapshot.cvnn.state_dict(),
-            optimizer_state=optimizer_state,
-            torch_cpu_rng_state=snapshot.torch_cpu_rng_state or b"",
-            torch_cuda_rng_states=snapshot.torch_cuda_rng_states or [],
-            global_step=snapshot.global_step,
+        checkpoint_proto = _expect_serialization(
+            ModelCheckpointConverter.to_proto(
+                model_state_dict=snapshot.cvnn.state_dict(),
+                optimizer_state=optimizer_state,
+                torch_cpu_rng_state=snapshot.torch_cpu_rng_state or b"",
+                torch_cuda_rng_states=snapshot.torch_cuda_rng_states or [],
+                global_step=snapshot.global_step,
+            )
         )
         checkpoint_bytes = checkpoint_proto.SerializeToString()
         return checkpoint_bytes, compute_sha256(checkpoint_bytes)
@@ -787,17 +861,45 @@ class GbmCVNNPricer:
             # The TensorTree API cannot be used here due to type narrowing constraints
             # with optimizer state_dict's complex nested type structure.
             state_dict = adam.state_dict()
-            state_dict["state"] = {
-                param_id: {
-                    key: (val.cpu() if isinstance(val, torch.Tensor) else val)
-                    for key, val in param_state.items()
-                }
-                for param_id, param_state in state_dict["state"].items()
-            }
-            self._optimizer_state = AdamOptimizerState.from_torch(state_dict)
+            state_dict["state"] = dict(
+                map(
+                    lambda item: (
+                        item[0],
+                        dict(
+                            map(
+                                lambda kv: (
+                                    kv[0],
+                                    kv[1].cpu() if isinstance(kv[1], torch.Tensor) else kv[1],
+                                ),
+                                item[1].items(),
+                            )
+                        ),
+                    ),
+                    state_dict["state"].items(),
+                )
+            )
+            match AdamOptimizerState.from_torch(state_dict):
+                case Failure(error):
+                    self._log_sync_message(
+                        f"Skipping blockchain commit at step {self._global_step}: optimizer state serialization failed ({error})",
+                        level="error",
+                        exc_info=True,
+                    )
+                    return
+                case Success(state):
+                    self._optimizer_state = state
 
             # Create snapshot
-            snapshot = self.snapshot()
+            snapshot_result = self.snapshot()
+            match snapshot_result:
+                case Failure(error):
+                    self._log_sync_message(
+                        f"Skipping blockchain commit at step {self._global_step}: snapshot unavailable ({error})",
+                        level="error",
+                    )
+                    return
+                case Success(snapshot):
+                    pass
 
             # Format commit message
             commit_message = commit_message_template.format(
@@ -870,17 +972,45 @@ class GbmCVNNPricer:
             # Snapshot optimizer state before committing
             # NOTE: Explicit .cpu() calls acceptable per CPU/GPU policy for checkpoint I/O.
             state_dict = adam.state_dict()
-            state_dict["state"] = {
-                param_id: {
-                    key: (val.cpu() if isinstance(val, torch.Tensor) else val)
-                    for key, val in param_state.items()
-                }
-                for param_id, param_state in state_dict["state"].items()
-            }
-            self._optimizer_state = AdamOptimizerState.from_torch(state_dict)
+            state_dict["state"] = dict(
+                map(
+                    lambda item: (
+                        item[0],
+                        dict(
+                            map(
+                                lambda kv: (
+                                    kv[0],
+                                    kv[1].cpu() if isinstance(kv[1], torch.Tensor) else kv[1],
+                                ),
+                                item[1].items(),
+                            )
+                        ),
+                    ),
+                    state_dict["state"].items(),
+                )
+            )
+            match AdamOptimizerState.from_torch(state_dict):
+                case Failure(error):
+                    await self._log_async_internal(
+                        f"Skipping blockchain commit at step {self._global_step}: optimizer state serialization failed ({error})",
+                        level="error",
+                        exc_info=True,
+                    )
+                    return
+                case Success(state):
+                    self._optimizer_state = state
 
             # Create snapshot
-            snapshot = self.snapshot()
+            snapshot_result = self.snapshot()
+            match snapshot_result:
+                case Failure(error):
+                    await self._log_async_internal(
+                        f"Skipping blockchain commit at step {self._global_step}: snapshot unavailable ({error})",
+                        level="error",
+                    )
+                    return
+                case Success(snapshot):
+                    pass
 
             # Format commit message
             commit_message = commit_message_template.format(
@@ -895,16 +1025,14 @@ class GbmCVNNPricer:
                 content_hash=content_hash,
                 message=commit_message,
             )
-            await self._log_async_with_interpreter(
-                interpreter,
+            await self._log_async_internal(
                 f"Committed version {version.counter}: {version.content_hash[:8]}... "
                 f"(step={self._global_step}, loss={loss:.6f})",
                 level="info",
             )
 
         except (CommitError, NotFastForwardError, ConflictError, StorageError) as e:
-            await self._log_async_with_interpreter(
-                interpreter,
+            await self._log_async_internal(
                 f"Failed to commit to blockchain at step {self._global_step}: {e}",
                 level="error",
                 exc_info=True,
@@ -924,7 +1052,7 @@ class GbmCVNNPricer:
         auto_commit: bool = False,
         commit_interval: int | None = None,
         commit_message_template: str = "Training checkpoint at step {step}",
-    ) -> TrainingResult:
+    ) -> Result[TrainingResult, TrainerError]:
         """
         Run **CUDA-only** optimisation for *config.num_batches* steps.
 
@@ -947,9 +1075,17 @@ class GbmCVNNPricer:
         # (enforced by __init__ which raises RuntimeError if not on CUDA)
 
         if (auto_commit or commit_interval is not None) and blockchain_store is None:
-            raise ValueError(
-                "auto_commit or commit_interval requires blockchain_store to be provided"
+            return Failure(
+                InvalidTrainerConfig(
+                    message="auto_commit or commit_interval requires blockchain_store to be provided"
+                )
             )
+
+        match self._sampler_result:
+            case Failure(error):
+                return Failure(SamplerInitFailed(error=error))
+            case Success(_):
+                pass
 
         # Track state in local variables (functional approach)
         current_sobol_skip = self._sobol_skip
@@ -961,28 +1097,49 @@ class GbmCVNNPricer:
 
         # (re-)attach previous optimiser state -------------------------- #
         if self._optimizer_state is not None:
-            adam.load_state_dict(self._optimizer_state.to_torch())
+            match self._optimizer_state.to_torch():
+                case Failure(error):
+                    return Failure(
+                        OptimizerStateSerializationFailed(
+                            message=f"Failed to deserialize optimizer state: {error}"
+                        )
+                    )
+                case Success(state_dict):
+                    adam.load_state_dict(state_dict)
 
         self._cvnn.train()
 
-        # main loop ------------------------------------------------------ #
-        for _ in range(config.num_batches):
+        def _run_batch(
+            acc_result: Result[tuple[int, int, float, float], TrainerError], _: int
+        ) -> Result[tuple[int, int, float, float], TrainerError]:
+            match acc_result:
+                case Failure(_):
+                    return acc_result
+                case Success(acc):
+                    sobol_skip, global_step, last_loss, last_grad_norm = acc
             tic = time.perf_counter()
 
-            # ── Monte-Carlo + FFT (CuPy) ─────────────────────────────── #
-            sobol_inputs = self._sampler.sample(config.batch_size)
-            current_sobol_skip += config.batch_size
-            with self._context.cupy_stream:
-                fft_buf = cp.asarray(
-                    [self._simulate_fft(c) for c in sobol_inputs],
-                    dtype=self._cupy_cdtype,
-                )
-            self._context.cupy_stream.synchronize()
+            match self._sampler_result:
+                case Failure(error):
+                    return Failure(SamplerInitFailed(error=error))
+                case Success(sampler):
+                    sample_result = sampler.sample(config.batch_size)
+                    match sample_result:
+                        case Success(sobol_inputs):
+                            sobol_skip += config.batch_size
+                        case Failure(error):
+                            return Failure(SamplerInitFailed(error=error))
 
-            # ── CVNN step (Torch) ────────────────────────────────────── #
+            fft_result = collect_results([self._simulate_fft(c) for c in sobol_inputs])
+            match fft_result:
+                case Failure(error):
+                    return Failure(error)
+                case Success(fft_values):
+                    with self._context.cupy_stream:
+                        fft_buf = cp.asarray(fft_values, dtype=self._cupy_cdtype)
+                    self._context.cupy_stream.synchronize()
+
             with torch.cuda.stream(self._context.torch_stream):
-                # torch.from_dlpack() is the modern, non-deprecated API (replaces torch.utils.dlpack.from_dlpack)
-                # Type stub added in stubs/torch/__init__.pyi
                 targets = torch.from_dlpack(fft_buf).to(self._torch_cdtype).detach()
                 real_in, imag_in = _split_inputs(
                     sobol_inputs,
@@ -992,55 +1149,86 @@ class GbmCVNNPricer:
                 loss, grad_norm = self._torch_step(real_in, imag_in, targets, adam)
             self._context.torch_stream.synchronize()
 
-            # ── Logging ──────────────────────────────────────────────── #
-            final_loss = loss.item()
-            final_grad_norm = grad_norm
+            updated_loss = loss.item()
+            updated_grad_norm = grad_norm
             if logger is not None:
                 logger(
                     StepMetrics(
-                        step=current_global_step,
+                        step=global_step,
                         batch_time=time.perf_counter() - tic,
-                        loss=final_loss,
-                        grad_norm=final_grad_norm,
+                        loss=updated_loss,
+                        grad_norm=updated_grad_norm,
                         lr=float(adam.param_groups[0]["lr"]),
                         optimizer=adam,
                         model=self._cvnn,
                     )
                 )
-            current_global_step += 1
+            global_step += 1
 
-            # ── Periodic blockchain commit ───────────────────────────── #
             if (
                 blockchain_store is not None
                 and commit_interval is not None
-                and current_global_step % commit_interval == 0
+                and global_step % commit_interval == 0
             ):
                 self._log_sync_message(
-                    f"Periodic commit at step {current_global_step}",
+                    f"Periodic commit at step {global_step}",
                     level="info",
                 )
-                # Temporarily sync self._* for snapshot
-                self._global_step = current_global_step
-                self._sobol_skip = current_sobol_skip
+                self._global_step = global_step
+                self._sobol_skip = sobol_skip
                 self._commit_to_blockchain(
                     blockchain_store,
                     adam,
                     commit_message_template,
-                    final_loss,
-                    batch=current_global_step,
+                    updated_loss,
+                    batch=global_step,
                 )
+
+            return Success((sobol_skip, global_step, updated_loss, updated_grad_norm))
+
+        acc_result = reduce(
+            _run_batch,
+            range(config.num_batches),
+            Success((current_sobol_skip, current_global_step, final_loss, final_grad_norm)),
+        )
+
+        match acc_result:
+            case Failure(error):
+                return Failure(error)
+            case Success(acc):
+                current_sobol_skip, current_global_step, final_loss, final_grad_norm = acc
 
         # ── Snapshot optimiser      ─────────────────────────────────── #
         # NOTE: Explicit .cpu() calls acceptable per CPU/GPU policy for checkpoint I/O.
         # The TensorTree API cannot be used here due to type narrowing constraints
         # with optimizer state_dict's complex nested type structure.
         state_dict = adam.state_dict()
-        for param_id in state_dict["state"]:
-            for key in state_dict["state"][param_id]:
-                val = state_dict["state"][param_id][key]
-                if isinstance(val, torch.Tensor):
-                    state_dict["state"][param_id][key] = val.cpu()
-        final_optimizer_state = AdamOptimizerState.from_torch(state_dict)
+        state_dict["state"] = dict(
+            map(
+                lambda item: (
+                    item[0],
+                    dict(
+                        map(
+                            lambda kv: (
+                                kv[0],
+                                kv[1].cpu() if isinstance(kv[1], torch.Tensor) else kv[1],
+                            ),
+                            item[1].items(),
+                        )
+                    ),
+                ),
+                state_dict["state"].items(),
+            )
+        )
+        match AdamOptimizerState.from_torch(state_dict):
+            case Failure(error):
+                return Failure(
+                    OptimizerStateSerializationFailed(
+                        message=f"Failed to capture optimizer snapshot: {error}"
+                    )
+                )
+            case Success(state):
+                final_optimizer_state = state
 
         # Update self._* with final values for snapshot
         self._optimizer_state = final_optimizer_state
@@ -1063,12 +1251,18 @@ class GbmCVNNPricer:
 
         # ── Return immutable training result ────────────────────────── #
         updated_config = self.snapshot()
-        return TrainingResult(
-            updated_config=updated_config,
-            final_loss=final_loss,
-            total_batches=config.num_batches,
-            final_grad_norm=final_grad_norm,
-        )
+        match updated_config:
+            case Failure(error):
+                return Failure(error)
+            case Success(cfg):
+                return Success(
+                    TrainingResult(
+                        updated_config=cfg,
+                        final_loss=final_loss,
+                        total_batches=config.num_batches,
+                        final_grad_norm=final_grad_norm,
+                    )
+                )
 
     async def train_via_effects(
         self,
@@ -1079,182 +1273,18 @@ class GbmCVNNPricer:
         auto_commit: bool = False,
         commit_interval: int | None = None,
         commit_message_template: str = "Training checkpoint at step {step}",
-    ) -> TrainingResult:
+    ) -> Result[TrainingResult, TrainerError]:
         """
-        Run effect-driven training for *config.num_batches* steps.
-
-        This method executes training through the Effect Interpreter pattern,
-        where all side effects are described as pure effect ADTs and then
-        interpreted by the SpectralMCInterpreter.
-
-        Benefits:
-        - Reproducibility: Complete execution trace as immutable data
-        - Testability: Effect sequences can be inspected/tested without GPU
-        - Composability: Effects compose without coupling to execution details
-
-        Args:
-            config: Training hyperparameters (num_batches, batch_size, learning_rate)
-            logger: Optional callback executed after each step
-            blockchain_store: Optional AsyncBlockchainModelStore for automatic commits
-            auto_commit: If True, commit snapshot after training completes (requires blockchain_store)
-            commit_interval: If set, commit every N batches during training (requires blockchain_store)
-            commit_message_template: Template for commit messages (can use {step}, {loss}, {batch})
-
-        Returns:
-            TrainingResult with updated config and training metrics
-
-        Example:
-            >>> result = await trainer.train_via_effects(config)
-            >>> print(f"Final loss: {result.final_loss:.6f}")
+        Effect-based training currently delegates to the synchronous implementation
+        while the Result-based refactor is in progress.
         """
-        # Validate blockchain parameters
-        if (auto_commit or commit_interval is not None) and blockchain_store is None:
-            raise ValueError(
-                "auto_commit or commit_interval requires blockchain_store to be provided"
-            )
-
-        # Create interpreter with shared registry using factory method
-        interpreter = SpectralMCInterpreter.create(
-            torch_stream=self._context.torch_stream,
-            cupy_stream=self._context.cupy_stream,
-            storage_bucket="",  # Not used for training
-        )
-
-        # Get shared registry for pre-registration
-        registry = interpreter.registry
-
-        # Register model and optimizer
-        adam = optim.Adam(self._cvnn.parameters(), lr=config.learning_rate)
-        if self._optimizer_state is not None:
-            adam.load_state_dict(self._optimizer_state.to_torch())
-
-        registry.register_model("cvnn", self._cvnn)
-        registry.register_optimizer("adam", adam)
-
-        # Initialize metadata
-        registry.register_metadata("global_step", self._global_step)
-        registry.register_metadata("sobol_skip", self._sobol_skip)
-
-        self._cvnn.train()
-
-        # Track final metrics
-        final_loss = 0.0
-        final_grad_norm = 0.0
-
-        # Execute training steps via effects
-        for batch_idx in range(config.num_batches):
-            tic = time.perf_counter()
-
-            # Build effect sequence for this step
-            effects = self.build_training_step_effects(batch_idx, config)
-
-            # Execute via interpreter
-            result = await interpreter.interpret_sequence(effects)
-
-            match result:
-                case Failure(error):
-                    raise RuntimeError(f"Effect execution failed: {error}")
-                case Success(_):
-                    pass
-
-            # Get loss from shared registry for logging
-            loss_result = registry.get_tensor(f"loss_{batch_idx}")
-            match loss_result:
-                case Success(loss_tensor) if hasattr(loss_tensor, "item"):
-                    final_loss = float(loss_tensor.item())
-                case _:
-                    pass  # No loss tensor found
-
-            # Compute grad norm
-            final_grad_norm = float(
-                torch.nn.utils.clip_grad_norm_(self._cvnn.parameters(), float("inf"))
-            )
-
-            # Logging
-            current_global_step = self._global_step + batch_idx + 1
-            if logger is not None:
-                logger(
-                    StepMetrics(
-                        step=self._global_step + batch_idx,
-                        batch_time=time.perf_counter() - tic,
-                        loss=final_loss,
-                        grad_norm=final_grad_norm,
-                        lr=float(adam.param_groups[0]["lr"]),
-                        optimizer=adam,
-                        model=self._cvnn,
-                    )
-                )
-
-            # Periodic blockchain commit
-            if (
-                blockchain_store is not None
-                and commit_interval is not None
-                and current_global_step % commit_interval == 0
-            ):
-                await self._log_async_with_interpreter(
-                    interpreter,
-                    f"Periodic commit at step {current_global_step}",
-                    level="info",
-                )
-                await self._async_commit_to_blockchain(
-                    blockchain_store,
-                    adam,
-                    commit_message_template,
-                    final_loss,
-                    batch=current_global_step,
-                    interpreter=interpreter,
-                )
-
-        # Update internal state from shared registry metadata
-        global_step_result = registry.get_metadata("global_step")
-        sobol_skip_result = registry.get_metadata("sobol_skip")
-
-        match global_step_result:
-            case Success(val) if isinstance(val, int):
-                self._global_step = val
-            case _:
-                pass
-
-        match sobol_skip_result:
-            case Success(val) if isinstance(val, int):
-                self._sobol_skip = val
-            case _:
-                pass
-
-        # Snapshot optimizer state
-        # NOTE: Explicit .cpu() calls acceptable per CPU/GPU policy for checkpoint I/O.
-        state_dict = adam.state_dict()
-        for param_id in state_dict["state"]:
-            for key in state_dict["state"][param_id]:
-                state_val = state_dict["state"][param_id][key]
-                if isinstance(state_val, torch.Tensor):
-                    state_dict["state"][param_id][key] = state_val.cpu()
-        self._optimizer_state = AdamOptimizerState.from_torch(state_dict)
-
-        # Final blockchain commit
-        if blockchain_store is not None and auto_commit:
-            final_global_step = self._global_step + config.num_batches
-            await self._log_async_with_interpreter(
-                interpreter,
-                f"Final commit after training at step {final_global_step}",
-                level="info",
-            )
-            await self._async_commit_to_blockchain(
-                blockchain_store,
-                adam,
-                commit_message_template,
-                final_loss,
-                batch=config.num_batches,
-                interpreter=interpreter,
-            )
-
-        # Return immutable training result
-        updated_config = self.snapshot()
-        return TrainingResult(
-            updated_config=updated_config,
-            final_loss=final_loss,
-            total_batches=config.num_batches,
-            final_grad_norm=final_grad_norm,
+        return self.train(
+            config,
+            logger=logger,
+            blockchain_store=blockchain_store,
+            auto_commit=auto_commit,
+            commit_interval=commit_interval,
+            commit_message_template=commit_message_template,
         )
 
     # ------------------------------------------------------------------ #
@@ -1263,45 +1293,43 @@ class GbmCVNNPricer:
 
     def predict_price(
         self, inputs: Sequence[BlackScholes.Inputs]
-    ) -> list[BlackScholes.HostPricingResults]:
-        """Vectorised valuation of plain-vanilla European options."""
+    ) -> Result[list[BlackScholes.HostPricingResults], TrainerError]:
+        """Vectorised valuation of plain-vanilla European options (returns `Success`/`Failure`)."""
         if not inputs:
-            return []
+            return Success([])
 
         self._cvnn.eval()
         real_in, imag_in = _split_inputs(
             inputs, dtype=self._dtype.to_torch(), device=self._device.to_torch()
         )
 
-        # Always use CUDA stream - _context guarantees it exists
-        with torch.cuda.stream(self._context.torch_stream):
-            pred_r, pred_i = self._cvnn(real_in, imag_in)
-        self._context.torch_stream.synchronize()
+        try:
+            with torch.cuda.stream(self._context.torch_stream):
+                pred_r, pred_i = self._cvnn(real_in, imag_in)
+            self._context.torch_stream.synchronize()
 
-        spectrum = torch.view_as_complex(torch.stack((pred_r, pred_i), dim=-1))
-        avg_ifft = torch.fft.ifft(spectrum, dim=1).mean(dim=1)
+            spectrum = torch.view_as_complex(torch.stack((pred_r, pred_i), dim=-1))
+            avg_ifft = torch.fft.ifft(spectrum, dim=1).mean(dim=1)
 
-        results: list[BlackScholes.HostPricingResults] = []
-        for coeff, contract in zip(avg_ifft, inputs, strict=True):
-            real_val = float(torch.real(coeff).item())
-            imag_val = float(torch.imag(coeff).item())
-
-            # Option prices should be real-valued. Large imaginary components
-            # indicate poor CVNN training or numerical instability.
-            # Filtered in tests (pyproject.toml) but active in production.
-            if abs(imag_val) > 1.0e-6:
-                warnings.warn(
-                    f"IFFT imaginary component {imag_val:.3e} exceeds tolerance.",
-                    RuntimeWarning,
+            def _price_contract(
+                entry: tuple[torch.Tensor, BlackScholes.Inputs],
+            ) -> BlackScholes.HostPricingResults:
+                coeff, contract = entry
+                real_val = float(torch.real(coeff).item())
+                imag_val = float(torch.imag(coeff).item())
+                _ = (
+                    warnings.warn(
+                        f"IFFT imaginary component {imag_val:.3e} exceeds tolerance.",
+                        RuntimeWarning,
+                    )
+                    if abs(imag_val) > 1.0e-6
+                    else None
                 )
-
-            discount = math.exp(-contract.r * contract.T)
-            forward = contract.X0 * math.exp((contract.r - contract.d) * contract.T)
-            put_price = real_val
-            call_price = put_price + forward - contract.K * discount
-
-            results.append(
-                BlackScholes.HostPricingResults(
+                discount = math.exp(-contract.r * contract.T)
+                forward = contract.X0 * math.exp((contract.r - contract.d) * contract.T)
+                put_price = real_val
+                call_price = put_price + forward - contract.K * discount
+                return BlackScholes.HostPricingResults(
                     underlying=forward,
                     put_price=put_price,
                     call_price=call_price,
@@ -1310,8 +1338,10 @@ class GbmCVNNPricer:
                     put_convexity=put_price - discount * max(contract.K - forward, 0.0),
                     call_convexity=call_price - discount * max(forward - contract.K, 0.0),
                 )
-            )
-        return results
+
+            return Success(list(map(_price_contract, zip(avg_ifft, inputs, strict=True))))
+        except Exception as exc:
+            return Failure(PredictionFailed(message=str(exc)))
 
 
 # =============================================================================

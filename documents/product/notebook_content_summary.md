@@ -20,7 +20,7 @@ All exploratory Jupyter notebooks have been removed. The essential guidance belo
 - Workflow: define `BlackScholesConfig`, create Sobol sampler, run GPU GBM simulation, FFT the payoff spectrum, train `GbmCVNNPricer`, then infer prices.
 - TensorBoard usage: logdir per run; launch via `tensorboard --logdir <path>` to visualize `Loss/train`.
 - Training config guidance: small batch counts for quick smoke tests; increase `batches_per_mc_run` or network size if GPU memory allows.
-- Inference flow: `predict_price` returns real component of the 0-frequency bin; non-trivial imaginary parts indicate an under-trained model.
+- Inference flow: `predict_price` returns a `Result` whose `Success` case yields the real component of the 0-frequency bin; non-trivial imaginary parts indicate an under-trained model.
 
 ## Removed Scratch Notebooks
 - `async_normals.ipynb`, `bs_sampling_test.ipynb`, `cvnn.ipynb`, `discrete_fourier_transform.ipynb`, `error_duplication.ipynb`, `error_investigation.ipynb`, `gbm.ipynb`, `sobol_sampler.ipynb`, `test_gbm_train.ipynb` contained exploratory code or partial experiments now superseded by the summaries above and existing white papers in `documents/`.

@@ -79,17 +79,20 @@ Train a model and automatically commit the final checkpoint:
 # File: examples/training_with_blockchain_storage.py
 import asyncio
 import torch
-from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.gbm import (
+    build_black_scholes_config,
+    build_simulation_params,
+)
 from spectralmc.gbm_trainer import GbmCVNNPricer, GbmCVNNPricerConfig, TrainingConfig
 from spectralmc.models.numerical import Precision
+from spectralmc.result import Failure, Success
 from spectralmc.storage import AsyncBlockchainModelStore
 
 async def train_with_auto_commit():
     # Create model
     model = torch.nn.Linear(5, 5).cuda()
 
-    # Create simulation config
-    sim_params = SimulationParams(
+    match build_simulation_params(
         timesteps=100,
         network_size=1024,
         batches_per_mc_run=8,
@@ -97,14 +100,22 @@ async def train_with_auto_commit():
         mc_seed=42,
         buffer_size=10000,
         skip=0,
-        dtype=Precision.float32
-    )
+        dtype=Precision.float32,
+    ):
+        case Failure(err):
+            raise RuntimeError(f"Invalid simulation parameters: {err}")
+        case Success(sim_params):
+            pass
 
-    bs_config = BlackScholesConfig(
+    match build_black_scholes_config(
         sim_params=sim_params,
         simulate_log_return=True,
-        normalize_forwards=True
-    )
+        normalize_forwards=True,
+    ):
+        case Failure(err):
+            raise RuntimeError(f"Invalid Black-Scholes config: {err}")
+        case Success(bs_config):
+            pass
 
     # Create pricer config
     pricer_config = GbmCVNNPricerConfig(

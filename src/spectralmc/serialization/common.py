@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from spectralmc.errors.serialization import SerializationResult, UnsupportedPrecision
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import (
     AnyDType,
@@ -11,6 +12,7 @@ from spectralmc.models.torch import (
     ReducedPrecisionDType,
 )
 from spectralmc.proto import common_pb2
+from spectralmc.result import Failure, Success
 
 
 class PrecisionConverter:
@@ -26,13 +28,16 @@ class PrecisionConverter:
         return mapping[precision]
 
     @staticmethod
-    def from_proto(proto_value: int) -> Precision:
+    def from_proto(proto_value: int) -> SerializationResult[Precision]:
         """Convert proto enum value to Precision enum."""
         mapping = {
             common_pb2.PRECISION_FLOAT32: Precision.float32,
             common_pb2.PRECISION_FLOAT64: Precision.float64,
         }
-        return mapping[proto_value]
+        precision = mapping.get(proto_value)
+        if precision is None:
+            return Failure(UnsupportedPrecision(proto_value=proto_value))
+        return Success(precision)
 
 
 class DeviceConverter:

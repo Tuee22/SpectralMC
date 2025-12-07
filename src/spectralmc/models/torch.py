@@ -60,6 +60,14 @@ os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
 
 import torch  # noqa: E402
 
+from spectralmc.errors.torch_facade import (  # noqa: E402
+    InvalidAdamState,
+    TensorStateConversionFailed,
+    TorchFacadeResult,
+    UnsupportedTorchDevice,
+    UnsupportedTorchDType,
+)
+from spectralmc.result import Failure, Success  # noqa: E402
 from spectralmc.models.numerical import Precision  # noqa: E402
 
 
@@ -136,13 +144,11 @@ class FullPrecisionDType(str, Enum):
         return _DTYPE_STR_TO_TORCH[self.value]
 
     @classmethod
-    def from_torch(cls, dt: torch.dtype) -> FullPrecisionDType:
-        if dt not in _TORCH_DTYPE_TO_STR:
-            raise ValueError(f"Unsupported torch.dtype {dt!r}")
-        dtype_str = _TORCH_DTYPE_TO_STR[dt]
+    def from_torch(cls, dt: torch.dtype) -> TorchFacadeResult["FullPrecisionDType"]:
+        dtype_str = _TORCH_DTYPE_TO_STR.get(dt)
         if dtype_str not in ("float32", "float64", "complex64", "complex128"):
-            raise ValueError(f"torch.dtype {dt!r} is not a full precision dtype")
-        return cls(dtype_str)
+            return Failure(UnsupportedTorchDType(dtype=str(dt)))
+        return Success(cls(dtype_str))
 
     def to_precision(self) -> Precision:
         """Return the numeric ``Precision`` representation of this dtype."""
@@ -165,13 +171,11 @@ class ReducedPrecisionDType(str, Enum):
         return _DTYPE_STR_TO_TORCH[self.value]
 
     @classmethod
-    def from_torch(cls, dt: torch.dtype) -> ReducedPrecisionDType:
-        if dt not in _TORCH_DTYPE_TO_STR:
-            raise ValueError(f"Unsupported torch.dtype {dt!r}")
-        dtype_str = _TORCH_DTYPE_TO_STR[dt]
+    def from_torch(cls, dt: torch.dtype) -> TorchFacadeResult["ReducedPrecisionDType"]:
+        dtype_str = _TORCH_DTYPE_TO_STR.get(dt)
         if dtype_str not in ("float16", "bfloat16"):
-            raise ValueError(f"torch.dtype {dt!r} is not a reduced precision dtype")
-        return cls(dtype_str)
+            return Failure(UnsupportedTorchDType(dtype=str(dt)))
+        return Success(cls(dtype_str))
 
 
 # Union type for contexts accepting any dtype
@@ -191,12 +195,12 @@ class Device(str, Enum):
         return torch.device(self.value)
 
     @classmethod
-    def from_torch(cls, dev: torch.device) -> Device:
+    def from_torch(cls, dev: torch.device) -> TorchFacadeResult["Device"]:
         if dev.type == "cpu":
-            return cls.cpu
+            return Success(cls.cpu)
         if dev.type == "cuda" and dev.index in {None, 0}:
-            return cls.cuda
-        raise ValueError("Only CPU and the first CUDA card are supported.")
+            return Success(cls.cuda)
+        return Failure(UnsupportedTorchDevice(device=str(dev)))
 
 
 # --------------------------------------------------------------------------- #
@@ -255,16 +259,21 @@ class TensorState(BaseModel):
 
     # ------------------------------------------------------------------ #
     @staticmethod
-    def from_torch(t: torch.Tensor) -> TensorState:
+    def from_torch(t: torch.Tensor) -> TorchFacadeResult["TensorState"]:
         if t.device != Device.cpu.to_torch():
-            raise RuntimeError("Tensor must reside on CPU to enter TensorState.")
+            return Failure(
+                TensorStateConversionFailed(
+                    message="Tensor must reside on CPU to enter TensorState."
+                )
+            )
         blob: bytes = _sf_save({"tensor": t})
 
-        # Determine which dtype enum to use
         dt_torch = t.dtype
-        if dt_torch not in _TORCH_DTYPE_TO_STR:
-            raise ValueError(f"Unsupported torch.dtype {dt_torch!r}")
-        dtype_str = _TORCH_DTYPE_TO_STR[dt_torch]
+        dtype_str = _TORCH_DTYPE_TO_STR.get(dt_torch)
+        if dtype_str is None:
+            return Failure(
+                TensorStateConversionFailed(message=f"Unsupported torch.dtype {dt_torch!r}")
+            )
 
         dtype: AnyDType
         if dtype_str in ("float32", "float64", "complex64", "complex128"):
@@ -272,34 +281,50 @@ class TensorState(BaseModel):
         else:
             dtype = ReducedPrecisionDType(dtype_str)
 
-        return TensorState(data=blob, shape=tuple(t.shape), dtype=dtype)
+        return Success(TensorState(data=blob, shape=tuple(t.shape), dtype=dtype))
 
-    def to_torch(self) -> torch.Tensor:
+    def to_torch(self) -> TorchFacadeResult[torch.Tensor]:
         tensor_dict: dict[str, torch.Tensor] = _sf_load(self.data)
-        tensor = tensor_dict["tensor"]
+        tensor = tensor_dict.get("tensor")
+        if tensor is None:
+            return Failure(
+                TensorStateConversionFailed(
+                    message="SafeTensor payload missing required 'tensor' entry."
+                )
+            )
         if tensor.device != Device.cpu.to_torch():
-            raise RuntimeError("Tensor deserialized onto a non-CPU device.")
+            return Failure(
+                TensorStateConversionFailed(message="Tensor deserialized onto a non-CPU device.")
+            )
 
-        # Validate dtype matches
         expected_dtype = self.dtype.to_torch()
         if tuple(tensor.shape) != self.shape or tensor.dtype != expected_dtype:
-            raise RuntimeError("Tensor metadata mismatch on deserialization.")
-        return tensor
+            return Failure(
+                TensorStateConversionFailed(message="Tensor metadata mismatch on deserialization.")
+            )
+        return Success(tensor)
 
     @staticmethod
-    def from_bytes(raw: bytes) -> TensorState:
+    def from_bytes(raw: bytes) -> TorchFacadeResult["TensorState"]:
         tensor_dict: dict[str, torch.Tensor] = _sf_load(raw)
         if set(tensor_dict.keys()) != {"tensor"}:
-            raise ValueError("SafeTensor must contain exactly one entry named 'tensor'.")
+            return Failure(
+                TensorStateConversionFailed(
+                    message="SafeTensor must contain exactly one entry named 'tensor'."
+                )
+            )
         t = tensor_dict["tensor"]
         if t.device != Device.cpu.to_torch():
-            raise RuntimeError("Tensor deserialized onto a non-CPU device.")
+            return Failure(
+                TensorStateConversionFailed(message="Tensor deserialized onto a non-CPU device.")
+            )
 
-        # Determine which dtype enum to use
         dt_torch = t.dtype
-        if dt_torch not in _TORCH_DTYPE_TO_STR:
-            raise ValueError(f"Unsupported torch.dtype {dt_torch!r}")
-        dtype_str = _TORCH_DTYPE_TO_STR[dt_torch]
+        dtype_str = _TORCH_DTYPE_TO_STR.get(dt_torch)
+        if dtype_str is None:
+            return Failure(
+                TensorStateConversionFailed(message=f"Unsupported torch.dtype {dt_torch!r}")
+            )
 
         dtype: AnyDType
         if dtype_str in ("float32", "float64", "complex64", "complex128"):
@@ -307,7 +332,7 @@ class TensorState(BaseModel):
         else:
             dtype = ReducedPrecisionDType(dtype_str)
 
-        return TensorState(data=raw, shape=tuple(t.shape), dtype=dtype)
+        return Success(TensorState(data=raw, shape=tuple(t.shape), dtype=dtype))
 
 
 # --------------------------------------------------------------------------- #
@@ -354,50 +379,108 @@ class AdamParamState(BaseModel):
 
     # ------------------------------------------------------------------ #
     @classmethod
-    def from_torch(cls, s: Mapping[str, object]) -> AdamParamState:
+    def from_torch(cls, s: Mapping[str, object]) -> TorchFacadeResult["AdamParamState"]:
         allowed = {"step", "exp_avg", "exp_avg_sq", "max_exp_avg_sq"}
         extra = set(s) - allowed
         if extra:
-            raise RuntimeError(f"Unexpected Adam state keys: {extra}")
+            return Failure(InvalidAdamState(message=f"Unexpected Adam state keys: {extra}"))
 
-        def _req_tensor(obj: object, name: str) -> torch.Tensor:
+        def _req_tensor(name: str) -> TorchFacadeResult[torch.Tensor]:
+            obj = s[name]
             if not isinstance(obj, torch.Tensor):
-                raise TypeError(f"Adam '{name}' must be a torch.Tensor.")
+                return Failure(InvalidAdamState(message=f"Adam '{name}' must be a torch.Tensor."))
             if obj.device != Device.cpu.to_torch():
-                raise RuntimeError("Adam state tensors must reside on CPU.")
-            return obj
+                return Failure(InvalidAdamState(message="Adam state tensors must reside on CPU."))
+            return Success(obj)
 
-        # Accept Python int or 0-D CPU tensor for step
         step_raw = s["step"]
         if isinstance(step_raw, torch.Tensor):
             if step_raw.ndim != 0 or step_raw.device != Device.cpu.to_torch():
-                raise TypeError("Adam 'step' must be a CPU scalar tensor.")
+                return Failure(InvalidAdamState(message="Adam 'step' must be a CPU scalar tensor."))
             step_val = int(step_raw.item())
         elif isinstance(step_raw, int):
             step_val = step_raw
         else:
-            raise TypeError("Adam 'step' must be an int or scalar tensor.")
+            return Failure(InvalidAdamState(message="Adam 'step' must be an int or scalar tensor."))
 
-        return cls(
-            step=step_val,
-            exp_avg=TensorState.from_torch(_req_tensor(s["exp_avg"], "exp_avg")),
-            exp_avg_sq=TensorState.from_torch(_req_tensor(s["exp_avg_sq"], "exp_avg_sq")),
-            max_exp_avg_sq=(
-                TensorState.from_torch(_req_tensor(s["max_exp_avg_sq"], "max_exp_avg_sq"))
-                if s.get("max_exp_avg_sq") is not None
-                else None
-            ),
+        match _req_tensor("exp_avg"):
+            case Failure(error):
+                return Failure(error)
+            case Success(exp_avg_tensor):
+                pass
+
+        match _req_tensor("exp_avg_sq"):
+            case Failure(error):
+                return Failure(error)
+            case Success(exp_avg_sq_tensor):
+                pass
+
+        max_tensor: torch.Tensor | None = None
+        if s.get("max_exp_avg_sq") is not None:
+            match _req_tensor("max_exp_avg_sq"):
+                case Failure(error):
+                    return Failure(error)
+                case Success(max_value):
+                    max_tensor = max_value
+
+        match TensorState.from_torch(exp_avg_tensor):
+            case Failure(error):
+                return Failure(error)
+            case Success(exp_avg_state):
+                pass
+
+        match TensorState.from_torch(exp_avg_sq_tensor):
+            case Failure(error):
+                return Failure(error)
+            case Success(exp_avg_sq_state):
+                pass
+
+        max_state: TensorState | None = None
+        if max_tensor is not None:
+            match TensorState.from_torch(max_tensor):
+                case Failure(error):
+                    return Failure(error)
+                case Success(state):
+                    max_state = state
+
+        return Success(
+            cls(
+                step=step_val,
+                exp_avg=exp_avg_state,
+                exp_avg_sq=exp_avg_sq_state,
+                max_exp_avg_sq=max_state,
+            )
         )
 
-    def to_torch(self) -> dict[str, object]:
-        out: dict[str, object] = {
-            "step": self.step,
-            "exp_avg": self.exp_avg.to_torch(),
-            "exp_avg_sq": self.exp_avg_sq.to_torch(),
-        }
+    def to_torch(self) -> TorchFacadeResult[dict[str, object]]:
+        match self.exp_avg.to_torch():
+            case Failure(error):
+                return Failure(error)
+            case Success(exp_avg_tensor):
+                pass
+
+        match self.exp_avg_sq.to_torch():
+            case Failure(error):
+                return Failure(error)
+            case Success(exp_avg_sq_tensor):
+                pass
+
+        max_tensor: torch.Tensor | None = None
         if self.max_exp_avg_sq is not None:
-            out["max_exp_avg_sq"] = self.max_exp_avg_sq.to_torch()
-        return out
+            match self.max_exp_avg_sq.to_torch():
+                case Failure(error):
+                    return Failure(error)
+                case Success(max_value):
+                    max_tensor = max_value
+
+        payload: dict[str, object] = {
+            "step": self.step,
+            "exp_avg": exp_avg_tensor,
+            "exp_avg_sq": exp_avg_sq_tensor,
+        }
+        if max_tensor is not None:
+            payload["max_exp_avg_sq"] = max_tensor
+        return Success(payload)
 
 
 class AdamParamGroup(BaseModel):
@@ -442,33 +525,52 @@ class AdamOptimizerState(BaseModel):
 
     # ------------------------------------------------------------------ #
     @classmethod
-    def from_torch(cls, sd: Mapping[str, object]) -> AdamOptimizerState:
+    def from_torch(cls, sd: Mapping[str, object]) -> TorchFacadeResult["AdamOptimizerState"]:
         """Construct from a PyTorch ``state_dict`` mapping."""
         if set(sd.keys()) != {"state", "param_groups"}:
-            raise RuntimeError(
-                "state_dict must contain exactly the keys 'state' and 'param_groups'."
+            return Failure(
+                InvalidAdamState(
+                    message="state_dict must contain exactly the keys 'state' and 'param_groups'."
+                )
             )
 
         state_raw = sd["state"]
         groups_raw = sd["param_groups"]
 
         if not isinstance(state_raw, Mapping):
-            raise TypeError("'state' entry must be a mapping.")
+            return Failure(InvalidAdamState(message="'state' entry must be a mapping."))
         if not isinstance(groups_raw, Iterable):
-            raise TypeError("'param_groups' entry must be a sequence.")
+            return Failure(InvalidAdamState(message="'param_groups' entry must be a sequence."))
 
-        return cls(
-            param_states={pid: AdamParamState.from_torch(st) for pid, st in state_raw.items()},
-            param_groups=[AdamParamGroup.from_torch(pg) for pg in groups_raw],
-        )
+        param_states: dict[int, AdamParamState] = {}
+        for pid, st in state_raw.items():
+            state_result = AdamParamState.from_torch(st)
+            match state_result:
+                case Failure(error):
+                    return Failure(error)
+                case Success(param_state):
+                    param_states[pid] = param_state
+
+        param_groups: list[AdamParamGroup] = [AdamParamGroup.from_torch(pg) for pg in groups_raw]
+
+        return Success(cls(param_states=param_states, param_groups=param_groups))
 
     # ------------------------------------------------------------------ #
-    def to_torch(self) -> Mapping[str, object]:
-        """Return a PyTorch-compatible ``state_dict`` mapping."""
-        return {
-            "state": {pid: st.to_torch() for pid, st in self.param_states.items()},
-            "param_groups": [g.to_torch() for g in self.param_groups],
-        }
+    def to_torch(self) -> TorchFacadeResult[Mapping[str, object]]:
+        serialized_states: dict[int, dict[str, object]] = {}
+        for pid, param_state in self.param_states.items():
+            match param_state.to_torch():
+                case Failure(error):
+                    return Failure(error)
+                case Success(state_dict):
+                    serialized_states[pid] = state_dict
+
+        return Success(
+            {
+                "state": serialized_states,
+                "param_groups": [g.to_torch() for g in self.param_groups],
+            }
+        )
 
 
 # --------------------------------------------------------------------------- #

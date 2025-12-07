@@ -12,7 +12,16 @@ from spectralmc.cvnn_factory import (
     PreserveWidth,
     WidthSpec,
 )
+from spectralmc.errors.serialization import (
+    InvalidWidthSpecProto,
+    SerializationResult,
+    UnknownActivationKind,
+    UnknownDType,
+    ValidationFailed,
+)
 from spectralmc.proto import models_pb2
+from spectralmc.result import Failure, Success
+from spectralmc.validation import validate_model
 
 from .common import DTypeConverter
 
@@ -31,14 +40,14 @@ class WidthSpecConverter:
         return proto
 
     @staticmethod
-    def from_proto(proto: models_pb2.WidthSpecProto) -> WidthSpec:
+    def from_proto(proto: models_pb2.WidthSpecProto) -> SerializationResult[WidthSpec]:
         """Convert from proto."""
         which = proto.WhichOneof("spec")
         if which == "preserve":
-            return PreserveWidth()
+            return Success(PreserveWidth())
         if which == "explicit":
-            return ExplicitWidth(value=proto.explicit.value)
-        raise ValueError(f"Unknown WidthSpec variant: {which}")
+            return Success(ExplicitWidth(value=proto.explicit.value))
+        return Failure(InvalidWidthSpecProto(variant=which))
 
 
 class ActivationCfgConverter:
@@ -57,13 +66,21 @@ class ActivationCfgConverter:
         return proto
 
     @staticmethod
-    def from_proto(proto: models_pb2.ActivationCfgProto) -> ActivationCfg:
+    def from_proto(proto: models_pb2.ActivationCfgProto) -> SerializationResult[ActivationCfg]:
         """Convert from proto."""
         kind_mapping = {
             models_pb2.ACTIVATION_KIND_MOD_RELU: ActivationKind.MOD_RELU,
             models_pb2.ACTIVATION_KIND_Z_RELU: ActivationKind.Z_RELU,
         }
-        return ActivationCfg(kind=kind_mapping[proto.kind])
+        kind = kind_mapping.get(proto.kind)
+        if kind is None:
+            return Failure(UnknownActivationKind(value=proto.kind))
+        result = validate_model(ActivationCfg, kind=kind)
+        match result:
+            case Failure(error):
+                return Failure(ValidationFailed(error=error))
+            case Success(cfg):
+                return Success(cfg)
 
 
 class LinearCfgConverter:
@@ -80,16 +97,35 @@ class LinearCfgConverter:
         return proto
 
     @staticmethod
-    def from_proto(proto: models_pb2.LinearCfgProto) -> LinearCfg:
+    def from_proto(proto: models_pb2.LinearCfgProto) -> SerializationResult[LinearCfg]:
         """Convert from proto."""
-        activation = None
+        width_result = WidthSpecConverter.from_proto(proto.width)
+        match width_result:
+            case Failure(error):
+                return Failure(error)
+            case Success(width):
+                pass
+
+        activation: ActivationCfg | None = None
         if proto.HasField("activation"):
-            activation = ActivationCfgConverter.from_proto(proto.activation)
-        return LinearCfg(
-            width=WidthSpecConverter.from_proto(proto.width),
+            activation_result = ActivationCfgConverter.from_proto(proto.activation)
+            match activation_result:
+                case Failure(error):
+                    return Failure(error)
+                case Success(act):
+                    activation = act
+
+        cfg_result = validate_model(
+            LinearCfg,
+            width=width,
             bias=proto.bias,
             activation=activation,
         )
+        match cfg_result:
+            case Failure(error):
+                return Failure(ValidationFailed(error=error))
+            case Success(cfg):
+                return Success(cfg)
 
 
 class CVNNConfigConverter:
@@ -105,13 +141,24 @@ class CVNNConfigConverter:
         return proto
 
     @staticmethod
-    def from_proto(proto: models_pb2.CVNNConfigProto) -> CVNNConfig:
+    def from_proto(proto: models_pb2.CVNNConfigProto) -> SerializationResult[CVNNConfig]:
         """Convert from proto."""
-        return CVNNConfig(
-            dtype=DTypeConverter.from_proto(proto.dtype),
-            layers=[],  # Simplified
+        try:
+            dtype = DTypeConverter.from_proto(proto.dtype)
+        except ValueError:
+            return Failure(UnknownDType(proto_value=proto.dtype))
+
+        config_result = validate_model(
+            CVNNConfig,
+            dtype=dtype,
+            layers=[],
             seed=proto.seed,
         )
+        match config_result:
+            case Failure(error):
+                return Failure(ValidationFailed(error=error))
+            case Success(cfg):
+                return Success(cfg)
 
 
 __all__ = [

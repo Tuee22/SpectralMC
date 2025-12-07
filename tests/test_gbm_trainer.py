@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import copy
 import math
-from typing import Sequence, Union
+from typing import Sequence, TypeVar, Union
 
 import pytest
 import torch
@@ -34,7 +34,7 @@ from spectralmc.cvnn_factory import (
     LinearCfg,
     build_model,
 )
-from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
+from spectralmc.gbm import BlackScholes, build_black_scholes_config, build_simulation_params
 from spectralmc.gbm_trainer import (
     ComplexValuedModel,
     GbmCVNNPricer,
@@ -44,6 +44,7 @@ from spectralmc.gbm_trainer import (
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.models.torch import DType as TorchDTypeEnum
+from spectralmc.result import Failure, Result, Success
 from spectralmc.sobol_sampler import BoundSpec
 
 
@@ -94,6 +95,17 @@ def _tree_equal(x: object, y: object) -> bool:
     return x == y
 
 
+T = TypeVar("T")
+
+
+def _expect_success(result: Result[T, object]) -> T:
+    match result:
+        case Success(value):
+            return value
+        case Failure(error):
+            raise AssertionError(f"Unexpected failure: {error}")
+
+
 def _make_cvnn(
     n_inputs: int,
     n_outputs: int,
@@ -115,7 +127,9 @@ def _make_cvnn(
         ],
         seed=seed,
     )
-    return build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg).to(device, dtype)
+    return _expect_success(build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg)).to(
+        device, dtype
+    )
 
 
 def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
@@ -124,7 +138,7 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
     torch_dtype = torch.float32 if precision is Precision.float32 else torch.float64
     torch.manual_seed(seed)
 
-    sim = SimulationParams(
+    match build_simulation_params(
         skip=0,
         timesteps=1,
         network_size=16,
@@ -133,13 +147,21 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
         mc_seed=seed,
         buffer_size=1,
         dtype=precision,
-    )
+    ):
+        case Failure(err):
+            raise AssertionError(f"SimulationParams creation failed: {err}")
+        case Success(sim):
+            pass
 
-    cfg = BlackScholesConfig(
+    match build_black_scholes_config(
         sim_params=sim,
         simulate_log_return=True,
         normalize_forwards=False,
-    )
+    ):
+        case Failure(err):
+            raise AssertionError(f"BlackScholesConfig creation failed: {err}")
+        case Success(cfg):
+            pass
 
     bounds: dict[str, BoundSpec] = {
         "X0": BoundSpec(lower=50.0, upper=150.0),
@@ -243,8 +265,8 @@ def test_snapshot_optimizer_serialization_roundtrip(precision: Precision) -> Non
     assert opt_state is not None
 
     round_trip = AdamOptimizerState.model_validate(opt_state.model_dump(mode="python"))
-    torch_state = opt_state.to_torch()
-    reloaded_state = round_trip.to_torch()
+    torch_state = _expect_success(opt_state.to_torch())
+    reloaded_state = _expect_success(round_trip.to_torch())
 
     for key in ("state", "param_groups"):
         assert key in torch_state and key in reloaded_state
@@ -265,7 +287,7 @@ def test_predict_price_smoke(precision: Precision) -> None:
         BlackScholes.Inputs(X0=100.0, K=100.0, T=1.0, r=0.05, d=0.02, v=0.20),
         BlackScholes.Inputs(X0=120.0, K=110.0, T=0.5, r=0.03, d=0.01, v=0.25),
     ]
-    results = trainer.predict_price(contracts)
+    results = _expect_success(trainer.predict_price(contracts))
 
     assert len(results) == len(contracts)
     for res in results:

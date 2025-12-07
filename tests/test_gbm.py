@@ -16,9 +16,14 @@ import numpy as np
 import pytest
 import torch
 
-from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
+from spectralmc.gbm import (
+    BlackScholes,
+    build_black_scholes_config,
+    build_simulation_params,
+)
 from spectralmc.models.numerical import Precision
 from spectralmc.quantlib import bs_price_quantlib
+from spectralmc.result import Failure, Success
 from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler
 
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
@@ -67,7 +72,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module=r".*QuantL
 # ─────────────────────── helper constructors / utilities ────────────────────
 def _make_engine(precision: Precision, *, skip: int = 0) -> BlackScholes:
     """Factory for a deterministic engine instance."""
-    sp = SimulationParams(
+    match build_simulation_params(
         timesteps=_TIMESTEPS,
         network_size=_NETWORK_SIZE,
         batches_per_mc_run=_BATCHES_PER_RUN,
@@ -76,18 +81,33 @@ def _make_engine(precision: Precision, *, skip: int = 0) -> BlackScholes:
         buffer_size=_BUFFER_SIZE,
         skip=skip,
         dtype=precision,
-    )
-    cfg = BlackScholesConfig(
-        sim_params=sp,
+    ):
+        case Failure(err):
+            pytest.fail(f"SimulationParams creation failed: {err}")
+        case Success(sim_params):
+            pass
+
+    match build_black_scholes_config(
+        sim_params=sim_params,
         simulate_log_return=True,
         normalize_forwards=False,
-    )
-    return BlackScholes(cfg)
+    ):
+        case Failure(err):
+            pytest.fail(f"BlackScholesConfig creation failed: {err}")
+        case Success(cfg):
+            return BlackScholes(cfg)
 
 
 def _collect(engine: BlackScholes, inp: Inputs, n: int) -> list[HostPriceResults]:
     """Return *n* independent Monte-Carlo prices."""
-    return [engine.price_to_host(inp) for _ in range(n)]
+    prices: list[HostPriceResults] = []
+    for _ in range(n):
+        match engine.price_to_host(inp):
+            case Success(price):
+                prices.append(price)
+            case Failure(err):
+                pytest.fail(f"price_to_host failed: {err}")
+    return prices
 
 
 # ───────────────────────────────── tests ────────────────────────────────────
@@ -95,7 +115,7 @@ def _collect(engine: BlackScholes, inp: Inputs, n: int) -> list[HostPriceResults
 def test_black_scholes_mc(precision: Precision) -> None:
     """Aggregate MC accuracy against analytic Black-Scholes."""
     engine = _make_engine(precision)
-    sampler = SobolSampler(
+    sampler_result = SobolSampler.create(
         pydantic_class=BlackScholes.Inputs,
         dimensions=_BS_DIMENSIONS,
         config=SobolConfig(seed=31, skip=0),
@@ -117,7 +137,16 @@ def test_black_scholes_mc(precision: Precision) -> None:
         rel_err = (mean - analytic) / analytic if analytic >= _ANALYTIC_CUTOFF else None
         return z, rel_err
 
-    results = [_stats(inp) for inp in sampler.sample(_NUM_SOBOL_POINTS)]
+    match sampler_result:
+        case Success(sampler):
+            sample_result = sampler.sample(_NUM_SOBOL_POINTS)
+            match sample_result:
+                case Success(samples):
+                    results = [_stats(inp) for inp in samples]
+                case Failure(err):
+                    pytest.fail(f"Sobol sample failed: {err}")
+        case Failure(err):
+            pytest.fail(f"Sobol sampler creation failed: {err}")
     z_scores = [z for z, _ in results]
     rel_errors = [re for _, re in results if re is not None]
 
@@ -135,11 +164,15 @@ def test_snapshot_determinism(precision: Precision) -> None:
     inp = BlackScholes.Inputs(X0=100, K=100, T=1.0, r=0.05, d=0.0, v=0.2)
 
     _ = _collect(engine, inp, _SNAPSHOT_REPS)
-    snap = engine.snapshot()
+    snap_result = engine.snapshot()
 
-    expected = _collect(engine, inp, _SNAPSHOT_REPS)
-    restored = BlackScholes(snap)
-    reproduced = _collect(restored, inp, _SNAPSHOT_REPS)
+    match snap_result:
+        case Failure(err):
+            pytest.fail(f"snapshot failed: {err}")
+        case Success(snap):
+            expected = _collect(engine, inp, _SNAPSHOT_REPS)
+            restored = BlackScholes(snap)
+            reproduced = _collect(restored, inp, _SNAPSHOT_REPS)
 
     for e, r in zip(expected, reproduced, strict=True):
         assert math.isclose(e.put_price, r.put_price, rel_tol=_DET_REL_TOL)

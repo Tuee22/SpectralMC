@@ -12,7 +12,7 @@ import asyncio
 import pytest
 import torch
 
-from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.gbm import build_black_scholes_config, build_simulation_params
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
 from spectralmc.result import Failure, Success
@@ -39,7 +39,7 @@ def make_test_snapshot(
     """Create a test snapshot programmatically (CPU-only)."""
     model = torch.nn.Linear(*model_size)
 
-    sim_params = SimulationParams(
+    match build_simulation_params(
         timesteps=10,
         network_size=128,
         batches_per_mc_run=2,
@@ -48,13 +48,21 @@ def make_test_snapshot(
         buffer_size=1000,
         skip=0,
         dtype=Precision.float32,
-    )
+    ):
+        case Failure(err):
+            pytest.fail(f"SimulationParams creation failed: {err}")
+        case Success(sim_params):
+            pass
 
-    bs_config = BlackScholesConfig(
+    match build_black_scholes_config(
         sim_params=sim_params,
         simulate_log_return=True,
         normalize_forwards=True,
-    )
+    ):
+        case Failure(err):
+            pytest.fail(f"BlackScholesConfig creation failed: {err}")
+        case Success(bs_config):
+            pass
 
     return GbmCVNNPricerConfig(
         cfg=bs_config,
@@ -508,7 +516,7 @@ async def test_e2e_large_model_storage(
     # Create larger model (100 x 100 = 10k parameters)
     large_model = torch.nn.Linear(100, 100)
 
-    sim_params = SimulationParams(
+    match build_simulation_params(
         timesteps=10,
         network_size=128,
         batches_per_mc_run=2,
@@ -517,13 +525,21 @@ async def test_e2e_large_model_storage(
         buffer_size=1000,
         skip=0,
         dtype=Precision.float32,
-    )
+    ):
+        case Failure(err):
+            pytest.fail(f"SimulationParams creation failed: {err}")
+        case Success(sim_params):
+            pass
 
-    bs_config = BlackScholesConfig(
+    match build_black_scholes_config(
         sim_params=sim_params,
         simulate_log_return=True,
         normalize_forwards=True,
-    )
+    ):
+        case Failure(err):
+            pytest.fail(f"BlackScholesConfig creation failed: {err}")
+        case Success(bs_config):
+            pass
 
     large_snapshot = GbmCVNNPricerConfig(
         cfg=bs_config,

@@ -12,7 +12,7 @@ import torch
 
 from spectralmc.storage import AsyncBlockchainModelStore, InferenceClient, TrackingMode
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
-from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.gbm import build_black_scholes_config, build_simulation_params
 from spectralmc.models.numerical import Precision
 from spectralmc.result import Success, Failure
 
@@ -47,7 +47,7 @@ async def main() -> None:
         )
 
         # 4. Create config template
-        sim_params = SimulationParams(
+        match build_simulation_params(
             timesteps=100,
             network_size=1024,
             batches_per_mc_run=8,
@@ -56,13 +56,25 @@ async def main() -> None:
             buffer_size=10000,
             skip=0,
             dtype=Precision.float32,
-        )
+        ):
+            case Failure(err):
+                print("   ERROR: Failed to build SimulationParams")
+                print(f"   Details: {err}")
+                return
+            case Success(sim_params):
+                pass
 
-        bs_config = BlackScholesConfig(
+        match build_black_scholes_config(
             sim_params=sim_params,
             simulate_log_return=True,
             normalize_forwards=True,
-        )
+        ):
+            case Failure(err):
+                print("   ERROR: Failed to build BlackScholesConfig")
+                print(f"   Details: {err}")
+                return
+            case Success(bs_config):
+                pass
 
         config_template = GbmCVNNPricerConfig(
             cfg=bs_config,

@@ -29,13 +29,22 @@ Models are built on CPU with deterministic Sobol-based weight initialization:
 # File: documents/engineering/cpu_gpu_compute_policy.md
 from spectralmc.cvnn_factory import build_model
 from spectralmc.models.torch import Device, default_device, default_dtype
+from spectralmc.result import Failure, Result, Success
+from spectralmc.errors.cvnn_factory import CVNNFactoryError
 import torch
+
+def _unwrap_model(result: Result[torch.nn.Module, CVNNFactoryError]) -> torch.nn.Module:
+    match result:
+        case Success(value):
+            return value
+        case Failure(error):
+            raise RuntimeError(f"Failed to build CVNN deterministically: {error}")
 
 # CORRECT PATTERN: Initialize on CPU
 cpu_dev = Device.cpu.to_torch()
 with default_device(cpu_dev), default_dtype(torch.float32):
     # All parameters created on CPU with deterministic Sobol init
-    model = build_model(config)
+    model = _unwrap_model(build_model(config))
 
 # Verify CPU initialization
 assert next(model.parameters()).device.type == "cpu"
@@ -332,10 +341,17 @@ docker compose -f docker/docker-compose.yml exec spectralmc \
 ```python
 # File: documents/engineering/cpu_gpu_compute_policy.md
 from spectralmc.cvnn_factory import build_model
+from spectralmc.result import Failure, Result, Success
+from spectralmc.errors.cvnn_factory import CVNNFactoryError
 import torch
 
-model = build_model(config, torch.float32)
-print(f"Model device after build: {next(model.parameters()).device}")  # cpu
+result = build_model(config, torch.float32)
+match result:
+    case Success(built_model):
+        model = built_model
+        print(f"Model device after build: {next(model.parameters()).device}")  # cpu
+    case Failure(error):
+        raise RuntimeError(f"CVNN factory failed: {error}")
 
 model = model.to(torch.device("cuda:0"))
 print(f"Model device after transfer: {next(model.parameters()).device}")  # cuda:0

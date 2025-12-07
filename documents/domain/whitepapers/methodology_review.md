@@ -23,6 +23,8 @@ SpectralMC represents a **theoretically sound and computationally innovative** a
 
 **Overall Assessment**: **Promising research prototype requiring critical validation before production deployment.**
 
+> **API reminder**: `trainer.predict_price(...)` now returns `Result[list[BlackScholes.HostPricingResults], TrainerError]`; always pattern-match on `Success` before iterating over the pricing outputs.
+
 ---
 
 ## 1. Theoretical Assessment: 7/10
@@ -90,14 +92,19 @@ def test_cvnn_pricing_accuracy():
 
     # 2. Price held-out test set
     test_contracts = sample_test_set(n=1000)
-    cvnn_prices = trainer.predict_price(test_contracts)
 
-    # 3. Compare to QuantLib analytical prices
-    ql_prices = [bs_price_quantlib(c) for c in test_contracts]
+    match trainer.predict_price(test_contracts):
+        case Failure(error):
+            raise RuntimeError(f"Inference failed: {error}")
+        case Success(cvnn_prices):
+            # 3. Compare to QuantLib analytical prices
+            ql_prices = [bs_price_quantlib(c) for c in test_contracts]
 
-    # 4. Assert pricing error < 1%
-    errors = [abs(cvnn.put_price - ql.put_price) / ql.put_price
-              for cvnn, ql in zip(cvnn_prices, ql_prices)]
+            # 4. Assert pricing error < 1%
+            errors = [
+                abs(cvnn.put_price - ql.put_price) / ql.put_price
+                for cvnn, ql in zip(cvnn_prices, ql_prices)
+            ]
 
     assert np.percentile(errors, 95) < 0.01  # 95% < 1% error
 ```
@@ -200,12 +207,18 @@ Monte Carlo (Numba) → FFT (CuPy) → Training (PyTorch) → All on GPU
 
 ```python
 # File: documents/domain/whitepapers/methodology_review.md
-# THIS BENCHMARK DOES NOT EXIST
-def benchmark_computational_advantage():
-    test_contracts = sample_test_set(1000)
+    # THIS BENCHMARK DOES NOT EXIST
+    def benchmark_computational_advantage():
+        test_contracts = sample_test_set(1000)
 
-    # Measure CVNN inference time
-    cvnn_time = time_predict_price(trainer, test_contracts)
+        # Measure CVNN inference time
+        match trainer.predict_price(test_contracts):
+            case Failure(error):
+                raise RuntimeError(f"CVNN pricing failed: {error}")
+            case Success(_):
+                pass
+
+        cvnn_time = time_predict_price(trainer, test_contracts)
 
     # Measure traditional MC time (for same accuracy)
     mc_time = time_monte_carlo(test_contracts, num_paths=1e6)
@@ -515,33 +528,34 @@ def test_e2e_pricing_accuracy():
         sigma_range=(0.1, 0.5)
     )
 
-    # Price with CVNN
-    cvnn_prices = trainer.predict_price(test_contracts)
+    match trainer.predict_price(test_contracts):
+        case Failure(error):
+            raise RuntimeError(f"Inference failed: {error}")
+        case Success(cvnn_prices):
+            # Price with QuantLib (analytical)
+            ql_prices = [bs_price_quantlib(c) for c in test_contracts]
 
-    # Price with QuantLib (analytical)
-    ql_prices = [bs_price_quantlib(c) for c in test_contracts]
+            # Compute errors
+            put_errors = [
+                abs(cvnn.put_price - ql.put_price) / ql.put_price
+                for cvnn, ql in zip(cvnn_prices, ql_prices)
+            ]
+            call_errors = [
+                abs(cvnn.call_price - ql.call_price) / ql.call_price
+                for cvnn, ql in zip(cvnn_prices, ql_prices)
+            ]
 
-    # Compute errors
-    put_errors = [
-        abs(cvnn.put_price - ql.put_price) / ql.put_price
-        for cvnn, ql in zip(cvnn_prices, ql_prices)
-    ]
-    call_errors = [
-        abs(cvnn.call_price - ql.call_price) / ql.call_price
-        for cvnn, ql in zip(cvnn_prices, ql_prices)
-    ]
+            # Assert accuracy
+            assert np.percentile(put_errors, 95) < 0.01, \
+                f"95th percentile put error: {np.percentile(put_errors, 95):.2%}"
+            assert np.percentile(call_errors, 95) < 0.01, \
+                f"95th percentile call error: {np.percentile(call_errors, 95):.2%}"
+            assert np.mean(put_errors) < 0.005, \
+                f"Mean put error: {np.mean(put_errors):.2%}"
 
-    # Assert accuracy
-    assert np.percentile(put_errors, 95) < 0.01, \
-        f"95th percentile put error: {np.percentile(put_errors, 95):.2%}"
-    assert np.percentile(call_errors, 95) < 0.01, \
-        f"95th percentile call error: {np.percentile(call_errors, 95):.2%}"
-    assert np.mean(put_errors) < 0.005, \
-        f"Mean put error: {np.mean(put_errors):.2%}"
-
-    print(f"✓ Pricing accuracy validated")
-    print(f"  Mean put error: {np.mean(put_errors):.2%}")
-    print(f"  95th pct put error: {np.percentile(put_errors, 95):.2%}")
+            print(f"✓ Pricing accuracy validated")
+            print(f"  Mean put error: {np.mean(put_errors):.2%}")
+            print(f"  95th pct put error: {np.percentile(put_errors, 95):.2%}")
 ```
 
 **Priority 2: Tighten MC Validation Tolerance**
@@ -638,36 +652,41 @@ def benchmark_computational_advantage():
 
     # Inference (per-pricing cost)
     infer_start = time.time()
-    cvnn_prices = trainer.predict_price(test_contracts)
-    cvnn_inference_time = time.time() - infer_start
+    match trainer.predict_price(test_contracts):
+        case Failure(error):
+            raise RuntimeError(f"CVNN inference failed: {error}")
+        case Success(cvnn_prices):
+            cvnn_inference_time = time.time() - infer_start
 
-    # === Traditional MC ===
-    mc_start = time.time()
-    mc_prices = [monte_carlo(c, num_paths=1e6) for c in test_contracts]
-    mc_time = time.time() - mc_start
+            # === Traditional MC ===
+            mc_start = time.time()
+            mc_prices = [monte_carlo(c, num_paths=1e6) for c in test_contracts]
+            mc_time = time.time() - mc_start
 
-    # === Analysis ===
-    # Assume 1M future pricings to amortize training
-    amortized_train_cost = training_time / 1_000_000
-    cvnn_total_time = cvnn_inference_time + amortized_train_cost
+            # === Analysis ===
+            # Assume 1M future pricings to amortize training
+            amortized_train_cost = training_time / 1_000_000
+            cvnn_total_time = cvnn_inference_time + amortized_train_cost
 
-    speedup = mc_time / cvnn_total_time
+            speedup = mc_time / cvnn_total_time
 
-    print(f"Training time: {training_time:.2f}s")
-    print(f"CVNN inference: {cvnn_inference_time:.4f}s ({len(test_contracts)/cvnn_inference_time:.0f} contracts/sec)")
-    print(f"MC time: {mc_time:.2f}s ({len(test_contracts)/mc_time:.0f} contracts/sec)")
-    print(f"Speedup: {speedup:.1f}x")
+            print(f"Training time: {training_time:.2f}s")
+            print(f"CVNN inference: {cvnn_inference_time:.4f}s ({len(test_contracts)/cvnn_inference_time:.0f} contracts/sec)")
+            print(f"MC time: {mc_time:.2f}s ({len(test_contracts)/mc_time:.0f} contracts/sec)")
+            print(f"Speedup: {speedup:.1f}x")
 
-    # Validate accuracy
-    errors = [abs(cvnn.put_price - mc.put_price) / mc.put_price
-              for cvnn, mc in zip(cvnn_prices, mc_prices)]
-    print(f"Mean pricing error: {np.mean(errors):.2%}")
+            # Validate accuracy
+            errors = [
+                abs(cvnn.put_price - mc.put_price) / mc.put_price
+                for cvnn, mc in zip(cvnn_prices, mc_prices)
+            ]
+            print(f"Mean pricing error: {np.mean(errors):.2%}")
 
-    return {
-        'speedup': speedup,
-        'cvnn_throughput': len(test_contracts) / cvnn_inference_time,
-        'mc_throughput': len(test_contracts) / mc_time
-    }
+            return {
+                'speedup': speedup,
+                'cvnn_throughput': len(test_contracts) / cvnn_inference_time,
+                'mc_throughput': len(test_contracts) / mc_time,
+            }
 ```
 
 **Priority 6: Implement Greeks via Autodiff**
@@ -685,23 +704,26 @@ def compute_greeks(cvnn, contract):
     sigma = torch.tensor([contract.v], requires_grad=True)
 
     # Price option
-    price = cvnn.predict_price(S0, K, T, r, sigma)
+    match cvnn.predict_price(S0, K, T, r, sigma):
+        case Failure(error):
+            raise RuntimeError(f"Pricing failed: {error}")
+        case Success(price):
 
-    # Compute derivatives
-    delta = torch.autograd.grad(price, S0, create_graph=True)[0]
-    gamma = torch.autograd.grad(delta, S0)[0]
-    vega = torch.autograd.grad(price, sigma)[0]
-    theta = torch.autograd.grad(price, T)[0]
-    rho = torch.autograd.grad(price, r)[0]
+            # Compute derivatives
+            delta = torch.autograd.grad(price, S0, create_graph=True)[0]
+            gamma = torch.autograd.grad(delta, S0)[0]
+            vega = torch.autograd.grad(price, sigma)[0]
+            theta = torch.autograd.grad(price, T)[0]
+            rho = torch.autograd.grad(price, r)[0]
 
-    return {
-        'price': price.item(),
-        'delta': delta.item(),
-        'gamma': gamma.item(),
-        'vega': vega.item(),
-        'theta': theta.item(),
-        'rho': rho.item()
-    }
+            return {
+                'price': price.item(),
+                'delta': delta.item(),
+                'gamma': gamma.item(),
+                'vega': vega.item(),
+                'theta': theta.item(),
+                'rho': rho.item()
+            }
 ```
 
 **Priority 7: Stress Testing**
@@ -726,19 +748,21 @@ def test_edge_cases(trained_cvnn, edge_case):
     contract = BlackScholes.Inputs(**edge_case)
 
     # Should not raise or produce NaN/Inf
-    result = trained_cvnn.predict_price([contract])
+    match trained_cvnn.predict_price([contract]):
+        case Failure(error):
+            pytest.fail(f"Prediction failed for edge case: {error}")
+        case Success(result):
+            assert torch.isfinite(result.put_price)
+            assert torch.isfinite(result.call_price)
+            assert result.put_price >= 0  # Non-negative prices
+            assert result.call_price >= 0
 
-    assert torch.isfinite(result.put_price)
-    assert torch.isfinite(result.call_price)
-    assert result.put_price >= 0  # Non-negative prices
-    assert result.call_price >= 0
+            # Compare to analytical
+            analytical = bs_price_quantlib(contract)
+            rel_error = abs(result.put_price - analytical.put_price) / analytical.put_price
 
-    # Compare to analytical
-    analytical = bs_price_quantlib(contract)
-    rel_error = abs(result.put_price - analytical.put_price) / analytical.put_price
-
-    # May have higher error for edge cases, but should be reasonable
-    assert rel_error < 0.05, f"Edge case error: {rel_error:.2%}"
+            # May have higher error for edge cases, but should be reasonable
+            assert rel_error < 0.05, f"Edge case error: {rel_error:.2%}"
 ```
 
 **Priority 8: Compare to COS Method**
@@ -751,9 +775,12 @@ def benchmark_vs_cos_method():
     test_contracts = sample_test_set(1000)
 
     # Price with CVNN
-    cvnn_start = time.time()
-    cvnn_prices = trained_cvnn.predict_price(test_contracts)
-    cvnn_time = time.time() - cvnn_start
+    match trained_cvnn.predict_price(test_contracts):
+        case Failure(error):
+            raise RuntimeError(f"Prediction failed: {error}")
+        case Success(cvnn_prices):
+            cvnn_start = time.time()
+            cvnn_time = time.time() - cvnn_start
 
     # Price with COS method
     cos_start = time.time()

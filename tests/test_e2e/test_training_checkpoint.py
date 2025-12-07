@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.gbm import BlackScholesConfig, build_black_scholes_config, build_simulation_params
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import AdamOptimizerState, AdamParamGroup, AdamParamState
@@ -18,6 +18,34 @@ from spectralmc.storage import (
 )
 
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
+
+def _make_checkpoint_black_scholes_config() -> BlackScholesConfig:
+    """Create the shared Black-Scholes config used across these tests."""
+    match build_simulation_params(
+        timesteps=100,
+        network_size=1024,
+        batches_per_mc_run=8,
+        threads_per_block=256,
+        mc_seed=42,
+        buffer_size=10000,
+        skip=0,
+        dtype=Precision.float32,
+    ):
+        case Failure(err):
+            pytest.fail(f"SimulationParams creation failed: {err}")
+        case Success(sim_params):
+            pass
+
+    match build_black_scholes_config(
+        sim_params=sim_params,
+        simulate_log_return=True,
+        normalize_forwards=True,
+    ):
+        case Failure(err):
+            pytest.fail(f"BlackScholesConfig creation failed: {err}")
+        case Success(bs_config):
+            return bs_config
 
 
 @pytest.mark.asyncio
@@ -56,22 +84,7 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
 
     # Create a minimal GbmCVNNPricerConfig
     # Note: This is a simplified test, real usage would have proper BlackScholes config
-    sim_params = SimulationParams(
-        timesteps=100,
-        network_size=1024,
-        batches_per_mc_run=8,
-        threads_per_block=256,
-        mc_seed=42,
-        buffer_size=10000,
-        skip=0,
-        dtype=Precision.float32,
-    )
-
-    bs_config = BlackScholesConfig(
-        sim_params=sim_params,
-        simulate_log_return=True,
-        normalize_forwards=True,
-    )
+    bs_config = _make_checkpoint_black_scholes_config()
 
     # Capture RNG state
     cpu_rng_state = torch.get_rng_state().numpy().tobytes()
@@ -140,22 +153,7 @@ async def test_checkpoint_multiple_commits(
     """Test multiple sequential commits create proper chain."""
     model = torch.nn.Linear(10, 10)
 
-    sim_params = SimulationParams(
-        timesteps=100,
-        network_size=1024,
-        batches_per_mc_run=8,
-        threads_per_block=256,
-        mc_seed=42,
-        buffer_size=10000,
-        skip=0,
-        dtype=Precision.float32,
-    )
-
-    bs_config = BlackScholesConfig(
-        sim_params=sim_params,
-        simulate_log_return=True,
-        normalize_forwards=True,
-    )
+    bs_config = _make_checkpoint_black_scholes_config()
 
     cpu_rng_state = torch.get_rng_state().numpy().tobytes()
 
@@ -217,22 +215,7 @@ async def test_checkpoint_content_hash_integrity(
     torch.manual_seed(123)
     model2.weight.data = torch.randn(5, 5)
 
-    sim_params = SimulationParams(
-        timesteps=100,
-        network_size=1024,
-        batches_per_mc_run=8,
-        threads_per_block=256,
-        mc_seed=42,
-        buffer_size=10000,
-        skip=0,
-        dtype=Precision.float32,
-    )
-
-    bs_config = BlackScholesConfig(
-        sim_params=sim_params,
-        simulate_log_return=True,
-        normalize_forwards=True,
-    )
+    bs_config = _make_checkpoint_black_scholes_config()
 
     cpu_rng_state = torch.get_rng_state().numpy().tobytes()
 

@@ -28,6 +28,8 @@ import pytest
 import torch
 from pydantic import BaseModel, ValidationError, model_validator
 
+from spectralmc.errors.sampler import DimensionMismatch, SamplerValidationFailed
+from spectralmc.result import Failure, Success
 from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler
 
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
@@ -96,12 +98,33 @@ def test_skip_repro(n_skip: int, n_check: int) -> None:
         "y": BoundSpec(lower=-1.0, upper=1.0),
     }
 
-    manual = SobolSampler(Point, dims, config=SobolConfig(seed=_SEED))
-    _ = manual.sample(n_skip)  # burn-in
-    expected = manual.sample(n_check)
+    manual = SobolSampler.create(Point, dims, config=SobolConfig(seed=_SEED))
+    match manual:
+        case Success(m):
+            burn = m.sample(n_skip)
+            match burn:
+                case Failure(err):
+                    pytest.fail(f"burn-in failed: {err}")
+            expected_result = m.sample(n_check)
+            match expected_result:
+                case Success(expected):
+                    pass
+                case Failure(err):
+                    pytest.fail(f"expected sample failed: {err}")
+        case Failure(err):
+            pytest.fail(f"manual sampler failed: {err}")
 
-    fast = SobolSampler(Point, dims, config=SobolConfig(seed=_SEED, skip=n_skip))
-    got = fast.sample(n_check)
+    fast = SobolSampler.create(Point, dims, config=SobolConfig(seed=_SEED, skip=n_skip))
+    match fast:
+        case Success(fast_sampler):
+            got_result = fast_sampler.sample(n_check)
+            match got_result:
+                case Success(got):
+                    pass
+                case Failure(err):
+                    pytest.fail(f"fast sample failed: {err}")
+        case Failure(err):
+            pytest.fail(f"fast sampler failed: {err}")
 
     assert _pairs(expected) == _pairs(got)
 
@@ -122,8 +145,17 @@ _BOUND_CASES: tuple[tuple[dict[str, BoundSpec], type[BaseModel]], ...] = (
 @pytest.mark.parametrize(("dims", "model_cls"), _BOUND_CASES)
 def test_bounds(dims: dict[str, BoundSpec], model_cls: type[BaseModel]) -> None:
     """Every generated coordinate must lie within its declared bounds."""
-    sampler = SobolSampler(model_cls, dims, config=SobolConfig(seed=_SEED))
-    pts = sampler.sample(_N_SAMPLES_BOUND_CHECK)
+    sampler = SobolSampler.create(model_cls, dims, config=SobolConfig(seed=_SEED))
+    match sampler:
+        case Success(s):
+            pts_result = s.sample(_N_SAMPLES_BOUND_CHECK)
+            match pts_result:
+                case Success(pts):
+                    pass
+                case Failure(err):
+                    pytest.fail(f"sampling failed: {err}")
+        case Failure(err):
+            pytest.fail(f"sampler creation failed: {err}")
 
     for obj in pts:
         for axis, b in dims.items():
@@ -145,8 +177,12 @@ def test_dim_mismatch() -> None:
         y: float
 
     dims = {"x": BoundSpec(lower=0.0, upper=1.0)}
-    with pytest.raises(ValueError, match="dimension keys do not match"):
-        SobolSampler(XY, dims, config=SobolConfig(seed=_SEED))
+    sampler = SobolSampler.create(XY, dims, config=SobolConfig(seed=_SEED))
+    match sampler:
+        case Failure(err):
+            assert isinstance(err, DimensionMismatch)
+        case Success(_):
+            pytest.fail("expected DimensionMismatch error")
 
 
 @pytest.mark.parametrize("param", ["skip", "seed"])
@@ -172,9 +208,18 @@ def test_validator_bubbles() -> None:
             raise ValueError("forced failure")
 
     dims = {"z": BoundSpec(lower=0.0, upper=1.0)}
-    sampler = SobolSampler(AlwaysFail, dims, config=SobolConfig(seed=_SEED))
-    with pytest.raises(ValidationError, match="forced failure"):
-        sampler.sample(1)
+    sampler = SobolSampler.create(AlwaysFail, dims, config=SobolConfig(seed=_SEED))
+    match sampler:
+        case Success(s):
+            result = s.sample(1)
+            match result:
+                case Failure(err):
+                    assert isinstance(err, SamplerValidationFailed)
+                    assert "forced failure" in str(err.error)
+                case Success(_):
+                    pytest.fail("expected validation failure")
+        case Failure(err):
+            pytest.fail(f"sampler creation failed: {err}")
 
 
 def test_smoke_two_dim() -> None:
@@ -183,8 +228,17 @@ def test_smoke_two_dim() -> None:
         "x": BoundSpec(lower=0.0, upper=1.0),
         "y": BoundSpec(lower=-1.0, upper=1.0),
     }
-    sampler = SobolSampler(Point, dims, config=SobolConfig(seed=_SEED))
-    pts = sampler.sample(4)
+    sampler = SobolSampler.create(Point, dims, config=SobolConfig(seed=_SEED))
+    match sampler:
+        case Success(s):
+            pts_result = s.sample(4)
+            match pts_result:
+                case Success(pts):
+                    pass
+                case Failure(err):
+                    pytest.fail(f"sampling failed: {err}")
+        case Failure(err):
+            pytest.fail(f"sampler creation failed: {err}")
 
     pairs = _pairs(pts)
     assert len(set(pairs)) == 4  # uniqueness
