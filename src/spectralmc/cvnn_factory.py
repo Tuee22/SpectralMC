@@ -184,13 +184,13 @@ def _build_single_layer(
     build_result = _build_from_cfg(layer, state.width)
 
     # Pattern match to safely extract tuple without using .value
+    result: CVNNFactoryResult[_LayerBuildState]
     match build_result:
         case Success((built_mod, next_w)):
-            return Success(_LayerBuildState(modules=state.modules + (built_mod,), width=next_w))
-        case Failure():
-            return build_result
-    # mypy exhaustiveness check: Success | Failure covers all Result cases
-    raise AssertionError("Unreachable: Result must be Success or Failure")
+            result = Success(_LayerBuildState(modules=state.modules + (built_mod,), width=next_w))
+        case Failure(error):
+            result = Failure(error)
+    return result
 
 
 def _build_layer_sequence(
@@ -283,8 +283,8 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> CVNNFactoryResult[tuple[nn.Mod
                 post_act=_make_activation(c.activation.kind, body_w) if c.activation else None,
             )
             return Success((res, body_w))
-
-    # Unreachable: all LayerCfg variants are handled above in match statement
+    # Unreachable: all LayerCfg variants handled above
+    # Note: mypy match exhaustiveness checking insufficient; requires explicit termination
     raise AssertionError(f"Unreachable: unexpected LayerCfg variant {type(cfg).__name__}")
 
 
