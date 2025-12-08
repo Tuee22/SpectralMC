@@ -46,6 +46,14 @@ def test_dtype_round_trip() -> None:
         DType.complex64,
         DType.complex128,
     ):
-        proto = DTypeConverter.to_proto(dtype)
-        result = DTypeConverter.from_proto(proto)
-        assert result == dtype
+        proto_result = DTypeConverter.to_proto(dtype)
+        match proto_result:
+            case Success(proto):
+                result = DTypeConverter.from_proto(proto)
+                match result:
+                    case Success(value):
+                        assert value == dtype
+                    case Failure(error):
+                        pytest.fail(f"from_proto failed: {error}")
+            case Failure(error):
+                pytest.fail(f"to_proto failed: {error}")

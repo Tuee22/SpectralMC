@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Mapping, TypeVar
 
+import pytest
 import torch
 
 import spectralmc.models.torch as sm_torch
@@ -29,9 +30,10 @@ assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 T = TypeVar("T")
+E = TypeVar("E")
 
 
-def _expect_success(result: Result[T, object]) -> T:
+def _expect_success(result: Result[T, E]) -> T:
     match result:
         case Success(value):
             return value
@@ -50,12 +52,27 @@ def _make_parameters() -> list[torch.nn.Parameter]:
 def test_dtype_roundtrip() -> None:
     for d in sm_torch.DType:
         torch_dt: torch.dtype = d.to_torch()
-        assert sm_torch.DType.from_torch(torch_dt) is d
+        match sm_torch.DType.from_torch(torch_dt):
+            case Success(dtype):
+                assert dtype is d
+            case Failure(error):
+                raise AssertionError(f"DType conversion failed: {error}")
 
 
+@pytest.mark.cpu  # Intentional CPU device testing
 def test_device_roundtrip() -> None:
-    assert sm_torch.Device.from_torch(torch.device("cpu")) is sm_torch.Device.cpu
-    assert sm_torch.Device.from_torch(torch.device("cuda", 0)) is sm_torch.Device.cuda
+    """Test CPU device conversion (intentional CPU test)."""
+    match sm_torch.Device.from_torch(torch.device("cpu")):
+        case Success(device):
+            assert device is sm_torch.Device.cpu
+        case Failure(error):
+            raise AssertionError(f"CPU device conversion failed: {error}")
+
+    match sm_torch.Device.from_torch(torch.device("cuda", 0)):
+        case Success(device):
+            assert device is sm_torch.Device.cuda
+        case Failure(error):
+            raise AssertionError(f"CUDA device conversion failed: {error}")
 
 
 # ───────────────────────── context-managers (thread safe) ───────────────────
@@ -70,7 +87,9 @@ def test_default_dtype_nested() -> None:
     assert torch.get_default_dtype() is orig
 
 
+@pytest.mark.cpu  # Intentional CPU context manager testing
 def test_default_device_nested() -> None:
+    """Test nested CPU device contexts (intentional CPU test)."""
     orig: torch.device = torch.tensor([]).device
     with sm_torch.default_device(torch.device("cpu")):
         assert torch.tensor([]).device.type == "cpu"
@@ -83,11 +102,11 @@ def test_default_device_nested() -> None:
 # ────────────────────────── TensorState round-trip ──────────────────────────
 def test_tensor_state_roundtrip() -> None:
     t_orig: torch.Tensor = torch.arange(10, dtype=torch.float32)
-    ts: sm_torch.TensorState = sm_torch.TensorState.from_torch(t_orig)
+    ts: sm_torch.TensorState = _expect_success(sm_torch.TensorState.from_torch(t_orig))
     t_round: torch.Tensor = _expect_success(ts.to_torch())
     assert torch.equal(t_orig, t_round)
     # from_bytes must succeed on the same payload
-    ts2: sm_torch.TensorState = sm_torch.TensorState.from_bytes(ts.data)
+    ts2: sm_torch.TensorState = _expect_success(sm_torch.TensorState.from_bytes(ts.data))
     assert ts2.shape == ts.shape
     assert ts2.dtype == ts.dtype
 

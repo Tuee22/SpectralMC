@@ -45,7 +45,7 @@ from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.models.torch import DType as TorchDTypeEnum
 from spectralmc.result import Failure, Result, Success
-from spectralmc.sobol_sampler import BoundSpec
+from spectralmc.sobol_sampler import BoundSpec, build_bound_spec
 
 
 # Module-level GPU requirement - test file fails immediately without GPU
@@ -96,9 +96,10 @@ def _tree_equal(x: object, y: object) -> bool:
 
 
 T = TypeVar("T")
+E = TypeVar("E")
 
 
-def _expect_success(result: Result[T, object]) -> T:
+def _expect_success(result: Result[T, E]) -> T:
     match result:
         case Success(value):
             return value
@@ -115,7 +116,7 @@ def _make_cvnn(
     dtype: torch.dtype,
 ) -> ComplexValuedModel:
     """Factory wrapper around :pyfunc:`spectralmc.cvnn_factory.build_model`."""
-    enum_dtype = TorchDTypeEnum.from_torch(dtype)
+    enum_dtype = _expect_success(TorchDTypeEnum.from_torch(dtype))
     cfg = CVNNConfig(
         dtype=enum_dtype,
         layers=[
@@ -148,8 +149,8 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
         buffer_size=1,
         dtype=precision,
     ):
-        case Failure(err):
-            raise AssertionError(f"SimulationParams creation failed: {err}")
+        case Failure(sim_err):
+            raise AssertionError(f"SimulationParams creation failed: {sim_err}")
         case Success(sim):
             pass
 
@@ -158,18 +159,18 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
         simulate_log_return=True,
         normalize_forwards=False,
     ):
-        case Failure(err):
-            raise AssertionError(f"BlackScholesConfig creation failed: {err}")
+        case Failure(cfg_err):
+            raise AssertionError(f"BlackScholesConfig creation failed: {cfg_err}")
         case Success(cfg):
             pass
 
     bounds: dict[str, BoundSpec] = {
-        "X0": BoundSpec(lower=50.0, upper=150.0),
-        "K": BoundSpec(lower=50.0, upper=150.0),
-        "T": BoundSpec(lower=0.1, upper=2.0),
-        "r": BoundSpec(lower=0.0, upper=0.1),
-        "d": BoundSpec(lower=0.0, upper=0.05),
-        "v": BoundSpec(lower=0.1, upper=0.5),
+        "X0": build_bound_spec(50.0, 150.0).unwrap(),
+        "K": build_bound_spec(50.0, 150.0).unwrap(),
+        "T": build_bound_spec(0.1, 2.0).unwrap(),
+        "r": build_bound_spec(0.0, 0.1).unwrap(),
+        "d": build_bound_spec(0.0, 0.05).unwrap(),
+        "v": build_bound_spec(0.1, 0.5).unwrap(),
     }
 
     net = _make_cvnn(6, sim.network_size, seed=seed, device=device, dtype=torch_dtype)
@@ -215,7 +216,9 @@ def test_snapshot_cycle_deterministic(precision: Precision) -> None:
     trainer = _make_gbm_trainer(precision, seed=44)
     trainer.train(TrainingConfig(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE))
 
-    snap = trainer.snapshot().model_copy(update={"cvnn": _clone_model(trainer._cvnn)})
+    snap = _expect_success(trainer.snapshot()).model_copy(
+        update={"cvnn": _clone_model(trainer._cvnn)}
+    )
     clone = GbmCVNNPricer(snap)
 
     cfg = TrainingConfig(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
@@ -235,7 +238,7 @@ def test_snapshot_restart_without_optimizer(precision: Precision) -> None:
     trainer = _make_gbm_trainer(precision, seed=45)
     trainer.train(TrainingConfig(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE))
 
-    snap = trainer.snapshot().model_copy(
+    snap = _expect_success(trainer.snapshot()).model_copy(
         update={"optimizer_state": None, "cvnn": _clone_model(trainer._cvnn)}
     )
     restarted = GbmCVNNPricer(snap)
@@ -259,7 +262,7 @@ def test_snapshot_restart_without_optimizer(precision: Precision) -> None:
 def test_snapshot_optimizer_serialization_roundtrip(precision: Precision) -> None:
     trainer = _make_gbm_trainer(precision, seed=50)
     trainer.train(TrainingConfig(num_batches=4, batch_size=8, learning_rate=LEARNING_RATE))
-    snap = trainer.snapshot()
+    snap = _expect_success(trainer.snapshot())
 
     opt_state = snap.optimizer_state
     assert opt_state is not None

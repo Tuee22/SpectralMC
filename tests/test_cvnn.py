@@ -33,7 +33,7 @@ from spectralmc.models.torch import default_dtype
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 # ─────────────────────────── global constants ────────────────────────────
-CPU_DEV: torch.device = _dev.cpu.to_torch()
+GPU_DEV: torch.device = _dev.cuda.to_torch()
 ATOL: float = 1.0e-5
 RTOL: float = 1.0e-4
 
@@ -57,7 +57,7 @@ def dt(request: pytest.FixtureRequest) -> Iterator[torch.dtype]:
 def _rand(
     *shape: int,
     requires_grad: bool = False,
-    dev: torch.device = CPU_DEV,
+    dev: torch.device = GPU_DEV,  # Changed from CPU_DEV - tests default to GPU
     dt: torch.dtype | None = None,
 ) -> Tensor:
     """Return a deterministic random tensor without perturbing the global RNG."""
@@ -90,18 +90,18 @@ def assert_close(
 
 def test_complex_linear_manual(dt: torch.dtype) -> None:
     """Analytical 2 x 2 example with non-trivial bias."""
-    layer = ComplexLinear(2, 2, bias=True)
+    layer = ComplexLinear(2, 2, bias=True).to(GPU_DEV)
 
     with torch.no_grad():
-        layer.real_weight.copy_(torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
-        layer.imag_weight.copy_(torch.tensor([[5.0, 6.0], [7.0, 8.0]]))
+        layer.real_weight.copy_(torch.tensor([[1.0, 2.0], [3.0, 4.0]], device=GPU_DEV))
+        layer.imag_weight.copy_(torch.tensor([[5.0, 6.0], [7.0, 8.0]], device=GPU_DEV))
 
         assert layer.real_bias is not None and layer.imag_bias is not None
-        layer.real_bias.copy_(torch.tensor([0.1, 0.2]))
-        layer.imag_bias.copy_(torch.tensor([0.3, 0.4]))
+        layer.real_bias.copy_(torch.tensor([0.1, 0.2], device=GPU_DEV))
+        layer.imag_bias.copy_(torch.tensor([0.3, 0.4], device=GPU_DEV))
 
-    x_r = torch.tensor([[1.0, 1.0]])
-    x_i = torch.tensor([[0.5, -0.5]])
+    x_r = torch.tensor([[1.0, 1.0]], device=GPU_DEV)
+    x_i = torch.tensor([[0.5, -0.5]], device=GPU_DEV)
 
     a = layer.real_weight
     b = layer.imag_weight
@@ -118,7 +118,7 @@ def test_complex_linear_manual(dt: torch.dtype) -> None:
 @pytest.mark.parametrize("bias", [True, False])
 def test_complex_linear_shapes_and_grad(bias: bool, dt: torch.dtype) -> None:
     """Shape checks and gradient propagation."""
-    layer = ComplexLinear(5, 3, bias=bias)
+    layer = ComplexLinear(5, 3, bias=bias).to(GPU_DEV)
     x_r = _rand(7, 5, requires_grad=True, dt=dt)
     x_i = _rand(7, 5, requires_grad=True, dt=dt)
 
@@ -140,16 +140,16 @@ def test_complex_linear_shapes_and_grad(bias: bool, dt: torch.dtype) -> None:
 
 def test_zrelu_masking_and_grad(dt: torch.dtype) -> None:
     """zReLU passes first-quadrant values and back-props correct mask."""
-    act = zReLU()
-    r_in = torch.tensor([[-1.0, 0.5, 0.2]], requires_grad=True)
-    i_in = torch.tensor([[0.3, -0.2, 0.1]], requires_grad=True)
+    act = zReLU().to(GPU_DEV)
+    r_in = torch.tensor([[-1.0, 0.5, 0.2]], requires_grad=True, device=GPU_DEV)
+    i_in = torch.tensor([[0.3, -0.2, 0.1]], requires_grad=True, device=GPU_DEV)
 
     out_r, out_i = act(r_in, i_in)
-    assert_close(out_r, torch.tensor([[0.0, 0.0, 0.2]]))
-    assert_close(out_i, torch.tensor([[0.0, 0.0, 0.1]]))
+    assert_close(out_r, torch.tensor([[0.0, 0.0, 0.2]], device=GPU_DEV))
+    assert_close(out_i, torch.tensor([[0.0, 0.0, 0.1]], device=GPU_DEV))
 
     (out_r.sum() + out_i.sum()).backward()
-    mask = torch.tensor([[0.0, 0.0, 1.0]])
+    mask = torch.tensor([[0.0, 0.0, 1.0]], device=GPU_DEV)
 
     assert r_in.grad is not None and i_in.grad is not None
     assert_close(r_in.grad, mask)
@@ -161,18 +161,18 @@ def test_zrelu_masking_and_grad(dt: torch.dtype) -> None:
 
 def test_modrelu_thresholding(dt: torch.dtype) -> None:
     """Below threshold → 0; above threshold → magnitude-scaled."""
-    act = modReLU(num_features=1)
+    act = modReLU(num_features=1).to(GPU_DEV)
     with torch.no_grad():
         act.bias.fill_(-4.0)  # ensures r+b = 1 for a 3-4-5 input
 
-    hi_r, hi_i = torch.tensor([[3.0]]), torch.tensor([[4.0]])
+    hi_r, hi_i = torch.tensor([[3.0]], device=GPU_DEV), torch.tensor([[4.0]], device=GPU_DEV)
     scaling = (5.0 - 4.0) / 5.0  # (r+b)/r
 
     out_hi_r, out_hi_i = act(hi_r, hi_i)
     assert_close(out_hi_r, hi_r * scaling)
     assert_close(out_hi_i, hi_i * scaling)
 
-    lo_r, lo_i = torch.tensor([[0.1]]), torch.tensor([[0.1]])
+    lo_r, lo_i = torch.tensor([[0.1]], device=GPU_DEV), torch.tensor([[0.1]], device=GPU_DEV)
     out_lo_r, out_lo_i = act(lo_r, lo_i)
     assert_close(out_lo_r, torch.zeros_like(lo_r))
     assert_close(out_lo_i, torch.zeros_like(lo_i))
@@ -183,21 +183,21 @@ def test_modrelu_thresholding(dt: torch.dtype) -> None:
 
 def test_naive_bn_stats(dt: torch.dtype) -> None:
     """Training mode normalises each component to ≈0 mean and ≈1 var."""
-    bn = NaiveComplexBatchNorm(4)
+    bn = NaiveComplexBatchNorm(4).to(GPU_DEV)
     bn.train()
 
     r_in, i_in = _rand(256, 4, dt=dt), _rand(256, 4, dt=dt)
     out_r, out_i = bn(r_in, i_in)
 
-    assert_close(out_r.mean(0), torch.zeros(4, dtype=dt), atol=1e-2)
-    assert_close(out_i.mean(0), torch.zeros(4, dtype=dt), atol=1e-2)
-    assert_close(out_r.var(0, unbiased=False), torch.ones(4, dtype=dt), atol=1e-2)
-    assert_close(out_i.var(0, unbiased=False), torch.ones(4, dtype=dt), atol=1e-2)
+    assert_close(out_r.mean(0), torch.zeros(4, dtype=dt).to(GPU_DEV), atol=1e-2)
+    assert_close(out_i.mean(0), torch.zeros(4, dtype=dt).to(GPU_DEV), atol=1e-2)
+    assert_close(out_r.var(0, unbiased=False), torch.ones(4, dtype=dt).to(GPU_DEV), atol=1e-2)
+    assert_close(out_i.var(0, unbiased=False), torch.ones(4, dtype=dt).to(GPU_DEV), atol=1e-2)
 
 
 def test_naive_bn_eval_shape(dt: torch.dtype) -> None:
     """Eval mode must preserve input shape."""
-    bn = NaiveComplexBatchNorm(3)
+    bn = NaiveComplexBatchNorm(3).to(GPU_DEV)
     bn.train()
     _ = bn(_rand(32, 3, dt=dt), _rand(32, 3, dt=dt))  # prime running stats
 
@@ -217,7 +217,7 @@ def _feature_cov(x_r: Tensor, x_i: Tensor, mean_r: Tensor, mean_i: Tensor) -> Te
 
 def test_cov_bn_whitening(dt: torch.dtype) -> None:
     """Whitening ≈0-means, var≈0.5, and low cross-covariance."""
-    bn = CovarianceComplexBatchNorm(6)
+    bn = CovarianceComplexBatchNorm(6).to(GPU_DEV)
     bn.train()
 
     r_in, i_in = _rand(512, 6, dt=dt), _rand(512, 6, dt=dt)
@@ -239,7 +239,7 @@ def test_cov_bn_whitening(dt: torch.dtype) -> None:
 
 def test_cov_bn_eval_shape(dt: torch.dtype) -> None:
     """Inference mode keeps shape unchanged."""
-    bn = CovarianceComplexBatchNorm(2)
+    bn = CovarianceComplexBatchNorm(2).to(GPU_DEV)
     bn.train()
     for _ in range(3):
         _ = bn(_rand(32, 2, dt=dt), _rand(32, 2, dt=dt))
@@ -260,7 +260,7 @@ def test_complex_sequential_flow_and_grad(dt: torch.dtype) -> None:
         zReLU(),
         ComplexLinear(3, 4),
         modReLU(4),
-    )
+    ).to(GPU_DEV)
 
     r_in = _rand(10, 3, requires_grad=True, dt=dt)
     i_in = _rand(10, 3, requires_grad=True, dt=dt)
@@ -279,7 +279,7 @@ def test_complex_sequential_flow_and_grad(dt: torch.dtype) -> None:
 def test_complex_residual_identity_when_body_zero(dt: torch.dtype) -> None:
     """With zeroed body the residual becomes post-activation only."""
     body = ComplexSequential(ComplexLinear(4, 4), modReLU(4))
-    res = ComplexResidual(body=body, proj=None, post_act=zReLU())
+    res = ComplexResidual(body=body, proj=None, post_act=zReLU()).to(GPU_DEV)
 
     for m in res.modules():
         if isinstance(m, ComplexLinear):
@@ -292,8 +292,8 @@ def test_complex_residual_identity_when_body_zero(dt: torch.dtype) -> None:
                     m.imag_bias.zero_()
 
     res.eval()
-    x_r = torch.tensor([[0.5, -0.5, 0.3, 0.1]])
-    x_i = torch.tensor([[0.4, 0.2, -0.1, 0.0]])
+    x_r = torch.tensor([[0.5, -0.5, 0.3, 0.1]], device=GPU_DEV)
+    x_i = torch.tensor([[0.4, 0.2, -0.1, 0.0]], device=GPU_DEV)
     out_r, out_i = res(x_r, x_i)
 
     mask = (x_r >= 0) & (x_i >= 0)
@@ -304,7 +304,7 @@ def test_complex_residual_identity_when_body_zero(dt: torch.dtype) -> None:
 def test_complex_residual_grad_flow(dt: torch.dtype) -> None:
     """Gradients must flow through residual and body paths."""
     body = ComplexSequential(ComplexLinear(4, 4), zReLU())
-    res = ComplexResidual(body=body, proj=None, post_act=None)
+    res = ComplexResidual(body=body, proj=None, post_act=None).to(GPU_DEV)
 
     x_r = _rand(6, 4, requires_grad=True, dt=dt)
     x_i = _rand(6, 4, requires_grad=True, dt=dt)

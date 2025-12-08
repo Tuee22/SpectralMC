@@ -40,15 +40,55 @@ class InvalidAdamState:
     kind: Literal["InvalidAdamState"] = "InvalidAdamState"
 
 
+@dataclass(frozen=True)
+class EmptyTensorTree:
+    """TensorTree contains no tensors."""
+
+    kind: Literal["EmptyTensorTree"] = "EmptyTensorTree"
+
+
+@dataclass(frozen=True)
+class HeterogeneousTensorTree:
+    """TensorTree contains tensors with different device/dtype."""
+
+    kind: Literal["HeterogeneousTensorTree"] = "HeterogeneousTensorTree"
+
+
+@dataclass(frozen=True)
+class NoOpTransfer:
+    """Attempted to transfer tensor to its current device."""
+
+    device: str
+    kind: Literal["NoOpTransfer"] = "NoOpTransfer"
+
+
+@dataclass(frozen=True)
+class CudaUnavailable:
+    """CUDA destination requested but CUDA is not available."""
+
+    kind: Literal["CudaUnavailable"] = "CudaUnavailable"
+
+
 TorchFacadeError = (
-    UnsupportedTorchDType | UnsupportedTorchDevice | TensorStateConversionFailed | InvalidAdamState
+    UnsupportedTorchDType
+    | UnsupportedTorchDevice
+    | TensorStateConversionFailed
+    | InvalidAdamState
+    | EmptyTensorTree
+    | HeterogeneousTensorTree
+    | NoOpTransfer
+    | CudaUnavailable
 )
 
 T = TypeVar("T")
 TorchFacadeResult = Result[T, TorchFacadeError]
 
 __all__ = [
+    "CudaUnavailable",
+    "EmptyTensorTree",
+    "HeterogeneousTensorTree",
     "InvalidAdamState",
+    "NoOpTransfer",
     "TensorStateConversionFailed",
     "TorchFacadeError",
     "TorchFacadeResult",

@@ -28,9 +28,9 @@ import pytest
 import torch
 from pydantic import BaseModel, ValidationError, model_validator
 
-from spectralmc.errors.sampler import DimensionMismatch, SamplerValidationFailed
+from spectralmc.errors.sampler import BoundSpecInvalid, DimensionMismatch, SamplerValidationFailed
 from spectralmc.result import Failure, Success
-from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler
+from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler, build_bound_spec
 
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
@@ -94,8 +94,8 @@ def _pairs(pts: Sequence[Point]) -> list[tuple[float, float]]:
 def test_skip_repro(n_skip: int, n_check: int) -> None:
     """`skip` must yield a deterministic sequence offset."""
     dims = {
-        "x": BoundSpec(lower=0.0, upper=1.0),
-        "y": BoundSpec(lower=-1.0, upper=1.0),
+        "x": build_bound_spec(0.0, 1.0).unwrap(),
+        "y": build_bound_spec(-1.0, 1.0).unwrap(),
     }
 
     manual = SobolSampler.create(Point, dims, config=SobolConfig(seed=_SEED))
@@ -103,16 +103,16 @@ def test_skip_repro(n_skip: int, n_check: int) -> None:
         case Success(m):
             burn = m.sample(n_skip)
             match burn:
-                case Failure(err):
-                    pytest.fail(f"burn-in failed: {err}")
+                case Failure(burn_err):
+                    pytest.fail(f"burn-in failed: {burn_err}")
             expected_result = m.sample(n_check)
             match expected_result:
                 case Success(expected):
                     pass
-                case Failure(err):
-                    pytest.fail(f"expected sample failed: {err}")
-        case Failure(err):
-            pytest.fail(f"manual sampler failed: {err}")
+                case Failure(expected_err):
+                    pytest.fail(f"expected sample failed: {expected_err}")
+        case Failure(manual_err):
+            pytest.fail(f"manual sampler failed: {manual_err}")
 
     fast = SobolSampler.create(Point, dims, config=SobolConfig(seed=_SEED, skip=n_skip))
     match fast:
@@ -121,21 +121,21 @@ def test_skip_repro(n_skip: int, n_check: int) -> None:
             match got_result:
                 case Success(got):
                     pass
-                case Failure(err):
-                    pytest.fail(f"fast sample failed: {err}")
-        case Failure(err):
-            pytest.fail(f"fast sampler failed: {err}")
+                case Failure(got_err):
+                    pytest.fail(f"fast sample failed: {got_err}")
+        case Failure(fast_err):
+            pytest.fail(f"fast sampler failed: {fast_err}")
 
     assert _pairs(expected) == _pairs(got)
 
 
 _BOUND_CASES: tuple[tuple[dict[str, BoundSpec], type[BaseModel]], ...] = (
-    ({"x": BoundSpec(lower=0.0, upper=1.0)}, OneDim),
+    ({"x": build_bound_spec(0.0, 1.0).unwrap()}, OneDim),
     (
         {
-            "x": BoundSpec(lower=-3.14, upper=3.14),
-            "y": BoundSpec(lower=-1.0, upper=1.0),
-            "z": BoundSpec(lower=10.0, upper=20.0),
+            "x": build_bound_spec(-3.14, 3.14).unwrap(),
+            "y": build_bound_spec(-1.0, 1.0).unwrap(),
+            "z": build_bound_spec(10.0, 20.0).unwrap(),
         },
         ThreeDim,
     ),
@@ -165,8 +165,13 @@ def test_bounds(dims: dict[str, BoundSpec], model_cls: type[BaseModel]) -> None:
 
 def test_boundspec_validation() -> None:
     """`BoundSpec` must enforce `lower < upper`."""
-    with pytest.raises(ValidationError):
-        BoundSpec(lower=1.0, upper=1.0)
+    result = build_bound_spec(lower=1.0, upper=1.0)
+    match result:
+        case Failure(BoundSpecInvalid(lower=low, upper=up)):
+            assert low == 1.0
+            assert up == 1.0
+        case Success(_):
+            pytest.fail("Expected BoundSpecInvalid failure for equal bounds")
 
 
 def test_dim_mismatch() -> None:
@@ -176,7 +181,7 @@ def test_dim_mismatch() -> None:
         x: float
         y: float
 
-    dims = {"x": BoundSpec(lower=0.0, upper=1.0)}
+    dims = {"x": build_bound_spec(0.0, 1.0).unwrap()}
     sampler = SobolSampler.create(XY, dims, config=SobolConfig(seed=_SEED))
     match sampler:
         case Failure(err):
@@ -188,13 +193,12 @@ def test_dim_mismatch() -> None:
 @pytest.mark.parametrize("param", ["skip", "seed"])
 def test_negative_args(param: str) -> None:
     """Negative `skip` or `seed` must raise *ValidationError* via Pydantic."""
-    dims = {"x": BoundSpec(lower=0.0, upper=1.0)}
     if param == "skip":
         with pytest.raises(ValidationError):
-            SobolSampler(Point, dims, config=SobolConfig(seed=_SEED, skip=-1))
+            SobolConfig(seed=_SEED, skip=-1)
     else:
         with pytest.raises(ValidationError):
-            SobolSampler(Point, dims, config=SobolConfig(seed=-1))
+            SobolConfig(seed=-1)
 
 
 def test_validator_bubbles() -> None:
@@ -207,7 +211,7 @@ def test_validator_bubbles() -> None:
         def _fail(self) -> AlwaysFail:
             raise ValueError("forced failure")
 
-    dims = {"z": BoundSpec(lower=0.0, upper=1.0)}
+    dims = {"z": build_bound_spec(0.0, 1.0).unwrap()}
     sampler = SobolSampler.create(AlwaysFail, dims, config=SobolConfig(seed=_SEED))
     match sampler:
         case Success(s):
@@ -225,8 +229,8 @@ def test_validator_bubbles() -> None:
 def test_smoke_two_dim() -> None:
     """End-to-end sanity check sampling four 2-D points."""
     dims = {
-        "x": BoundSpec(lower=0.0, upper=1.0),
-        "y": BoundSpec(lower=-1.0, upper=1.0),
+        "x": build_bound_spec(0.0, 1.0).unwrap(),
+        "y": build_bound_spec(-1.0, 1.0).unwrap(),
     }
     sampler = SobolSampler.create(Point, dims, config=SobolConfig(seed=_SEED))
     match sampler:

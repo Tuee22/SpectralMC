@@ -49,6 +49,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash-completion \
     && rm -rf /var/lib/apt/lists/*
 
+# 1.5) Install protoc from GitHub (need >= 3.19 for protobuf 6.x compatibility)
+RUN PROTOC_VERSION=29.5 && \
+    wget -q https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip && \
+    unzip -q protoc-${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local && \
+    rm protoc-${PROTOC_VERSION}-linux-x86_64.zip && \
+    protoc --version
+
 # 2) Install Python 3.12 from deadsnakes
 RUN add-apt-repository ppa:deadsnakes/ppa -y && \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -86,6 +93,19 @@ RUN if [ "$BUILD_FROM_SOURCE" = "true" ]; then \
   else \
     poetry install --no-interaction --with dev; \
   fi
+
+# 9.5) Generate protobuf code into /opt/spectralmc_proto
+RUN mkdir -p /opt/spectralmc_proto && \
+    protoc \
+        --python_out=/opt/spectralmc_proto \
+        --proto_path=/spectralmc/src/spectralmc/proto \
+        /spectralmc/src/spectralmc/proto/*.proto && \
+    echo '"""Generated protobuf modules for SpectralMC."""' > /opt/spectralmc_proto/__init__.py && \
+    python -c "import site; from pathlib import Path; pth = Path(site.getsitepackages()[0]) / 'spectralmc-proto.pth'; pth.write_text('/opt/spectralmc_proto\n/opt\n'); print(f'✓ Wrote {pth}')" && \
+    ls -la /opt/spectralmc_proto/
+
+# Verify protobuf generation
+RUN PYTHONPATH=/opt:${PYTHONPATH:-} python -c "import spectralmc_proto.common_pb2; print('✓ Loaded protobuf modules')" || { echo "Failed to load protobuf"; exit 1; }
 
 # 10) Enforce CLAUDE.md testing policies: Block direct pytest and timeout commands
 # Block direct pytest command (python -m pytest still works for Poetry scripts)

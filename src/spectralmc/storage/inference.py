@@ -10,8 +10,13 @@ from dataclasses import dataclass
 import torch
 
 # CRITICAL: Import facade BEFORE torch for deterministic algorithms
+from ..errors.storage import (
+    StartError,
+    ValidationError as StorageValidationError,
+    VersionNotFoundError as StorageVersionNotFoundError,
+)
 from ..gbm_trainer import GbmCVNNPricerConfig
-from ..result import Failure, Success
+from ..result import Failure, Result, Success
 from .chain import ModelVersion
 from .checkpoint import load_snapshot_from_checkpoint
 from .errors import StorageError, VersionNotFoundError
@@ -26,6 +31,28 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
+def pinned_mode(counter: int) -> Result[PinnedMode, StorageValidationError]:
+    """Create PinnedMode with validation.
+
+    Args:
+        counter: Version counter (must be >= 0)
+
+    Returns:
+        Success with PinnedMode if valid, Failure with ValidationError if invalid
+    """
+    return (
+        Failure(
+            StorageValidationError(
+                field="counter",
+                value=counter,
+                message=f"Version counter must be >= 0, got {counter}",
+            )
+        )
+        if counter < 0
+        else Success(PinnedMode(counter=counter))
+    )
+
+
 @dataclass(frozen=True)
 class PinnedMode:
     """Pin to a specific version counter.
@@ -35,11 +62,6 @@ class PinnedMode:
     """
 
     counter: int
-
-    def __post_init__(self) -> None:
-        """Validate counter is non-negative."""
-        if self.counter < 0:
-            raise ValueError(f"Version counter must be >= 0, got {self.counter}")
 
 
 @dataclass(frozen=True)
@@ -90,16 +112,21 @@ class InferenceClient:
 
     Usage:
         ```python
-        from spectralmc.storage import InferenceClient, PinnedMode, TrackingMode
+        from spectralmc.storage import InferenceClient, pinned_mode, TrackingMode
+        from spectralmc.result import Success, Failure
 
-        # Pinned mode (production)
-        client = InferenceClient(
-            mode=PinnedMode(counter=42),
-            poll_interval=60.0,
-            store=store,
-            model_template=model,
-            config_template=config
-        )
+        # Pinned mode (production) - use factory function
+        match pinned_mode(42):
+            case Success(mode):
+                client = InferenceClient(
+                    mode=mode,
+                    poll_interval=60.0,
+                    store=store,
+                    model_template=model,
+                    config_template=config
+                )
+            case Failure(error):
+                raise RuntimeError(f"Invalid version counter: {error.message}")
 
         async with client:
             model = client.get_model()
@@ -169,8 +196,11 @@ class InferenceClient:
 
     async def __aenter__(self) -> InferenceClient:
         """Enter async context manager, start client."""
-        await self.start()
-        return self
+        match await self.start():
+            case Success(_):
+                return self
+            case Failure(error):
+                raise RuntimeError(f"Failed to start InferenceClient: {error.message}")
 
     async def __aexit__(
         self,
@@ -181,12 +211,16 @@ class InferenceClient:
         """Exit async context manager, stop client."""
         await self.stop()
 
-    async def start(self) -> None:
+    async def start(self) -> Result[None, StartError]:
         """
         Start inference client.
 
         - Loads initial model (specific version or latest)
         - Spawns background polling task if tracking mode
+
+        Returns:
+            Success(None) if started successfully
+            Failure(StartError) if cannot start (e.g., empty store in tracking mode)
         """
         logger.info("Starting InferenceClient...")
 
@@ -194,8 +228,16 @@ class InferenceClient:
         match self.mode:
             case PinnedMode(counter):
                 # Pinned mode: load specific version
-                version = await self._fetch_version_by_counter(counter)
-                logger.info(f"Pinned mode: loading version {counter}")
+                match await self._fetch_version_by_counter(counter):
+                    case Success(version):
+                        logger.info(f"Pinned mode: loading version {counter}")
+                    case Failure(error):
+                        return Failure(
+                            StartError(
+                                message=f"Cannot start pinned mode: version {counter} not found",
+                                underlying_error=error if isinstance(error, Exception) else None,
+                            )
+                        )
 
             case TrackingMode():
                 # Tracking mode: load latest
@@ -203,9 +245,12 @@ class InferenceClient:
                 match head_result:
                     case Success(version):
                         logger.info(f"Tracking mode: loading latest version {version.counter}")
-                    case Failure(error):
-                        raise ValueError(
-                            f"Cannot start tracking mode: no versions in store ({error})"
+                    case Failure():
+                        return Failure(
+                            StartError(
+                                message="Cannot start tracking mode: no versions in store",
+                                underlying_error=None,
+                            )
                         )
 
         await self._load_version(version)
@@ -220,6 +265,7 @@ class InferenceClient:
                 pass  # No polling in pinned mode
 
         logger.info(f"InferenceClient started with version {version.counter}")
+        return Success(None)
 
     async def stop(self) -> None:
         """
@@ -353,9 +399,16 @@ class InferenceClient:
         logger.info(f"Loading version {version.counter}...")
 
         # Load snapshot from checkpoint
-        snapshot = await load_snapshot_from_checkpoint(
+        snapshot_result = await load_snapshot_from_checkpoint(
             self.store, version, self.model_template, self.config_template
         )
+        match snapshot_result:
+            case Failure(load_err):
+                raise RuntimeError(
+                    f"Failed to load snapshot for version {version.counter}: {load_err}"
+                )
+            case Success(snapshot):
+                pass
 
         # Atomic swap (Python GIL makes this thread-safe)
         self._current_version = version
@@ -367,7 +420,9 @@ class InferenceClient:
             f"params={sum(p.numel() for p in snapshot.cvnn.parameters())}"
         )
 
-    async def _fetch_version_by_counter(self, counter: int) -> ModelVersion:
+    async def _fetch_version_by_counter(
+        self, counter: int
+    ) -> Result[ModelVersion, StorageVersionNotFoundError]:
         """
         Fetch specific version by counter.
 
@@ -375,10 +430,8 @@ class InferenceClient:
             counter: Version counter
 
         Returns:
-            ModelVersion
-
-        Raises:
-            ValueError: If version not found
+            Success(ModelVersion) if found
+            Failure(VersionNotFoundError) if not found
         """
         # Get HEAD to find version ID
         head_result = await self.store.get_head()
@@ -387,13 +440,13 @@ class InferenceClient:
             case Success(head):
                 # If requesting HEAD, return it
                 if counter == head.counter:
-                    return head
-            case Failure(error):
-                raise ValueError(f"Version {counter} not found: store is empty ({error})")
+                    return Success(head)
+            case Failure():
+                return Failure(StorageVersionNotFoundError(counter=counter, available_versions=[]))
 
         # Otherwise, fetch by version ID
         # Version ID format: v{counter:010d}
         version_id = f"v{counter:010d}"
         version = await self.store.get_version(version_id)
 
-        return version
+        return Success(version)

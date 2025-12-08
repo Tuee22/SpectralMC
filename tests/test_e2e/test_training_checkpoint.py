@@ -10,7 +10,9 @@ from spectralmc.gbm import BlackScholesConfig, build_black_scholes_config, build
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import AdamOptimizerState, AdamParamGroup, AdamParamState
-from spectralmc.result import Failure, Success
+from typing import TypeVar
+
+from spectralmc.result import Failure, Result, Success
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     commit_snapshot,
@@ -18,6 +20,18 @@ from spectralmc.storage import (
 )
 
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
+T = TypeVar("T")
+E = TypeVar("E")
+
+
+def _expect_success(result: Result[T, E]) -> T:
+    """Unwrap Success or raise on Failure. For test readability only."""
+    match result:
+        case Success(value):
+            return value
+        case Failure(error):
+            raise AssertionError(f"Expected Success, got Failure: {error}")
 
 
 def _make_checkpoint_black_scholes_config() -> BlackScholesConfig:
@@ -32,8 +46,8 @@ def _make_checkpoint_black_scholes_config() -> BlackScholesConfig:
         skip=0,
         dtype=Precision.float32,
     ):
-        case Failure(err):
-            pytest.fail(f"SimulationParams creation failed: {err}")
+        case Failure(sim_err):
+            pytest.fail(f"SimulationParams creation failed: {sim_err}")
         case Success(sim_params):
             pass
 
@@ -42,8 +56,8 @@ def _make_checkpoint_black_scholes_config() -> BlackScholesConfig:
         simulate_log_return=True,
         normalize_forwards=True,
     ):
-        case Failure(err):
-            pytest.fail(f"BlackScholesConfig creation failed: {err}")
+        case Failure(bs_err):
+            pytest.fail(f"BlackScholesConfig creation failed: {bs_err}")
         case Success(bs_config):
             return bs_config
 
@@ -59,15 +73,19 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
     )
 
     # Create optimizer state
-    param_states = {
-        0: AdamParamState.from_torch(
-            {
-                "step": 10,
-                "exp_avg": torch.randn(10, 5),
-                "exp_avg_sq": torch.randn(10, 5),
-            }
-        ),
-    }
+    match AdamParamState.from_torch(
+        {
+            "step": 10,
+            "exp_avg": torch.randn(10, 5),
+            "exp_avg_sq": torch.randn(10, 5),
+        }
+    ):
+        case Success(param_state_0):
+            pass
+        case Failure(error):
+            pytest.fail(f"AdamParamState.from_torch failed: {error}")
+
+    param_states = {0: param_state_0}
 
     param_groups = [
         AdamParamGroup(
@@ -123,7 +141,9 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
         torch.nn.Linear(10, 5),
     )
 
-    loaded_snapshot = await load_snapshot_from_checkpoint(async_store, version, new_model, snapshot)
+    loaded_snapshot = _expect_success(
+        await load_snapshot_from_checkpoint(async_store, version, new_model, snapshot)
+    )
 
     # Verify model parameters are identical
     original_state = model.state_dict()

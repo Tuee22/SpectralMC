@@ -16,7 +16,6 @@ from spectralmc.errors.serialization import (
     InvalidWidthSpecProto,
     SerializationResult,
     UnknownActivationKind,
-    UnknownDType,
     ValidationFailed,
 )
 from spectralmc.proto import models_pb2
@@ -122,8 +121,8 @@ class LinearCfgConverter:
             activation=activation,
         )
         match cfg_result:
-            case Failure(error):
-                return Failure(ValidationFailed(error=error))
+            case Failure(val_err):
+                return Failure(ValidationFailed(error=val_err))
             case Success(cfg):
                 return Success(cfg)
 
@@ -132,21 +131,26 @@ class CVNNConfigConverter:
     """Convert CVNNConfig."""
 
     @staticmethod
-    def to_proto(config: CVNNConfig) -> models_pb2.CVNNConfigProto:
+    def to_proto(config: CVNNConfig) -> SerializationResult[models_pb2.CVNNConfigProto]:
         """Convert to proto."""
         proto = models_pb2.CVNNConfigProto()
-        proto.dtype = DTypeConverter.to_proto(config.dtype)
+        match DTypeConverter.to_proto(config.dtype):
+            case Failure(error):
+                return Failure(error)
+            case Success(dtype_proto):
+                proto.dtype = dtype_proto
         # Note: LayerCfg is complex (recursive), simplified for now
         proto.seed = config.seed
-        return proto
+        return Success(proto)
 
     @staticmethod
     def from_proto(proto: models_pb2.CVNNConfigProto) -> SerializationResult[CVNNConfig]:
         """Convert from proto."""
-        try:
-            dtype = DTypeConverter.from_proto(proto.dtype)
-        except ValueError:
-            return Failure(UnknownDType(proto_value=proto.dtype))
+        match DTypeConverter.from_proto(proto.dtype):
+            case Failure(error):
+                return Failure(error)
+            case Success(dtype):
+                pass
 
         config_result = validate_model(
             CVNNConfig,
@@ -155,8 +159,8 @@ class CVNNConfigConverter:
             seed=proto.seed,
         )
         match config_result:
-            case Failure(error):
-                return Failure(ValidationFailed(error=error))
+            case Failure(validation_error):
+                return Failure(ValidationFailed(error=validation_error))
             case Success(cfg):
                 return Success(cfg)
 

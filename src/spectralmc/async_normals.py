@@ -69,7 +69,7 @@ from spectralmc.effects import (
 )
 from spectralmc.errors import InvalidDType, InvalidShape, QueueBusy, QueueEmpty, SeedOutOfRange
 from spectralmc.models.numerical import Precision
-from spectralmc.result import Failure, Result, Success
+from spectralmc.result import Failure, Result, Success, collect_results
 from spectralmc.validation import validate_model
 
 
@@ -318,30 +318,31 @@ class ConcurrentNormGenerator:
             match gen_result:
                 case Success(gen):
                     enqueue_result = gen.enqueue(seed)
-                    return enqueue_result if isinstance(enqueue_result, Failure) else Success(gen)
-                case Failure(error):
-                    return Failure(error)
+                    match enqueue_result:
+                        case Success(_):
+                            return Success(gen)
+                        case Failure(enqueue_error):
+                            return Failure(enqueue_error)
+                case Failure(create_error):
+                    return Failure(create_error)
 
-        pool: list[_NormGenerator] = []
-        for _ in range(buffer.size):
-            gen_result = _make()
-            match gen_result:
-                case Success(gen):
-                    pool.append(gen)
-                case Failure(error):
-                    return Failure(error)
+        gen_results = [_make() for _ in range(buffer.size)]
 
-        return Success(
-            cls(
-                pool=pool,
-                rows=rows,
-                cols=cols,
-                dtype=dtype,
-                base_seed=base_seed,
-                served=served,
-                np_rng=np_rng,
-            )
-        )
+        match collect_results(gen_results):
+            case Failure(make_error):
+                return Failure(make_error)
+            case Success(pool):
+                return Success(
+                    cls(
+                        pool=pool,
+                        rows=rows,
+                        cols=cols,
+                        dtype=dtype,
+                        base_seed=base_seed,
+                        served=served,
+                        np_rng=np_rng,
+                    )
+                )
 
     # ------------------------------------------------------------------ #
     # Helpers                                                            #
@@ -379,7 +380,7 @@ class ConcurrentNormGenerator:
             rows=self._rows,
             cols=self._cols,
             seed=self._base_seed,
-            dtype=Precision.from_cupy(self._dtype),
+            dtype=Precision.from_cupy(self._dtype).unwrap(),
             skips=self._served,
         )
 

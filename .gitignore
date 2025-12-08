@@ -164,3 +164,8 @@ setup.sh
 .failed_artifacts/
 .logs/
 .miniodata/
+
+# Protobuf generated code (regenerated during Docker build from .proto sources)
+# Generated files live in /opt/spectralmc_proto/ inside containers
+# See: documents/engineering/build_artifact_management.md
+src/spectralmc/proto/*_pb2.py

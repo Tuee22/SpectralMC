@@ -14,11 +14,12 @@ from spectralmc.effects import (
     WriteObject,
     sequence_effects,
 )
-from spectralmc.errors.serialization import SerializationResult
+from spectralmc.errors.serialization import SerializationError
+from spectralmc.errors.torch_facade import TorchFacadeError
 from spectralmc.gbm_trainer import ComplexValuedModel, GbmCVNNPricerConfig
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.proto import tensors_pb2
-from spectralmc.result import Failure, Success
+from spectralmc.result import Failure, Result, Success
 from spectralmc.serialization import compute_sha256
 from spectralmc.serialization.tensors import ModelCheckpointConverter
 from spectralmc.storage.chain import ModelVersion
@@ -28,7 +29,7 @@ from spectralmc.storage.store import AsyncBlockchainModelStore
 S = TypeVar("S")
 
 
-def _expect_serialization(result: SerializationResult[S]) -> S:
+def _expect_serialization(result: Result[S, SerializationError | TorchFacadeError]) -> S:
     match result:
         case Success(value):
             return value
@@ -117,7 +118,7 @@ async def load_snapshot_from_checkpoint(
     version: ModelVersion,
     cvnn_template: torch.nn.Module,
     cfg: GbmCVNNPricerConfig,
-) -> GbmCVNNPricerConfig:
+) -> Result[GbmCVNNPricerConfig, SerializationError | TorchFacadeError]:
     """
     Load a snapshot from a blockchain checkpoint.
 
@@ -138,9 +139,13 @@ async def load_snapshot_from_checkpoint(
     checkpoint_proto.ParseFromString(checkpoint_bytes)
 
     # Deserialize checkpoint components
-    model_state_dict, optimizer_state, cpu_rng_state, cuda_rng_states, global_step = (
-        ModelCheckpointConverter.from_proto(checkpoint_proto)
-    )
+    match ModelCheckpointConverter.from_proto(checkpoint_proto):
+        case Success(
+            (model_state_dict, optimizer_state, cpu_rng_state, cuda_rng_states, global_step)
+        ):
+            pass
+        case Failure(error):
+            return Failure(error)
 
     # Load model state dict into CVNN
     cvnn_template.load_state_dict(model_state_dict)
@@ -154,15 +159,17 @@ async def load_snapshot_from_checkpoint(
     cvnn: ComplexValuedModel = cvnn_template
 
     # Create GbmCVNNPricerConfig
-    return GbmCVNNPricerConfig(
-        cfg=cfg.cfg,  # Use existing BlackScholes config
-        domain_bounds=cfg.domain_bounds,  # Use existing domain bounds
-        cvnn=cvnn,
-        optimizer_state=optimizer_state if optimizer_state.param_states else None,
-        global_step=global_step,
-        sobol_skip=cfg.sobol_skip,  # Use existing sobol skip
-        torch_cpu_rng_state=cpu_rng_state if cpu_rng_state else None,
-        torch_cuda_rng_states=cuda_rng_states if cuda_rng_states else None,
+    return Success(
+        GbmCVNNPricerConfig(
+            cfg=cfg.cfg,  # Use existing BlackScholes config
+            domain_bounds=cfg.domain_bounds,  # Use existing domain bounds
+            cvnn=cvnn,
+            optimizer_state=optimizer_state if optimizer_state.param_states else None,
+            global_step=global_step,
+            sobol_skip=cfg.sobol_skip,  # Use existing sobol skip
+            torch_cpu_rng_state=cpu_rng_state if cpu_rng_state else None,
+            torch_cuda_rng_states=cuda_rng_states if cuda_rng_states else None,
+        )
     )
 
 

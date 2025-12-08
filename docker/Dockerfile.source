@@ -54,6 +54,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && locale-gen en_US.UTF-8
 
+# Install protoc from GitHub (need >= 3.19 for protobuf 6.x compatibility)
+RUN PROTOC_VERSION=29.5 && \
+    wget -q https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip && \
+    unzip -q protoc-${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local && \
+    rm protoc-${PROTOC_VERSION}-linux-x86_64.zip && \
+    protoc --version
+
 # ============================================================================
 # LAYER 2: Python 3.12 Installation (changes: rarely)
 # ============================================================================
@@ -147,6 +154,25 @@ RUN /bin/bash -c "set -euo pipefail; \
     python -c \"import site; from pathlib import Path; pth = Path(site.getsitepackages()[0]) / 'spectralmc-opt.pth'; pth.write_text('/opt/pytorch\\n/opt/cupy\\n'); print(f'✓ Wrote {pth} to expose /opt artefacts')\"; \
     PYTHONPATH=/opt/pytorch:/opt/cupy:${PYTHONPATH:-} python -c \"import torch, cupy; print(f'✓ Staged torch {torch.__version__} (cuda={torch.version.cuda}) from /opt/pytorch'); print(f'✓ Staged cupy {cupy.__version__} from /opt/cupy')\" || { cat /tmp/pytorch-build.log; exit 1; }; \
   "
+
+# ============================================================================
+# LAYER 7.5: Generate Protobuf Code into /opt/spectralmc_proto
+# ============================================================================
+
+RUN echo "=== Generating protobuf modules ===" && \
+    mkdir -p /opt/spectralmc_proto && \
+    protoc \
+        --python_out=/opt/spectralmc_proto \
+        --proto_path=/spectralmc/src/spectralmc/proto \
+        /spectralmc/src/spectralmc/proto/*.proto && \
+    echo '"""Generated protobuf modules for SpectralMC."""' > /opt/spectralmc_proto/__init__.py && \
+    ls -la /opt/spectralmc_proto/
+
+# Update .pth file to include /opt and /opt/spectralmc_proto (for cross-imports)
+RUN python -c "import site; from pathlib import Path; pth = Path(site.getsitepackages()[0]) / 'spectralmc-opt.pth'; pth.write_text('/opt/pytorch\n/opt/cupy\n/opt/spectralmc_proto\n/opt\n'); print(f'✓ Updated {pth}')"
+
+# Verify
+RUN PYTHONPATH=/opt/pytorch:/opt/cupy:/opt:${PYTHONPATH:-} python -c "import spectralmc_proto.common_pb2; print('✓ Loaded protobuf')" || exit 1
 
 # ============================================================================
 # LAYER 8: Enforce CLAUDE.md Testing Policies

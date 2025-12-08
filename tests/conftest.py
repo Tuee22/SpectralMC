@@ -98,7 +98,7 @@ def _free_cupy() -> None:
     try:
         cp.get_default_memory_pool().free_all_blocks()
         cp.get_default_pinned_memory_pool().free_all_blocks()
-    except Exception as exc:  # pragma: no cover
+    except (RuntimeError, AttributeError) as exc:  # pragma: no cover
         warnings.warn(
             f"CuPy memory-pool cleanup failed: {exc!r}",
             RuntimeWarning,
@@ -115,7 +115,7 @@ def cleanup_gpu() -> Generator[None, None, None]:
     if torch.cuda.is_available():
         try:
             torch.cuda.empty_cache()
-        except Exception as exc:  # pragma: no cover
+        except (RuntimeError, OSError) as exc:  # pragma: no cover
             warnings.warn(
                 f"torch.cuda.empty_cache() failed: {exc!r}",
                 RuntimeWarning,

@@ -19,6 +19,7 @@ from spectralmc.cvnn_factory import (
     LinearCfg,
     build_model,
 )
+from spectralmc.errors.trainer import InvalidTrainerConfig
 from spectralmc.gbm import build_black_scholes_config, build_simulation_params
 from spectralmc.gbm_trainer import (
     ComplexValuedModel,
@@ -29,13 +30,14 @@ from spectralmc.gbm_trainer import (
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import DType as TorchDTypeEnum
 from spectralmc.result import Failure, Result, Success
-from spectralmc.sobol_sampler import BoundSpec
+from spectralmc.sobol_sampler import BoundSpec, build_bound_spec
 from spectralmc.storage import AsyncBlockchainModelStore, commit_snapshot
 
 T = TypeVar("T")
+E = TypeVar("E")
 
 
-def _expect_success(result: Result[T, object]) -> T:
+def _expect_success(result: Result[T, E]) -> T:
     match result:
         case Success(value):
             return value
@@ -56,7 +58,7 @@ def _make_test_cvnn(
     dtype: torch.dtype,
 ) -> ComplexValuedModel:
     """Create a simple CVNN for testing (matches test_gbm_trainer.py pattern)."""
-    enum_dtype = TorchDTypeEnum.from_torch(dtype)
+    enum_dtype = _expect_success(TorchDTypeEnum.from_torch(dtype))
     cfg = CVNNConfig(
         dtype=enum_dtype,
         layers=[
@@ -84,8 +86,8 @@ def make_test_config(model: ComplexValuedModel, global_step: int = 0) -> GbmCVNN
         skip=0,
         dtype=Precision.float32,
     ):
-        case Failure(err):
-            raise AssertionError(f"SimulationParams creation failed: {err}")
+        case Failure(sim_err):
+            raise AssertionError(f"SimulationParams creation failed: {sim_err}")
         case Success(sim_params):
             pass
 
@@ -94,8 +96,8 @@ def make_test_config(model: ComplexValuedModel, global_step: int = 0) -> GbmCVNN
         simulate_log_return=True,
         normalize_forwards=True,
     ):
-        case Failure(err):
-            raise AssertionError(f"BlackScholesConfig creation failed: {err}")
+        case Failure(cfg_err):
+            raise AssertionError(f"BlackScholesConfig creation failed: {cfg_err}")
         case Success(bs_config):
             pass
 
@@ -104,12 +106,12 @@ def make_test_config(model: ComplexValuedModel, global_step: int = 0) -> GbmCVNN
 
     # Black-Scholes parameter bounds (required for SobolSampler)
     domain_bounds: dict[str, BoundSpec] = {
-        "X0": BoundSpec(lower=50.0, upper=150.0),  # Initial spot price
-        "K": BoundSpec(lower=50.0, upper=150.0),  # Strike price
-        "T": BoundSpec(lower=0.1, upper=2.0),  # Time to maturity
-        "r": BoundSpec(lower=0.0, upper=0.1),  # Risk-free rate
-        "d": BoundSpec(lower=0.0, upper=0.05),  # Dividend yield
-        "v": BoundSpec(lower=0.1, upper=0.5),  # Volatility
+        "X0": build_bound_spec(50.0, 150.0).unwrap(),  # Initial spot price
+        "K": build_bound_spec(50.0, 150.0).unwrap(),  # Strike price
+        "T": build_bound_spec(0.1, 2.0).unwrap(),  # Time to maturity
+        "r": build_bound_spec(0.0, 0.1).unwrap(),  # Risk-free rate
+        "d": build_bound_spec(0.0, 0.05).unwrap(),  # Dividend yield
+        "v": build_bound_spec(0.1, 0.5).unwrap(),  # Volatility
     }
 
     return GbmCVNNPricerConfig(
@@ -143,7 +145,7 @@ async def test_training_with_auto_commit(
     pricer.train(training_config)
 
     # Manually commit after training
-    snapshot = pricer.snapshot()
+    snapshot = _expect_success(pricer.snapshot())
     version = await commit_snapshot(
         async_store, snapshot, f"Final checkpoint: step={snapshot.global_step}"
     )
@@ -172,7 +174,7 @@ async def test_training_with_commit_interval(
     pricer.train(training_config)
 
     # Manually commit final state
-    snapshot = pricer.snapshot()
+    snapshot = _expect_success(pricer.snapshot())
     version = await commit_snapshot(
         async_store, snapshot, f"Checkpoint at step={snapshot.global_step}"
     )
@@ -224,12 +226,17 @@ async def test_training_validation_auto_commit_requires_store(
         learning_rate=0.001,
     )
 
-    # Should raise ValueError
-    with pytest.raises(ValueError, match="requires blockchain_store"):
-        pricer.train(
-            training_config,
-            auto_commit=True,  # Without blockchain_store
-        )
+    # Should return Failure with InvalidTrainerConfig
+    result = pricer.train(
+        training_config,
+        auto_commit=True,  # Without blockchain_store
+    )
+    match result:
+        case Failure(error):
+            assert isinstance(error, InvalidTrainerConfig)
+            assert "blockchain_store" in error.message
+        case Success(_):
+            pytest.fail("Expected Failure for auto_commit without blockchain_store")
 
 
 @pytest.mark.asyncio
@@ -247,12 +254,17 @@ async def test_training_validation_commit_interval_requires_store(
         learning_rate=0.001,
     )
 
-    # Should raise ValueError
-    with pytest.raises(ValueError, match="requires blockchain_store"):
-        pricer.train(
-            training_config,
-            commit_interval=3,  # Without blockchain_store
-        )
+    # Should return Failure with InvalidTrainerConfig
+    result = pricer.train(
+        training_config,
+        commit_interval=3,  # Without blockchain_store
+    )
+    match result:
+        case Failure(error):
+            assert isinstance(error, InvalidTrainerConfig)
+            assert "blockchain_store" in error.message
+        case Success(_):
+            pytest.fail("Expected Failure for commit_interval without blockchain_store")
 
 
 @pytest.mark.asyncio
@@ -274,7 +286,7 @@ async def test_training_commit_message_template(
     pricer.train(training_config)
 
     # Manually commit with custom message
-    snapshot = pricer.snapshot()
+    snapshot = _expect_success(pricer.snapshot())
     message = f"Training: step={snapshot.global_step}, batch={training_config.num_batches}"
     version = await commit_snapshot(async_store, snapshot, message)
 
@@ -302,7 +314,7 @@ async def test_training_commit_preserves_optimizer_state(
     pricer.train(training_config)
 
     # Get snapshot and commit
-    snapshot = pricer.snapshot()
+    snapshot = _expect_success(pricer.snapshot())
 
     # Verify optimizer state exists before commit
     assert snapshot.optimizer_state is not None

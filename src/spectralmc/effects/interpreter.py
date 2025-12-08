@@ -155,25 +155,25 @@ class GPUInterpreter:
         Uses spectralmc.models.cpu_gpu_transfer for actual transfer.
         """
 
-        try:
-            tensor_result = self._registry.get_torch_tensor(tensor_id)
-            match tensor_result:
-                case Failure(_):
-                    return Failure(GPUError(message=f"Tensor not found: {tensor_id}"))
-                case Success(tensor):
-                    pass
+        tensor_result = self._registry.get_torch_tensor(tensor_id)
+        match tensor_result:
+            case Failure(_):
+                return Failure(GPUError(message=f"Tensor not found: {tensor_id}"))
+            case Success(tensor):
+                pass
 
-            # Determine transfer destination
-            if dst == Device.cpu:
-                dest = TransferDestination.CPU
-            else:
-                dest = TransferDestination.CUDA
+        # Determine transfer destination
+        if dst == Device.cpu:
+            dest = TransferDestination.CPU
+        else:
+            dest = TransferDestination.CUDA
 
-            result = move_tensor_tree(tensor, dest=dest)
-            self._registry.register_tensor(tensor_id, result)
-            return Success(result)
-        except (RuntimeError, ValueError) as e:
-            return Failure(GPUError(message=str(e)))
+        match move_tensor_tree(tensor, dest=dest):
+            case Failure(error):
+                return Failure(GPUError(message=str(error)))
+            case Success(moved_tensor):
+                self._registry.register_tensor(tensor_id, moved_tensor)
+                return Success(moved_tensor)
 
     async def _sync_stream(self, stream_type: str) -> Result[object, GPUError]:
         """Synchronize the specified CUDA stream."""
@@ -947,13 +947,8 @@ class LoggingInterpreter:
                     logger.error(effect.message, exc_info=effect.exc_info)
                 case "critical":
                     logger.critical(effect.message, exc_info=effect.exc_info)
-                case _:
-                    return Failure(
-                        LoggingError(
-                            message=f"Unknown log level: {effect.level}",
-                            logger_name=logger_name,
-                        )
-                    )
+                case _ as unreachable:
+                    assert_never(unreachable)
             return Success(None)
         except Exception as exc:
             return Failure(LoggingError(message=str(exc), logger_name=logger_name))

@@ -28,6 +28,17 @@ class InvalidSimulationParams:
 
 
 @dataclass(frozen=True)
+class GPUMemoryLimitExceeded:
+    """GPU memory limit exceeded for simulation parameters."""
+
+    total_paths: int
+    max_paths: int
+    network_size: int
+    batches_per_mc_run: int
+    kind: Literal["GPUMemoryLimitExceeded"] = "GPUMemoryLimitExceeded"
+
+
+@dataclass(frozen=True)
 class InvalidBlackScholesConfig:
     """Black-Scholes configuration validation failed."""
 
@@ -35,7 +46,7 @@ class InvalidBlackScholesConfig:
     kind: Literal["InvalidBlackScholesConfig"] = "InvalidBlackScholesConfig"
 
 
-GBMConfigError = InvalidSimulationParams | InvalidBlackScholesConfig
+GBMConfigError = InvalidSimulationParams | GPUMemoryLimitExceeded | InvalidBlackScholesConfig
 
 T = TypeVar("T")
 GBMConfigResult = Result[T, GBMConfigError]

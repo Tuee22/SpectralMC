@@ -8,6 +8,7 @@ Checkpoints are created programmatically for testing purposes.
 from __future__ import annotations
 
 import asyncio
+from typing import TypeVar
 
 import pytest
 import torch
@@ -15,7 +16,7 @@ import torch
 from spectralmc.gbm import build_black_scholes_config, build_simulation_params
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
-from spectralmc.result import Failure, Success
+from spectralmc.result import Failure, Result, Success
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     InferenceClient,
@@ -31,6 +32,18 @@ from spectralmc.storage.errors import (
 from spectralmc.storage.gc import run_gc
 
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
+T = TypeVar("T")
+E = TypeVar("E")
+
+
+def _expect_success(result: Result[T, E]) -> T:
+    """Unwrap Success or raise on Failure. For test readability only."""
+    match result:
+        case Success(value):
+            return value
+        case Failure(error):
+            raise AssertionError(f"Expected Success, got Failure: {error}")
 
 
 def make_test_snapshot(
@@ -49,8 +62,8 @@ def make_test_snapshot(
         skip=0,
         dtype=Precision.float32,
     ):
-        case Failure(err):
-            pytest.fail(f"SimulationParams creation failed: {err}")
+        case Failure(sim_err):
+            pytest.fail(f"SimulationParams creation failed: {sim_err}")
         case Success(sim_params):
             pass
 
@@ -59,8 +72,8 @@ def make_test_snapshot(
         simulate_log_return=True,
         normalize_forwards=True,
     ):
-        case Failure(err):
-            pytest.fail(f"BlackScholesConfig creation failed: {err}")
+        case Failure(bs_err):
+            pytest.fail(f"BlackScholesConfig creation failed: {bs_err}")
         case Success(bs_config):
             pass
 
@@ -92,8 +105,8 @@ async def test_e2e_complete_lifecycle(async_store: AsyncBlockchainModelStore) ->
     model_template = torch.nn.Linear(5, 5)
     config_template = make_test_snapshot(0)
 
-    loaded_snapshot = await load_snapshot_from_checkpoint(
-        async_store, version1, model_template, config_template
+    loaded_snapshot = _expect_success(
+        await load_snapshot_from_checkpoint(async_store, version1, model_template, config_template)
     )
 
     assert loaded_snapshot.global_step == 0
@@ -127,8 +140,8 @@ async def test_e2e_complete_lifecycle(async_store: AsyncBlockchainModelStore) ->
             pytest.fail(f"S3 error during verification: {error}")
 
     # 6. Load final snapshot and verify state
-    final_snapshot = await load_snapshot_from_checkpoint(
-        async_store, version2, model_template, config_template
+    final_snapshot = _expect_success(
+        await load_snapshot_from_checkpoint(async_store, version2, model_template, config_template)
     )
 
     assert final_snapshot.global_step == 100
@@ -306,12 +319,17 @@ async def test_e2e_garbage_collection_workflow(
         await commit_snapshot(async_store, snapshot, f"Version {i}")
 
     # 2. Preview GC (dry run) - keep last 5, protect v3 and v7
-    preview_report = await run_gc(
+    preview_result = await run_gc(
         async_store,
         keep_versions=5,
         protect_tags=[3, 7],
         dry_run=True,
     )
+    match preview_result:
+        case Success(preview_report):
+            pass
+        case Failure(error):
+            pytest.fail(f"GC preview failed: {error.message}")
 
     # Should delete versions 1,2,4,5,6,8,9
     # Protected: 0 (genesis), 3 (tag), 7 (tag), 10-14 (recent 5)
@@ -322,12 +340,17 @@ async def test_e2e_garbage_collection_workflow(
     assert 14 in preview_report.protected_versions  # Recent
 
     # 3. Actually run GC
-    gc_report = await run_gc(
+    gc_result = await run_gc(
         async_store,
         keep_versions=5,
         protect_tags=[3, 7],
         dry_run=False,
     )
+    match gc_result:
+        case Success(gc_report):
+            pass
+        case Failure(error):
+            pytest.fail(f"GC failed: {error.message}")
 
     assert gc_report.dry_run is False
     assert len(gc_report.deleted_versions) > 0
@@ -412,8 +435,8 @@ async def test_e2e_rollback_to_previous_version(
     model_template = torch.nn.Linear(5, 5)
     config_template = make_test_snapshot(0)
 
-    snapshot_at_v1 = await load_snapshot_from_checkpoint(
-        async_store, v1, model_template, config_template
+    snapshot_at_v1 = _expect_success(
+        await load_snapshot_from_checkpoint(async_store, v1, model_template, config_template)
     )
 
     # Modify and commit (this creates v4)
@@ -436,8 +459,8 @@ async def test_e2e_rollback_to_previous_version(
     assert v4.parent_hash == (await async_store.get_version("v0000000003")).content_hash
 
     # Load v4 and verify it has v1's modified state
-    snapshot_v4 = await load_snapshot_from_checkpoint(
-        async_store, v4, model_template, config_template
+    snapshot_v4 = _expect_success(
+        await load_snapshot_from_checkpoint(async_store, v4, model_template, config_template)
     )
     assert snapshot_v4.global_step == 500
 
@@ -494,10 +517,14 @@ async def test_e2e_empty_chain_operations(
     assert head_result.is_failure()
 
     # GC on empty chain
-    report = await run_gc(async_store, keep_versions=10, dry_run=True)
-    assert report.deleted_versions == []
-    assert report.protected_versions == []
-    assert report.bytes_freed == 0
+    result = await run_gc(async_store, keep_versions=10, dry_run=True)
+    match result:
+        case Success(report):
+            assert report.deleted_versions == []
+            assert report.protected_versions == []
+            assert report.bytes_freed == 0
+        case Failure(error):
+            pytest.fail(f"GC on empty chain failed: {error.message}")
 
     # Load from empty chain should fail
     _model_template = torch.nn.Linear(5, 5)
@@ -526,8 +553,8 @@ async def test_e2e_large_model_storage(
         skip=0,
         dtype=Precision.float32,
     ):
-        case Failure(err):
-            pytest.fail(f"SimulationParams creation failed: {err}")
+        case Failure(sim_err):
+            pytest.fail(f"SimulationParams creation failed: {sim_err}")
         case Success(sim_params):
             pass
 
@@ -536,8 +563,8 @@ async def test_e2e_large_model_storage(
         simulate_log_return=True,
         normalize_forwards=True,
     ):
-        case Failure(err):
-            pytest.fail(f"BlackScholesConfig creation failed: {err}")
+        case Failure(bs_err):
+            pytest.fail(f"BlackScholesConfig creation failed: {bs_err}")
         case Success(bs_config):
             pass
 
@@ -559,8 +586,8 @@ async def test_e2e_large_model_storage(
     model_template = torch.nn.Linear(100, 100)
     config_template = make_test_snapshot(0, model_size=(100, 100))
 
-    loaded = await load_snapshot_from_checkpoint(
-        async_store, version, model_template, config_template
+    loaded = _expect_success(
+        await load_snapshot_from_checkpoint(async_store, version, model_template, config_template)
     )
 
     # Verify model parameters match

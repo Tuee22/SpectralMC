@@ -15,6 +15,8 @@ Test matrix
 
 from __future__ import annotations
 
+from typing import TypeVar
+
 import cupy as cp
 import pytest
 import torch
@@ -24,6 +26,8 @@ from spectralmc.async_normals import BufferConfig
 from spectralmc.models.numerical import Precision
 from spectralmc.result import Failure, Result, Success
 from spectralmc.validation import validate_model
+
+E = TypeVar("E")
 
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
@@ -47,21 +51,21 @@ def precision(request: pytest.FixtureRequest) -> Precision:
 
 
 def _collect(
-    gen_result: Result[async_normals.ConcurrentNormGenerator, object],
+    gen_result: Result[async_normals.ConcurrentNormGenerator, E],
     n: int,
 ) -> list[cp.ndarray]:
     """Collect *n* matrices from a generator."""
     match gen_result:
-        case Failure(err):
-            pytest.fail(f"generator unavailable: {err}")
+        case Failure(create_err):
+            pytest.fail(f"generator unavailable: {create_err}")
         case Success(gen):
             matrices: list[cp.ndarray] = []
             for _ in range(n):
                 match gen.get_matrix():
                     case Success(mat):
                         matrices.append(mat)
-                    case Failure(err):
-                        pytest.fail(f"get_matrix failed: {err}")
+                    case Failure(matrix_err):
+                        pytest.fail(f"get_matrix failed: {matrix_err}")
             return matrices
 
 
@@ -78,12 +82,12 @@ def test_private_norm_generator(precision: Precision) -> None:
         case Success(gen):
             enqueue_result = gen.enqueue(123)
             match enqueue_result:
-                case Failure(err):
-                    pytest.fail(f"enqueue failed: {err}")
+                case Failure(enqueue_err):
+                    pytest.fail(f"enqueue failed: {enqueue_err}")
             first_result = gen.get_matrix(456)
             second_result = gen.get_matrix(789)
-        case Failure(err):
-            pytest.fail(f"generator creation failed: {err}")
+        case Failure(create_err):
+            pytest.fail(f"generator creation failed: {create_err}")
 
     assert isinstance(first_result, Success) and isinstance(second_result, Success)
     first = first_result.unwrap()
@@ -98,8 +102,8 @@ def test_private_norm_generator(precision: Precision) -> None:
     match third_result:
         case Success(_):
             pass
-        case Failure(err):
-            pytest.fail(f"third get_matrix failed: {err}")
+        case Failure(matrix_err):
+            pytest.fail(f"third get_matrix failed: {matrix_err}")
     after = gen.get_time_spent_synchronizing()
     assert after >= before
 
@@ -211,7 +215,7 @@ def test_norm_config_validation() -> None:
         rows=1,
         cols=2,
         seed=1,
-        dtype="float16",  # type: ignore[arg-type] - deliberate invalid input
+        dtype="float16",  # deliberate invalid input to test validation
         skips=0,
     )
     match bad_dtype:

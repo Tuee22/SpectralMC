@@ -7,6 +7,11 @@ from typing import Literal, TypeVar
 
 from pydantic import ValidationError
 
+from spectralmc.errors.gbm import (
+    GPUMemoryLimitExceeded,
+    InvalidBlackScholesConfig,
+    InvalidSimulationParams,
+)
 from spectralmc.result import Result
 
 
@@ -74,6 +79,7 @@ class TensorProtoMismatch:
     kind: Literal["TensorProtoMismatch"] = "TensorProtoMismatch"
 
 
+# Define SerializationError unconditionally - no TYPE_CHECKING guard
 SerializationError = (
     UnsupportedPrecision
     | UnknownThreadsPerBlock
@@ -83,6 +89,9 @@ SerializationError = (
     | InvalidTensorState
     | TensorProtoMismatch
     | ValidationFailed
+    | InvalidSimulationParams
+    | GPUMemoryLimitExceeded
+    | InvalidBlackScholesConfig
 )
 
 T = TypeVar("T")

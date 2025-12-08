@@ -63,11 +63,12 @@ import torch  # noqa: E402
 from spectralmc.errors.torch_facade import (  # noqa: E402
     InvalidAdamState,
     TensorStateConversionFailed,
+    TorchFacadeError,
     TorchFacadeResult,
     UnsupportedTorchDevice,
     UnsupportedTorchDType,
 )
-from spectralmc.result import Failure, Success  # noqa: E402
+from spectralmc.result import Failure, Result, Success  # noqa: E402
 from spectralmc.models.numerical import Precision  # noqa: E402
 
 
@@ -542,14 +543,22 @@ class AdamOptimizerState(BaseModel):
         if not isinstance(groups_raw, Iterable):
             return Failure(InvalidAdamState(message="'param_groups' entry must be a sequence."))
 
-        param_states: dict[int, AdamParamState] = {}
-        for pid, st in state_raw.items():
-            state_result = AdamParamState.from_torch(st)
-            match state_result:
-                case Failure(error):
-                    return Failure(error)
-                case Success(param_state):
-                    param_states[pid] = param_state
+        # Pure: convert all param states, collecting Results
+        param_state_results: list[tuple[int, Result[AdamParamState, TorchFacadeError]]] = [
+            (pid, AdamParamState.from_torch(st)) for pid, st in state_raw.items()
+        ]
+
+        # Check for first failure
+        first_failure = next(
+            (result for _, result in param_state_results if isinstance(result, Failure)), None
+        )
+        if first_failure is not None:
+            return first_failure
+
+        # All conversions succeeded - build dict
+        param_states = {
+            pid: result.value for pid, result in param_state_results if isinstance(result, Success)
+        }
 
         param_groups: list[AdamParamGroup] = [AdamParamGroup.from_torch(pg) for pg in groups_raw]
 
@@ -557,13 +566,24 @@ class AdamOptimizerState(BaseModel):
 
     # ------------------------------------------------------------------ #
     def to_torch(self) -> TorchFacadeResult[Mapping[str, object]]:
-        serialized_states: dict[int, dict[str, object]] = {}
-        for pid, param_state in self.param_states.items():
-            match param_state.to_torch():
-                case Failure(error):
-                    return Failure(error)
-                case Success(state_dict):
-                    serialized_states[pid] = state_dict
+        # Pure: convert all param states to torch dicts, collecting Results
+        serialized_state_results: list[tuple[int, TorchFacadeResult[dict[str, object]]]] = [
+            (pid, param_state.to_torch()) for pid, param_state in self.param_states.items()
+        ]
+
+        # Check for first failure
+        first_failure = next(
+            (result for _, result in serialized_state_results if isinstance(result, Failure)), None
+        )
+        if first_failure is not None:
+            return first_failure
+
+        # All conversions succeeded - build dict
+        serialized_states = {
+            pid: result.value
+            for pid, result in serialized_state_results
+            if isinstance(result, Success)
+        }
 
         return Success(
             {

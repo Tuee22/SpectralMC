@@ -39,6 +39,13 @@ from typing import TypeAlias, Union
 import cupy as cp
 import numpy as np
 
+from spectralmc.result import Result, Success, Failure
+from spectralmc.errors.numerical import (
+    UnsupportedNumPyDType,
+    UnsupportedCuPyDType,
+    InvalidComplexConversion,
+)
+
 
 __all__ = ["Precision"]
 
@@ -134,12 +141,12 @@ class Precision(str, Enum):
         return _PRECISION_STR_TO_NP[self.value]
 
     @classmethod
-    def from_numpy(cls, dtype: _NPDTypeLike) -> Precision:
+    def from_numpy(cls, dtype: _NPDTypeLike) -> Result[Precision, UnsupportedNumPyDType]:
         """Map a NumPy *dtype* or scalar class back to :class:`Precision`."""
-        try:
-            return cls(_NP_TO_PRECISION_STR[dtype])
-        except KeyError as exc:  # pragma: no cover
-            raise ValueError(f"Unsupported NumPy dtype: {dtype!r}") from exc
+        precision_str = _NP_TO_PRECISION_STR.get(dtype)
+        if precision_str is None:
+            return Failure(UnsupportedNumPyDType(dtype_repr=repr(dtype)))
+        return Success(cls(precision_str))
 
     # ------------------------------------------------------------------ #
     # CuPy helpers
@@ -149,21 +156,27 @@ class Precision(str, Enum):
         return _PRECISION_STR_TO_CP[self.value]
 
     @classmethod
-    def from_cupy(cls, dtype: _CPDTypeLike) -> Precision:
+    def from_cupy(cls, dtype: _CPDTypeLike) -> Result[Precision, UnsupportedCuPyDType]:
         """Map a CuPy *dtype* or scalar class back to :class:`Precision`."""
-        try:
-            return cls(_CP_TO_PRECISION_STR[dtype])
-        except KeyError as exc:  # pragma: no cover
-            raise ValueError(f"Unsupported CuPy dtype: {dtype!r}") from exc
+        precision_str = _CP_TO_PRECISION_STR.get(dtype)
+        if precision_str is None:
+            return Failure(UnsupportedCuPyDType(dtype_repr=repr(dtype)))
+        return Success(cls(precision_str))
 
     # ------------------------------------------------------------------ #
     # Complex helpers (pure, branch-free)
     # ------------------------------------------------------------------ #
-    def to_complex(self) -> Precision:
+    def to_complex(self) -> Result[Precision, InvalidComplexConversion]:
         """Return the complex counterpart (idempotent for complex inputs)."""
-        return Precision(_PRECISION_TO_COMPLEX_STR[self.value])
+        complex_str = _PRECISION_TO_COMPLEX_STR.get(self.value)
+        if complex_str is None:
+            return Failure(InvalidComplexConversion(precision=self.value))
+        return Success(Precision(complex_str))
 
     @classmethod
-    def from_complex(cls, prec: Precision) -> Precision:
+    def from_complex(cls, prec: Precision) -> Result[Precision, InvalidComplexConversion]:
         """Return the *real* precision behind a complex format (idempotent)."""
-        return cls(_COMPLEX_TO_FLOAT_STR[prec.value])
+        float_str = _COMPLEX_TO_FLOAT_STR.get(prec.value)
+        if float_str is None:
+            return Failure(InvalidComplexConversion(precision=prec.value))
+        return Success(cls(float_str))

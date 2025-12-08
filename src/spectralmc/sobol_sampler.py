@@ -39,12 +39,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from scipy.stats.qmc import Sobol
 
 from spectralmc.errors.sampler import (
+    BoundSpecInvalid,
     DimensionMismatch,
     InvalidBounds,
     NegativeSamples,
     SamplerValidationFailed,
 )
-from spectralmc.result import Failure, Result, Success
+from spectralmc.result import Failure, Result, Success, collect_results
 from spectralmc.validation import validate_model
 
 
@@ -99,16 +100,39 @@ class BoundSpec(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # ------------------------------------------------------------------ #
-    # Validators                                                         #
-    # ------------------------------------------------------------------ #
-
     @model_validator(mode="after")
-    def _validate(self) -> BoundSpec:
+    def _validate(self) -> "BoundSpec":
         """Ensure the lower bound is strictly less than the upper bound."""
         if self.lower >= self.upper:
             raise ValueError("`lower` must be strictly less than `upper`.")
         return self
+
+
+def build_bound_spec(lower: float, upper: float) -> Result[BoundSpec, BoundSpecInvalid]:
+    """
+    Create BoundSpec with validated bounds.
+
+    Ensures lower bound is strictly less than upper bound.
+
+    Args:
+        lower: Inclusive lower bound
+        upper: Inclusive upper bound
+
+    Returns:
+        Success(BoundSpec) if lower < upper, else Failure(BoundSpecInvalid)
+
+    Example:
+        >>> match build_bound_spec(0.0, 1.0):
+        ...     case Success(bounds):
+        ...         print(f"Valid: [{bounds.lower}, {bounds.upper}]")
+        ...     case Failure(error):
+        ...         print(f"Invalid bounds: {error}")
+    """
+    return (
+        Failure(BoundSpecInvalid(lower=lower, upper=upper))
+        if lower >= upper
+        else Success(BoundSpec(lower=lower, upper=upper))
+    )
 
 
 class SobolSampler(Generic[PointT]):
@@ -194,11 +218,9 @@ class SobolSampler(Generic[PointT]):
         raw: NDArray[np.float64] = self._sampler.random(n_samples)
         scaled: NDArray[np.float64] = self._lower + (self._upper - self._lower) * raw
 
-        results: list[PointT] = []
-        for row in scaled:
-            match self._construct(row):
-                case Success(model):
-                    results.append(model)
-                case Failure(error):
-                    return Failure(error)
-        return Success(results)
+        point_results = [self._construct(row) for row in scaled]
+        match collect_results(point_results):
+            case Failure(error):
+                return Failure(error)
+            case Success(points):
+                return Success(points)

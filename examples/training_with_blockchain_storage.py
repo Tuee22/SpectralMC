@@ -26,7 +26,7 @@ from spectralmc.gbm_trainer import (
 )
 from spectralmc.models.numerical import Precision
 from spectralmc.result import Success, Failure
-from spectralmc.sobol_sampler import BoundSpec
+from spectralmc.sobol_sampler import BoundSpec, build_bound_spec
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     InferenceClient,
@@ -86,12 +86,12 @@ def create_training_config() -> GbmCVNNPricerConfig:
 
     # Domain bounds for option parameters
     domain_bounds = {
-        "X0": BoundSpec(lower=80.0, upper=120.0),
-        "K": BoundSpec(lower=80.0, upper=120.0),
-        "T": BoundSpec(lower=0.1, upper=2.0),
-        "v": BoundSpec(lower=0.1, upper=0.5),
-        "r": BoundSpec(lower=0.0, upper=0.1),
-        "d": BoundSpec(lower=0.0, upper=0.05),
+        "X0": build_bound_spec(80.0, 120.0).unwrap(),
+        "K": build_bound_spec(80.0, 120.0).unwrap(),
+        "T": build_bound_spec(0.1, 2.0).unwrap(),
+        "v": build_bound_spec(0.1, 0.5).unwrap(),
+        "r": build_bound_spec(0.0, 0.1).unwrap(),
+        "d": build_bound_spec(0.0, 0.05).unwrap(),
     }
 
     # Get RNG state for reproducibility

@@ -35,7 +35,7 @@ from typing import Annotated, Literal, TypeAlias
 import cupy as cp
 from numba import cuda
 from numba.cuda.cudadrv.devicearray import DeviceNDArray
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from spectralmc.async_normals import (
     BufferConfig,
@@ -50,6 +50,7 @@ from spectralmc.effects import (
     sequence_effects,
 )
 from spectralmc.errors.gbm import (
+    GPUMemoryLimitExceeded,
     InvalidBlackScholesConfig,
     InvalidSimulationParams,
     NormalsGenerationFailed,
@@ -85,27 +86,6 @@ class SimulationParams(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    @model_validator(mode="after")
-    def validate_gpu_memory(self) -> SimulationParams:
-        """
-        Validate that GPU memory requirements are reasonable.
-
-        The total memory footprint is roughly:
-        network_size * batches_per_mc_run * timesteps * sizeof(dtype)
-
-        This is a soft limit to catch configuration errors early.
-        """
-        total_paths = self.network_size * self.batches_per_mc_run
-        # Rough estimate: 1 billion paths for float32, 500M for float64
-        max_paths = 1_000_000_000 if self.dtype.value == "float32" else 500_000_000
-        if total_paths > max_paths:
-            raise ValueError(
-                f"GPU memory limit exceeded: "
-                f"{total_paths:,} paths > {max_paths:,} (network_size={self.network_size}, "
-                f"batches_per_mc_run={self.batches_per_mc_run})"
-            )
-        return self
-
     # ..................................... convenience ......................
     # @property
     # def cp_dtype(self) -> cp.dtype:
@@ -119,6 +99,40 @@ class SimulationParams(BaseModel):
     def total_blocks(self) -> int:
         """CUDA grid size for the Numba kernel."""
         return (self.total_paths() + self.threads_per_block - 1) // self.threads_per_block
+
+
+def validate_simulation_params_memory(
+    params: SimulationParams,
+) -> Result[SimulationParams, GPUMemoryLimitExceeded]:
+    """
+    Validate GPU memory requirements for simulation parameters.
+
+    The total memory footprint is roughly:
+    network_size * batches_per_mc_run * timesteps * sizeof(dtype)
+
+    This is a soft limit to catch configuration errors early.
+
+    Args:
+        params: Parameters to validate
+
+    Returns:
+        Success(params) if memory within limits, else Failure(GPUMemoryLimitExceeded)
+    """
+    total_paths = params.network_size * params.batches_per_mc_run
+    max_paths = 1_000_000_000 if params.dtype.value == "float32" else 500_000_000
+
+    return (
+        Failure(
+            GPUMemoryLimitExceeded(
+                total_paths=total_paths,
+                max_paths=max_paths,
+                network_size=params.network_size,
+                batches_per_mc_run=params.batches_per_mc_run,
+            )
+        )
+        if total_paths > max_paths
+        else Success(params)
+    )
 
 
 # ────────────────────────────── engine configuration ────────────────────────
@@ -156,7 +170,7 @@ def build_simulation_params(
     buffer_size: int,
     dtype: Precision,
     skip: int = 0,
-) -> Result[SimulationParams, InvalidSimulationParams]:
+) -> Result[SimulationParams, InvalidSimulationParams | GPUMemoryLimitExceeded]:
     """Create SimulationParams via pure validation."""
     params_result = validate_model(
         SimulationParams,
@@ -173,7 +187,13 @@ def build_simulation_params(
         case Failure(error):
             return Failure(InvalidSimulationParams(error=error))
         case Success(params):
-            return Success(params)
+            # Chain additional validation after Pydantic checks pass
+            memory_result = validate_simulation_params_memory(params)
+            match memory_result:
+                case Failure(gpu_error):
+                    return Failure(gpu_error)
+                case Success(validated_params):
+                    return Success(validated_params)
 
 
 def build_black_scholes_config(
@@ -373,15 +393,15 @@ class BlackScholes:
     # ....................................... internals ......................
     def _simulate(self, inputs: Inputs) -> Result[SimResults, NormalsError]:
         match self._ngen_result:
-            case Failure(error):
-                return Failure(NormalsUnavailable(error=error))
+            case Failure(ngen_error):
+                return Failure(NormalsUnavailable(error=ngen_error))
             case Success(gen):
                 sims_result = gen.get_matrix()
                 match sims_result:
                     case Success(sims):
                         pass
-                    case Failure(error):
-                        return Failure(NormalsGenerationFailed(error=error))
+                    case Failure(matrix_error):
+                        return Failure(NormalsGenerationFailed(error=matrix_error))
         dt = inputs.T / self._sp.timesteps
 
         SimulateBlackScholes[

@@ -2,17 +2,22 @@
 """
 Protobuf schema definitions for SpectralMC model versioning.
 
-Generated Protocol Buffer modules for blockchain model storage.
+Generated Protocol Buffer modules are built into /opt/spectralmc_proto/
+during Docker image build and exposed via .pth file mechanism.
+
+This module provides backward-compatible imports by delegating to
+/opt/spectralmc_proto/. Direct imports from spectralmc_proto are preferred.
 """
 
 from __future__ import annotations
 
-# Re-export generated protobuf modules
-from . import common_pb2
-from . import tensors_pb2
-from . import simulation_pb2
-from . import training_pb2
-from . import models_pb2
+# Import from /opt/spectralmc_proto/ (available via spectralmc-proto.pth)
+# These imports maintain backward compatibility for existing code
+from spectralmc_proto import common_pb2
+from spectralmc_proto import tensors_pb2
+from spectralmc_proto import simulation_pb2
+from spectralmc_proto import training_pb2
+from spectralmc_proto import models_pb2
 
 __all__ = [
     "common_pb2",

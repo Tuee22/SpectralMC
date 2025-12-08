@@ -16,11 +16,20 @@ from __future__ import annotations
 
 from collections.abc import Hashable, Mapping
 from enum import Enum
-from typing import NoReturn, Union
+from typing import Union
 
 import torch
 
 # CRITICAL: Import facade BEFORE torch for deterministic algorithms
+from spectralmc.errors.torch_facade import (
+    CudaUnavailable,
+    EmptyTensorTree,
+    HeterogeneousTensorTree,
+    NoOpTransfer,
+    TorchFacadeError,
+    UnsupportedTorchDevice,
+    UnsupportedTorchDType,
+)
 from spectralmc.models.torch import (
     _TORCH_DTYPE_TO_STR,
     AnyDType,
@@ -28,6 +37,7 @@ from spectralmc.models.torch import (
     FullPrecisionDType,
     ReducedPrecisionDType,
 )
+from spectralmc.result import Failure, Result, Success
 
 
 __all__ = [
@@ -88,21 +98,16 @@ _CUDA_STREAM: torch.cuda.Stream | None = (
 
 
 # ───────────────────────── functional helpers ───────────────────────────────
-def _raise(exc: Exception) -> NoReturn:  # expression-level raise
-    raise exc
-
-
 def _copy_tensor(
     src: torch.Tensor,
     *,
     dest: TransferDestination,
-) -> torch.Tensor:
+) -> Result[torch.Tensor, TorchFacadeError]:
     """Clone *src* to *dest* (non-blocking, global stream)."""
     target_dev = dest.to_torch_device()
 
-    src.device == target_dev and _raise(
-        ValueError("Attempted to move a tensor to its current device.")
-    )
+    if src.device == target_dev:
+        return Failure(NoOpTransfer(device=str(src.device)))
 
     dims = tuple(src.shape)
 
@@ -117,36 +122,64 @@ def _copy_tensor(
             )
             with torch.cuda.stream(_CUDA_STREAM):
                 dst.copy_(src.detach(), non_blocking=True)
-            return dst
+            return Success(dst)
 
         case "cuda":
             assert _CUDA_STREAM
             dst = torch.empty(*dims, dtype=src.dtype, device=target_dev)
             with torch.cuda.stream(_CUDA_STREAM):
                 dst.copy_(src.detach(), non_blocking=True)
-            return dst
+            return Success(dst)
 
         case _:
-            _raise(RuntimeError(f"Unsupported destination device: {target_dev!r}"))
+            return Failure(UnsupportedTorchDevice(device=str(target_dev)))
 
 
 def _move(
     obj: TensorTree,
     *,
     dest: TransferDestination,
-) -> TensorTree:
+) -> Result[TensorTree, TorchFacadeError]:
     """Pure-functional recursion via pattern matching."""
     match obj:
         case torch.Tensor():
-            return _copy_tensor(obj, dest=dest)
+            # torch.Tensor is a TensorTree - pattern match to widen type for mypy
+            match _copy_tensor(obj, dest=dest):
+                case Success(tensor):
+                    return Success(tensor)  # Type widened: torch.Tensor -> TensorTree
+                case Failure(error):
+                    return Failure(error)
         case list() as seq:
-            return [_move(v, dest=dest) for v in seq]
+            # Recursively move all elements, collecting Results
+            moved_results = [_move(v, dest=dest) for v in seq]
+            # Check for first failure
+            first_failure = next((r for r in moved_results if isinstance(r, Failure)), None)
+            if first_failure is not None:
+                return first_failure
+            # All succeeded - extract values
+            return Success([r.value for r in moved_results if isinstance(r, Success)])
         case tuple() as seq:
-            return tuple(_move(v, dest=dest) for v in seq)
+            # Recursively move all elements, collecting Results
+            moved_results = [_move(v, dest=dest) for v in seq]
+            # Check for first failure
+            first_failure = next((r for r in moved_results if isinstance(r, Failure)), None)
+            if first_failure is not None:
+                return first_failure
+            # All succeeded - extract values as tuple
+            return Success(tuple(r.value for r in moved_results if isinstance(r, Success)))
         case Mapping() as mp:
-            return {k: _move(v, dest=dest) for k, v in mp.items()}
+            # Recursively move all values, collecting Results
+            moved_items: list[tuple[Hashable, Result[TensorTree, TorchFacadeError]]] = [
+                (k, _move(v, dest=dest)) for k, v in mp.items()
+            ]
+            # Check for first failure
+            first_failure = next((r for _, r in moved_items if isinstance(r, Failure)), None)
+            if first_failure is not None:
+                return first_failure
+            # All succeeded - build dict
+            return Success({k: r.value for k, r in moved_items if isinstance(r, Success)})
         case _:
-            return obj  # scalar leaf
+            return Success(obj)  # scalar leaf
 
 
 # ───────────────────────────── public API ───────────────────────────────────
@@ -154,13 +187,12 @@ def move_tensor_tree(
     tree: TensorTree,
     *,
     dest: TransferDestination,
-) -> TensorTree:
+) -> Result[TensorTree, TorchFacadeError]:
     """Copy *tree* so every tensor lives on *dest* (CPU, CPU_PINNED, or CUDA)."""
     tgt = dest.to_torch_device()
 
-    (tgt.type == "cuda" and not torch.cuda.is_available()) and _raise(
-        RuntimeError("CUDA destination requested but CUDA is unavailable.")
-    )
+    if tgt.type == "cuda" and not torch.cuda.is_available():
+        return Failure(CudaUnavailable())
 
     result = _move(tree, dest=dest)
     (None if _CUDA_STREAM is None else _CUDA_STREAM.synchronize())
@@ -168,7 +200,7 @@ def move_tensor_tree(
 
 
 # ───────────────────────── tree inspection util ────────────────────────────
-def get_tree_device_dtype(tree: TensorTree) -> tuple[Device, AnyDType]:
+def get_tree_device_dtype(tree: TensorTree) -> Result[tuple[Device, AnyDType], TorchFacadeError]:
     """Return the unique ``(Device, AnyDType)`` shared by *all* tensors in *tree*."""
 
     def _pairs(node: TensorTree) -> set[tuple[torch.device, torch.dtype]]:
@@ -183,13 +215,15 @@ def get_tree_device_dtype(tree: TensorTree) -> tuple[Device, AnyDType]:
                 return set()
 
     pairs = _pairs(tree)
-    not pairs and _raise(RuntimeError("TensorTree contains no tensors."))
-    len(pairs) != 1 and _raise(RuntimeError("TensorTree contains heterogeneous tensors."))
+    if not pairs:
+        return Failure(EmptyTensorTree())
+    if len(pairs) != 1:
+        return Failure(HeterogeneousTensorTree())
 
     dev, dt = next(iter(pairs))
 
     if dt not in _TORCH_DTYPE_TO_STR:
-        _raise(ValueError(f"Unsupported torch.dtype {dt!r}"))
+        return Failure(UnsupportedTorchDType(dtype=str(dt)))
     dtype_str = _TORCH_DTYPE_TO_STR[dt]
 
     dtype: AnyDType
@@ -198,20 +232,24 @@ def get_tree_device_dtype(tree: TensorTree) -> tuple[Device, AnyDType]:
     else:
         dtype = ReducedPrecisionDType(dtype_str)
 
-    return Device.from_torch(dev), dtype
+    match Device.from_torch(dev):
+        case Success(device):
+            return Success((device, dtype))
+        case Failure(error):
+            return Failure(error)
 
 
 # ───────────────────── state-dict helpers (strictly typed) ──────────────────
 def module_state_device_dtype(
     state: Mapping[str, torch.Tensor],
-) -> tuple[Device, AnyDType]:
+) -> Result[tuple[Device, AnyDType], TorchFacadeError]:
     """Device/dtype for a *model* ``state_dict``."""
     return get_tree_device_dtype(tuple(state.values()))
 
 
 def optimizer_state_device_dtype(
     state: Mapping[str, object],  # <-- keys are *str* now
-) -> tuple[Device, AnyDType]:
+) -> Result[tuple[Device, AnyDType], TorchFacadeError]:
     """Device/dtype for an *optimizer* ``state_dict`` (Adam, etc.)."""
 
     def _tensors(node: object) -> list[torch.Tensor]:
@@ -226,5 +264,6 @@ def optimizer_state_device_dtype(
                 return []
 
     ts = _tensors(state)
-    not ts and _raise(RuntimeError("state_dict() contains no tensors."))
+    if not ts:
+        return Failure(EmptyTensorTree())
     return get_tree_device_dtype(tuple(ts))

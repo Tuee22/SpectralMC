@@ -35,8 +35,9 @@ Implementation notes
 * The trainer *always* stores the optimiser snapshot on **CPU**.  During
   a restart we immediately migrate the state back to the training
   device.
-* Strict typing is enforced with **mypy --strict**; no `Any`, `cast` or
-  `type: ignore` are required.
+* Strict typing is enforced with **mypy --strict**; no `Any` or `cast` are used.
+  Uses minimal `type: ignore` for known mypy limitations with generic type
+  inference in lambdas.
 """
 
 from __future__ import annotations
@@ -46,9 +47,17 @@ import math
 import time
 import warnings
 from dataclasses import dataclass
-from functools import reduce
 from itertools import chain
-from typing import Callable, Iterable, Literal, Protocol, Sequence, TypeVar, runtime_checkable
+from typing import (
+    Callable,
+    Iterable,
+    Literal,
+    Protocol,
+    Sequence,
+    TypeGuard,
+    TypeVar,
+    runtime_checkable,
+)
 
 import cupy as cp
 import numpy as np
@@ -74,6 +83,7 @@ from spectralmc.effects import (
     ComputeFFT,
     ComputeLoss,
     DLPackTransfer,
+    dlpack_transfer,
     EffectSequence,
     ForwardPass,
     GenerateNormals,
@@ -102,7 +112,7 @@ from spectralmc.errors.trainer import (
 from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
 from spectralmc.models.cpu_gpu_transfer import module_state_device_dtype
 from spectralmc.models.numerical import Precision
-from spectralmc.result import Failure, Result, Success, collect_results
+from spectralmc.result import Failure, Result, Success, collect_results, fold_results
 from spectralmc.serialization import compute_sha256
 from spectralmc.serialization.tensors import ModelCheckpointConverter
 from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler
@@ -129,12 +139,19 @@ def _expect_serialization(result: SerializationResult[S]) -> S:
 
 
 def _consume_log_task_exception(task: asyncio.Task[object]) -> None:
-    """Silence unexpected logging task exceptions."""
+    """Consume logging task exceptions with specific handling.
+
+    Handles expected exceptions from optional TensorBoard logging.
+    Logging failures are intentionally non-fatal and should not crash training.
+    """
     try:
         task.exception()
     except asyncio.CancelledError:
+        # Expected during shutdown
         return
-    except Exception:
+    except (ImportError, RuntimeError, IOError, OSError):
+        # Expected exceptions from TensorBoard operations
+        # Silently consume - logging is optional and should not crash training
         return
 
 
@@ -147,6 +164,39 @@ __all__: tuple[str, ...] = (
     "GbmCVNNPricer",
     "TrainingConfig",
 )
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+# Allowed Effect types for filtering in effect sequence building
+_ALLOWED_EFFECT_TYPES: tuple[type[Effect], ...] = (
+    GenerateNormals,
+    SimulatePaths,
+    ComputeFFT,
+    DLPackTransfer,
+    StreamSync,
+    ForwardPass,
+    BackwardPass,
+    OptimizerStep,
+    ComputeLoss,
+    LogMetrics,
+    UpdateMetadata,
+    ReadMetadata,
+    CaptureRNGState,
+    WriteObject,
+    CommitVersion,
+)
+
+
+def _is_allowed_effect(e: object) -> TypeGuard[Effect]:
+    """Type guard for allowed Effect types.
+
+    Enables mypy type narrowing in list comprehensions where isinstance()
+    alone doesn't narrow the type correctly.
+    """
+    return isinstance(e, _ALLOWED_EFFECT_TYPES)
+
 
 # =============================================================================
 # Protocols & helpers
@@ -206,6 +256,26 @@ class GbmCVNNPricerConfig(BaseModel):
     torch_cuda_rng_states: list[bytes] | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra="forbid")
+
+
+@dataclass(frozen=True)
+class _BatchState:
+    """Immutable state for training batch processing."""
+
+    sobol_skip: int
+    global_step: int
+    loss: float
+    grad_norm: float
+
+    @staticmethod
+    def initial(sobol_skip: int, global_step: int) -> _BatchState:
+        """Create initial batch state."""
+        return _BatchState(
+            sobol_skip=sobol_skip,
+            global_step=global_step,
+            loss=0.0,
+            grad_norm=0.0,
+        )
 
 
 class StepMetrics(BaseModel):
@@ -319,19 +389,10 @@ class TensorBoardLogger:
         w.add_scalar("BatchTime", metrics.batch_time, step)
 
         if step % self._hist_every == 0:
-            _ = tuple(
-                map(
-                    lambda item: (
-                        w.add_histogram(item[0], item[1], step),
-                        (
-                            w.add_histogram(f"{item[0]}.grad", item[1].grad, step)
-                            if item[1].grad is not None
-                            else None
-                        ),
-                    ),
-                    metrics.model.named_parameters(),
-                )
-            )
+            for name, param in metrics.model.named_parameters():
+                w.add_histogram(name, param, step)
+                if param.grad is not None:
+                    w.add_histogram(f"{name}.grad", param.grad, step)
 
         if step % self._flush_every == 0:
             w.flush()
@@ -365,7 +426,13 @@ class GbmCVNNPricer:
 
         self._device: Device
         dtype_any: AnyDType
-        self._device, dtype_any = module_state_device_dtype(self._cvnn.state_dict())
+        device_dtype_result = module_state_device_dtype(self._cvnn.state_dict())
+        match device_dtype_result:
+            case Failure(dtype_err):
+                raise RuntimeError(f"Failed to get device/dtype from CVNN: {dtype_err}")
+            case Success((device, dtype)):
+                self._device = device
+                dtype_any = dtype
 
         # GBM simulation requires full precision (not float16/bfloat16)
         assert isinstance(dtype_any, FullPrecisionDType), (
@@ -378,7 +445,7 @@ class GbmCVNNPricer:
         ), f"Error: gbm sim dtype {cfg.cfg.sim_params.dtype} does not match cvnn dtype {self._dtype}"
 
         # Complex dtypes & streams -------------------------------------- #
-        self._complex_dtype: Precision = self._dtype.to_precision().to_complex()
+        self._complex_dtype: Precision = self._dtype.to_precision().to_complex().unwrap()
         self._torch_cdtype: torch.dtype = DType.from_precision(self._complex_dtype).to_torch()
         self._cupy_cdtype: cp.dtype = self._complex_dtype.to_cupy()
 
@@ -410,7 +477,12 @@ class GbmCVNNPricer:
             torch.set_rng_state(
                 torch.from_numpy(np.frombuffer(cfg.torch_cpu_rng_state, dtype=np.uint8).copy())
             )
-        if cfg.torch_cuda_rng_states is not None and torch.cuda.is_available():
+        if cfg.torch_cuda_rng_states is not None:
+            if not torch.cuda.is_available():
+                raise RuntimeError(
+                    "Cannot restore CUDA RNG state: CUDA is not available. "
+                    "Checkpoint contains CUDA RNG state but current environment has no GPU."
+                )
             torch.cuda.set_rng_state_all(
                 list(
                     map(
@@ -616,8 +688,8 @@ class GbmCVNNPricer:
             case Success(mc_snapshot):
                 pass
         match self._context.mc_engine._ngen_result:
-            case Failure(error):
-                return Failure(NormalsUnavailable(error=error))
+            case Failure(ngen_err):
+                return Failure(NormalsUnavailable(error=ngen_err))
             case Success(ngen):
                 ngen_snapshot = ngen.snapshot()
 
@@ -661,12 +733,13 @@ class GbmCVNNPricer:
                     output_tensor_id=f"fft_{batch_idx}",
                 ),
                 # Phase 4: Transfer FFT result from CuPy to PyTorch via DLPack
-                DLPackTransfer(
+                # Note: Frameworks are always different ("cupy" -> "torch"), so .unwrap() is safe
+                dlpack_transfer(
                     source_tensor_id=f"fft_{batch_idx}",
                     source_framework="cupy",
                     target_framework="torch",
                     output_tensor_id=f"targets_{batch_idx}",
-                ),
+                ).unwrap(),
                 StreamSync(stream_type="torch"),
                 # Phase 5: Training step (forward/backward/optimizer)
                 ForwardPass(
@@ -750,7 +823,7 @@ class GbmCVNNPricer:
             >>> # Pure description of entire training - no side effects yet
             >>> result = await interpreter.interpret_sequence(effects)
         """
-        checkpoint_builder = (
+        checkpoint_builder: Callable[[int], list[Effect]] = (
             (lambda epoch: [])
             if checkpoint_bucket is None or checkpoint_interval is None
             else lambda epoch: (
@@ -770,9 +843,16 @@ class GbmCVNNPricer:
             )
         )
 
-        epoch_effects_results = [
+        # Pure: build list of Results via comprehension instead of imperative loop
+        epoch_effects_results: list[Result[list[object], NormalsUnavailable]] = [
             self.build_epoch_effects(config).map(
-                lambda effects: [*effects.effects, *checkpoint_builder(epoch)]
+                lambda effects_seq: [
+                    # mypy limitation: Cannot infer .effects attribute on generic lambda parameter
+                    # effects_seq is EffectSequence[list[object]] but mypy sees it as generic T
+                    # See: https://github.com/python/mypy/issues/5485
+                    *effects_seq.effects,  # type: ignore[attr-defined]
+                    *checkpoint_builder(epoch),
+                ]
             )
             for epoch in range(num_epochs)
         ]
@@ -783,31 +863,9 @@ class GbmCVNNPricer:
             case Success(epoch_effects_lists):
                 all_effects: list[object] = list(chain.from_iterable(epoch_effects_lists))
 
-        typed_effects: list[Effect] = list(
-            filter(
-                lambda e: isinstance(
-                    e,
-                    (
-                        GenerateNormals,
-                        SimulatePaths,
-                        ComputeFFT,
-                        DLPackTransfer,
-                        StreamSync,
-                        ForwardPass,
-                        BackwardPass,
-                        OptimizerStep,
-                        ComputeLoss,
-                        LogMetrics,
-                        UpdateMetadata,
-                        ReadMetadata,
-                        CaptureRNGState,
-                        WriteObject,
-                        CommitVersion,
-                    ),
-                ),
-                all_effects,
-            )
-        )
+        # Pure: filter effects using comprehension instead of imperative loop
+        # TypeGuard enables mypy type narrowing in list comprehension
+        typed_effects: list[Effect] = [e for e in all_effects if _is_allowed_effect(e)]
 
         return Success(sequence_effects(*typed_effects))
 
@@ -821,15 +879,18 @@ class GbmCVNNPricer:
         optimizer_state = snapshot.optimizer_state or AdamOptimizerState(
             param_states={}, param_groups=[]
         )
-        checkpoint_proto = _expect_serialization(
-            ModelCheckpointConverter.to_proto(
-                model_state_dict=snapshot.cvnn.state_dict(),
-                optimizer_state=optimizer_state,
-                torch_cpu_rng_state=snapshot.torch_cpu_rng_state or b"",
-                torch_cuda_rng_states=snapshot.torch_cuda_rng_states or [],
-                global_step=snapshot.global_step,
-            )
+        checkpoint_result = ModelCheckpointConverter.to_proto(
+            model_state_dict=snapshot.cvnn.state_dict(),
+            optimizer_state=optimizer_state,
+            torch_cpu_rng_state=snapshot.torch_cpu_rng_state or b"",
+            torch_cuda_rng_states=snapshot.torch_cuda_rng_states or [],
+            global_step=snapshot.global_step,
         )
+        match checkpoint_result:
+            case Failure(ser_err):
+                raise RuntimeError(f"Serialization failure: {ser_err}")
+            case Success(checkpoint_proto):
+                pass
         checkpoint_bytes = checkpoint_proto.SerializeToString()
         return checkpoint_bytes, compute_sha256(checkpoint_bytes)
 
@@ -840,7 +901,7 @@ class GbmCVNNPricer:
         commit_message_template: str,
         loss: float,
         batch: int,
-        interpreter: SpectralMCInterpreter,
+        interpreter: SpectralMCInterpreter | None = None,
     ) -> None:
         """
         Commit current trainer snapshot to blockchain storage.
@@ -879,9 +940,9 @@ class GbmCVNNPricer:
                 )
             )
             match AdamOptimizerState.from_torch(state_dict):
-                case Failure(error):
+                case Failure(opt_err):
                     self._log_sync_message(
-                        f"Skipping blockchain commit at step {self._global_step}: optimizer state serialization failed ({error})",
+                        f"Skipping blockchain commit at step {self._global_step}: optimizer state serialization failed ({opt_err})",
                         level="error",
                         exc_info=True,
                     )
@@ -892,9 +953,9 @@ class GbmCVNNPricer:
             # Create snapshot
             snapshot_result = self.snapshot()
             match snapshot_result:
-                case Failure(error):
+                case Failure(snap_err):
                     self._log_sync_message(
-                        f"Skipping blockchain commit at step {self._global_step}: snapshot unavailable ({error})",
+                        f"Skipping blockchain commit at step {self._global_step}: snapshot unavailable ({snap_err})",
                         level="error",
                     )
                     return
@@ -990,9 +1051,9 @@ class GbmCVNNPricer:
                 )
             )
             match AdamOptimizerState.from_torch(state_dict):
-                case Failure(error):
+                case Failure(opt_err):
                     await self._log_async_internal(
-                        f"Skipping blockchain commit at step {self._global_step}: optimizer state serialization failed ({error})",
+                        f"Skipping blockchain commit at step {self._global_step}: optimizer state serialization failed ({opt_err})",
                         level="error",
                         exc_info=True,
                     )
@@ -1003,9 +1064,9 @@ class GbmCVNNPricer:
             # Create snapshot
             snapshot_result = self.snapshot()
             match snapshot_result:
-                case Failure(error):
+                case Failure(snap_err):
                     await self._log_async_internal(
-                        f"Skipping blockchain commit at step {self._global_step}: snapshot unavailable ({error})",
+                        f"Skipping blockchain commit at step {self._global_step}: snapshot unavailable ({snap_err})",
                         level="error",
                     )
                     return
@@ -1098,10 +1159,10 @@ class GbmCVNNPricer:
         # (re-)attach previous optimiser state -------------------------- #
         if self._optimizer_state is not None:
             match self._optimizer_state.to_torch():
-                case Failure(error):
+                case Failure(opt_err):
                     return Failure(
                         OptimizerStateSerializationFailed(
-                            message=f"Failed to deserialize optimizer state: {error}"
+                            message=f"Failed to deserialize optimizer state: {opt_err}"
                         )
                     )
                 case Success(state_dict):
@@ -1109,26 +1170,21 @@ class GbmCVNNPricer:
 
         self._cvnn.train()
 
-        def _run_batch(
-            acc_result: Result[tuple[int, int, float, float], TrainerError], _: int
-        ) -> Result[tuple[int, int, float, float], TrainerError]:
-            match acc_result:
-                case Failure(_):
-                    return acc_result
-                case Success(acc):
-                    sobol_skip, global_step, last_loss, last_grad_norm = acc
+        def _run_batch(state: _BatchState, batch_idx: int) -> Result[_BatchState, TrainerError]:
+            sobol_skip = state.sobol_skip
+            global_step = state.global_step
             tic = time.perf_counter()
 
             match self._sampler_result:
-                case Failure(error):
-                    return Failure(SamplerInitFailed(error=error))
+                case Failure(sampler_err):
+                    return Failure(SamplerInitFailed(error=sampler_err))
                 case Success(sampler):
                     sample_result = sampler.sample(config.batch_size)
                     match sample_result:
                         case Success(sobol_inputs):
                             sobol_skip += config.batch_size
-                        case Failure(error):
-                            return Failure(SamplerInitFailed(error=error))
+                        case Failure(sample_err):
+                            return Failure(SamplerInitFailed(error=sample_err))
 
             fft_result = collect_results([self._simulate_fft(c) for c in sobol_inputs])
             match fft_result:
@@ -1184,19 +1240,30 @@ class GbmCVNNPricer:
                     batch=global_step,
                 )
 
-            return Success((sobol_skip, global_step, updated_loss, updated_grad_norm))
+            return Success(
+                _BatchState(
+                    sobol_skip=sobol_skip,
+                    global_step=global_step,
+                    loss=updated_loss,
+                    grad_norm=updated_grad_norm,
+                )
+            )
 
-        acc_result = reduce(
+        initial_state = _BatchState.initial(current_sobol_skip, current_global_step)
+        final_state_result = fold_results(
+            list(range(config.num_batches)),
             _run_batch,
-            range(config.num_batches),
-            Success((current_sobol_skip, current_global_step, final_loss, final_grad_norm)),
+            initial_state,
         )
 
-        match acc_result:
-            case Failure(error):
-                return Failure(error)
-            case Success(acc):
-                current_sobol_skip, current_global_step, final_loss, final_grad_norm = acc
+        match final_state_result:
+            case Failure(batch_err):
+                return Failure(batch_err)
+            case Success(final_state):
+                current_sobol_skip = final_state.sobol_skip
+                current_global_step = final_state.global_step
+                final_loss = final_state.loss
+                final_grad_norm = final_state.grad_norm
 
         # ── Snapshot optimiser      ─────────────────────────────────── #
         # NOTE: Explicit .cpu() calls acceptable per CPU/GPU policy for checkpoint I/O.
@@ -1221,10 +1288,10 @@ class GbmCVNNPricer:
             )
         )
         match AdamOptimizerState.from_torch(state_dict):
-            case Failure(error):
+            case Failure(final_opt_err):
                 return Failure(
                     OptimizerStateSerializationFailed(
-                        message=f"Failed to capture optimizer snapshot: {error}"
+                        message=f"Failed to capture optimizer snapshot: {final_opt_err}"
                     )
                 )
             case Success(state):
@@ -1252,8 +1319,8 @@ class GbmCVNNPricer:
         # ── Return immutable training result ────────────────────────── #
         updated_config = self.snapshot()
         match updated_config:
-            case Failure(error):
-                return Failure(error)
+            case Failure(snapshot_err):
+                return Failure(snapshot_err)
             case Success(cfg):
                 return Success(
                     TrainingResult(

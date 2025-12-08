@@ -172,3 +172,44 @@ def partition_results(
     successes: list[T] = [result.value for result in results if isinstance(result, Success)]
     failures: list[E] = [result.error for result in results if isinstance(result, Failure)]
     return (successes, failures)
+
+
+def fold_results(
+    items: list[T],
+    f: Callable[[U, T], Result[U, E]],
+    initial: U,
+) -> Result[U, E]:
+    """
+    Functional fold with early exit on first failure.
+
+    Equivalent to reduce() but stops on first Failure.
+
+    Args:
+        items: List of items to fold over
+        f: Fold function taking (accumulator, item) and returning Result
+        initial: Initial accumulator value
+
+    Returns:
+        Success(final_accumulator) if all steps succeed, else first Failure
+
+    Example:
+        >>> def add_if_positive(acc: int, x: int) -> Result[int, str]:
+        ...     return Success(acc + x) if x > 0 else Failure("negative")
+        >>> fold_results([1, 2, 3], add_if_positive, 0)
+        Success(value=6)
+        >>> fold_results([1, -2, 3], add_if_positive, 0)
+        Failure(error="negative")
+    """
+
+    # Functional fold using recursion instead of for loop
+    def fold_impl(remaining: list[T], current: U) -> Result[U, E]:
+        if not remaining:
+            return Success(current)
+        head, *tail = remaining
+        match f(current, head):
+            case Failure(err):
+                return Failure(err)
+            case Success(val):
+                return fold_impl(tail, val)
+
+    return fold_impl(items, initial)

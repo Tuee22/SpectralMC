@@ -109,9 +109,17 @@ class TensorBoardWriter:
         # If templates provided, load checkpoint and log metrics
         if model_template is not None and config_template is not None:
             try:
-                snapshot = await load_snapshot_from_checkpoint(
+                snapshot_result = await load_snapshot_from_checkpoint(
                     self.store, version, model_template, config_template
                 )
+                match snapshot_result:
+                    case Failure(load_err):
+                        logger.warning(
+                            f"Failed to load checkpoint for version {counter}: {load_err}"
+                        )
+                        return
+                    case Success(snapshot):
+                        pass
 
                 # Log global_step from training
                 self.writer.add_scalar(

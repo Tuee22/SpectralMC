@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from spectralmc.errors.serialization import SerializationResult, UnsupportedPrecision
+from spectralmc.errors.serialization import SerializationResult, UnknownDType, UnsupportedPrecision
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import (
     AnyDType,
@@ -13,6 +13,26 @@ from spectralmc.models.torch import (
 )
 from spectralmc.proto import common_pb2
 from spectralmc.result import Failure, Success
+
+
+# Unified dtype mapping (avoids if/elif chains)
+_DTYPE_TO_PROTO: dict[AnyDType, int] = {
+    FullPrecisionDType.float32: common_pb2.DTYPE_FLOAT32,
+    FullPrecisionDType.float64: common_pb2.DTYPE_FLOAT64,
+    FullPrecisionDType.complex64: common_pb2.DTYPE_COMPLEX64,
+    FullPrecisionDType.complex128: common_pb2.DTYPE_COMPLEX128,
+    ReducedPrecisionDType.float16: common_pb2.DTYPE_FLOAT16,
+    ReducedPrecisionDType.bfloat16: common_pb2.DTYPE_BFLOAT16,
+}
+
+_PROTO_TO_DTYPE: dict[int, AnyDType] = {
+    common_pb2.DTYPE_FLOAT32: FullPrecisionDType.float32,
+    common_pb2.DTYPE_FLOAT64: FullPrecisionDType.float64,
+    common_pb2.DTYPE_COMPLEX64: FullPrecisionDType.complex64,
+    common_pb2.DTYPE_COMPLEX128: FullPrecisionDType.complex128,
+    common_pb2.DTYPE_FLOAT16: ReducedPrecisionDType.float16,
+    common_pb2.DTYPE_BFLOAT16: ReducedPrecisionDType.bfloat16,
+}
 
 
 class PrecisionConverter:
@@ -66,36 +86,20 @@ class DTypeConverter:
     """Convert between Pydantic DType enums and Protobuf DTypeProto."""
 
     @staticmethod
-    def to_proto(dtype: AnyDType) -> int:
+    def to_proto(dtype: AnyDType) -> SerializationResult[int]:
         """Convert FullPrecisionDType or ReducedPrecisionDType to proto enum value."""
-        if isinstance(dtype, FullPrecisionDType):
-            mapping_full = {
-                FullPrecisionDType.float32: common_pb2.DTYPE_FLOAT32,
-                FullPrecisionDType.float64: common_pb2.DTYPE_FLOAT64,
-                FullPrecisionDType.complex64: common_pb2.DTYPE_COMPLEX64,
-                FullPrecisionDType.complex128: common_pb2.DTYPE_COMPLEX128,
-            }
-            return mapping_full[dtype]
-        if isinstance(dtype, ReducedPrecisionDType):
-            mapping_reduced = {
-                ReducedPrecisionDType.float16: common_pb2.DTYPE_FLOAT16,
-                ReducedPrecisionDType.bfloat16: common_pb2.DTYPE_BFLOAT16,
-            }
-            return mapping_reduced[dtype]
-        raise TypeError(f"Unknown dtype type: {type(dtype)}")
+        proto_value = _DTYPE_TO_PROTO.get(dtype)
+        if proto_value is None:
+            return Failure(UnknownDType(proto_value=0))  # No valid proto value for unknown dtype
+        return Success(proto_value)
 
     @staticmethod
-    def from_proto(proto_value: int) -> AnyDType:
+    def from_proto(proto_value: int) -> SerializationResult[AnyDType]:
         """Convert proto enum value to FullPrecisionDType or ReducedPrecisionDType."""
-        mapping: dict[int, AnyDType] = {
-            common_pb2.DTYPE_FLOAT32: FullPrecisionDType.float32,
-            common_pb2.DTYPE_FLOAT64: FullPrecisionDType.float64,
-            common_pb2.DTYPE_COMPLEX64: FullPrecisionDType.complex64,
-            common_pb2.DTYPE_COMPLEX128: FullPrecisionDType.complex128,
-            common_pb2.DTYPE_FLOAT16: ReducedPrecisionDType.float16,
-            common_pb2.DTYPE_BFLOAT16: ReducedPrecisionDType.bfloat16,
-        }
-        return mapping[proto_value]
+        dtype = _PROTO_TO_DTYPE.get(proto_value)
+        if dtype is None:
+            return Failure(UnknownDType(proto_value=proto_value))
+        return Success(dtype)
 
 
 __all__ = [

@@ -122,6 +122,9 @@ typecheck = "tools.check_type_safety:run_mypy_only"
 check-types = "tools.check_type_safety:main"
 type-check-all = "tools.check_type_safety:run_full_check"
 
+# Protobuf code generation
+regen-proto = "tools.regen_proto:main"
+
 # --------------------------------------------------------------------------- #
 #                               B U I L D                                     #
 # --------------------------------------------------------------------------- #
@@ -134,7 +137,7 @@ build-backend = "poetry.core.masonry.api"
 #                       T O O L   C O N F I G U R A T I O N                   #
 # --------------------------------------------------------------------------- #
 [tool.mypy]
-mypy_path = "stubs"
+mypy_path = "stubs:/opt"
 python_version = "3.12"
 files = ["src/spectralmc", "tests", "tools"]
 exclude = ["src/spectralmc/proto/.*_pb2\\.py$"]
@@ -181,6 +184,33 @@ sqlite_cache = true
 module = "tests.*"
 warn_unreachable = false
 
+# Generated protobuf code (build artifacts in /opt/spectralmc_proto/)
+[[tool.mypy.overrides]]
+module = "spectralmc_proto.*"
+ignore_missing_imports = true
+disallow_any_unimported = false
+warn_return_any = false
+disallow_any_generics = false
+
+# Protobuf shim module (re-exports from /opt/spectralmc_proto/)
+[[tool.mypy.overrides]]
+module = "spectralmc.proto"
+ignore_missing_imports = true
+disallow_any_unimported = false
+disallow_any_explicit = false
+warn_return_any = false
+
+# Serialization modules using protobuf (allow Any from protobuf imports)
+[[tool.mypy.overrides]]
+module = [
+    "spectralmc.serialization.*",
+    "spectralmc.storage.checkpoint",
+    "tests.test_serialization.test_simulation_converters",
+]
+disallow_any_unimported = false
+warn_return_any = false
+ignore_missing_imports = true
+
 [tool.pydantic-mypy]
 init_forbid_extra = true
 init_typed = true
@@ -190,7 +220,7 @@ warn_required_dynamic_aliases = true
 testpaths = "tests"
 addopts   = "-ra -q"
 asyncio_mode = "auto"
-markers   = ["asyncio: async test"]
+markers   = ["asyncio: async test", "cpu: tests that intentionally use CPU operations"]
 filterwarnings = [
     # Hide SWIG-generated DeprecationWarnings raised while importing QuantLib
     # Pattern matches SWIG type definition warnings from <frozen importlib._bootstrap>

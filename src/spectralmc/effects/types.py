@@ -20,10 +20,14 @@ from __future__ import annotations
 # Re-export all effect types for convenient single-import access
 from spectralmc.effects.gpu import (
     DLPackTransfer,
+    dlpack_transfer,
     GPUEffect,
+    InvalidDLPackTransferError,
+    InvalidTransferError,
     KernelLaunch,
     StreamSync,
     TensorTransfer,
+    tensor_transfer,
 )
 from spectralmc.effects.logging import LoggingEffect, LogMessage
 from spectralmc.effects.metadata import (
@@ -75,9 +79,13 @@ __all__ = [
     # GPU effects
     "GPUEffect",
     "TensorTransfer",
+    "tensor_transfer",
+    "InvalidTransferError",
     "StreamSync",
     "KernelLaunch",
     "DLPackTransfer",
+    "dlpack_transfer",
+    "InvalidDLPackTransferError",
     # Training effects
     "TrainingEffect",
     "ForwardPass",

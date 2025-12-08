@@ -3,10 +3,13 @@
 
 from __future__ import annotations
 
+from typing import assert_never
+
 import numpy as np
 import torch
 
-from spectralmc.errors.serialization import InvalidTensorState, SerializationResult
+from spectralmc.errors.serialization import InvalidTensorState, SerializationError
+from spectralmc.errors.torch_facade import TorchFacadeError
 from spectralmc.models.torch import (
     AdamOptimizerState,
     AdamParamGroup,
@@ -18,14 +21,14 @@ from spectralmc.models.torch import (
 )
 from spectralmc.proto import tensors_pb2
 from spectralmc.serialization.common import DeviceConverter, DTypeConverter
-from spectralmc.result import Failure, Success
+from spectralmc.result import Failure, Result, Success
 
 
 class TensorStateConverter:
     """Convert torch.Tensor to/from TensorStateProto."""
 
     @staticmethod
-    def to_proto(tensor: torch.Tensor) -> tensors_pb2.TensorStateProto:
+    def to_proto(tensor: torch.Tensor) -> Result[tensors_pb2.TensorStateProto, InvalidTensorState]:
         """
         Serialize a torch.Tensor to protobuf.
 
@@ -58,14 +61,18 @@ class TensorStateConverter:
         elif torch_dtype == torch.bfloat16:
             dtype_enum = ReducedPrecisionDType.bfloat16
         else:
-            raise ValueError(f"Unsupported dtype: {torch_dtype}")
+            return Failure(InvalidTensorState(message=f"Unsupported dtype: {torch_dtype}"))
 
-        proto.dtype = DTypeConverter.to_proto(dtype_enum)
+        match DTypeConverter.to_proto(dtype_enum):
+            case Failure(error):
+                return Failure(InvalidTensorState(message=str(error)))
+            case Success(dtype_proto):
+                proto.dtype = dtype_proto
 
         # Device
         match Device.from_torch(tensor.device):
-            case Failure(error):
-                return Failure(InvalidTensorState(message=str(error)))
+            case Failure(device_error):
+                return Failure(InvalidTensorState(message=str(device_error)))
             case Success(device_enum):
                 proto.device = DeviceConverter.to_proto(device_enum)
 
@@ -79,10 +86,10 @@ class TensorStateConverter:
         # Requires grad
         proto.requires_grad = tensor.requires_grad
 
-        return proto
+        return Success(proto)
 
     @staticmethod
-    def from_proto(proto: tensors_pb2.TensorStateProto) -> torch.Tensor:
+    def from_proto(proto: tensors_pb2.TensorStateProto) -> Result[torch.Tensor, InvalidTensorState]:
         """
         Deserialize a TensorStateProto to torch.Tensor.
 
@@ -90,10 +97,14 @@ class TensorStateConverter:
             proto: TensorStateProto message
 
         Returns:
-            PyTorch tensor
+            Result containing PyTorch tensor or deserialization error
         """
         # Dtype
-        dtype_enum = DTypeConverter.from_proto(proto.dtype)
+        dtype_result = DTypeConverter.from_proto(proto.dtype)
+        if isinstance(dtype_result, Failure):
+            return Failure(InvalidTensorState(message=str(dtype_result.error)))
+
+        dtype_enum = dtype_result.value
 
         # Map DType enum to torch.dtype
         if isinstance(dtype_enum, FullPrecisionDType):
@@ -106,16 +117,16 @@ class TensorStateConverter:
             elif dtype_enum == FullPrecisionDType.complex128:
                 torch_dtype = torch.complex128
             else:
-                raise ValueError(f"Unknown FullPrecisionDType: {dtype_enum}")
+                assert_never(dtype_enum)
         elif isinstance(dtype_enum, ReducedPrecisionDType):
             if dtype_enum == ReducedPrecisionDType.float16:
                 torch_dtype = torch.float16
             elif dtype_enum == ReducedPrecisionDType.bfloat16:
                 torch_dtype = torch.bfloat16
             else:
-                raise ValueError(f"Unknown ReducedPrecisionDType: {dtype_enum}")
+                assert_never(dtype_enum)
         else:
-            raise TypeError(f"Unknown dtype type: {type(dtype_enum)}")
+            assert_never(dtype_enum)
 
         # Shape
         shape = tuple(proto.shape)
@@ -144,7 +155,7 @@ class TensorStateConverter:
             # NumPy doesn't have bfloat16, use uint16 and reinterpret
             np_dtype = np.uint16
         else:
-            raise ValueError(f"Unsupported torch dtype: {torch_dtype}")
+            return Failure(InvalidTensorState(message=f"Unsupported torch dtype: {torch_dtype}"))
 
         # Reconstruct array from bytes
         flat_array = np.frombuffer(proto.data, dtype=np_dtype)
@@ -169,7 +180,7 @@ class TensorStateConverter:
         if proto.requires_grad:
             tensor.requires_grad_(True)
 
-        return tensor
+        return Success(tensor)
 
 
 class AdamOptimizerStateConverter:
@@ -178,7 +189,7 @@ class AdamOptimizerStateConverter:
     @staticmethod
     def to_proto(
         optimizer_state: AdamOptimizerState,
-    ) -> SerializationResult[tensors_pb2.AdamOptimizerStateProto]:
+    ) -> Result[tensors_pb2.AdamOptimizerStateProto, SerializationError | TorchFacadeError]:
         """
         Serialize AdamOptimizerState to protobuf.
 
@@ -190,22 +201,55 @@ class AdamOptimizerStateConverter:
         """
         proto = tensors_pb2.AdamOptimizerStateProto()
 
+        # Pure: convert all param states to proto entries, collecting Results
+        param_entries_results: list[
+            tuple[
+                int, Result[tensors_pb2.AdamParamStateProto, SerializationError | TorchFacadeError]
+            ]
+        ] = []
+
         for param_id, param_state in optimizer_state.param_states.items():
             entry = tensors_pb2.AdamParamStateProto(step=param_state.step)
 
+            # Convert exp_avg
             match param_state.exp_avg.to_torch():
                 case Failure(error):
-                    return Failure(InvalidTensorState(message=str(error)))
+                    param_entries_results.append((param_id, Failure(error)))
+                    continue
                 case Success(exp_avg_tensor):
-                    entry.exp_avg.CopyFrom(TensorStateConverter.to_proto(exp_avg_tensor))
+                    match TensorStateConverter.to_proto(exp_avg_tensor):
+                        case Failure(conv_error):
+                            param_entries_results.append((param_id, Failure(conv_error)))
+                            continue
+                        case Success(exp_avg_proto):
+                            entry.exp_avg.CopyFrom(exp_avg_proto)
 
+            # Convert exp_avg_sq
             match param_state.exp_avg_sq.to_torch():
                 case Failure(error):
-                    return Failure(InvalidTensorState(message=str(error)))
+                    param_entries_results.append((param_id, Failure(error)))
+                    continue
                 case Success(exp_avg_sq_tensor):
-                    entry.exp_avg_sq.CopyFrom(TensorStateConverter.to_proto(exp_avg_sq_tensor))
+                    match TensorStateConverter.to_proto(exp_avg_sq_tensor):
+                        case Failure(conv_error):
+                            param_entries_results.append((param_id, Failure(conv_error)))
+                            continue
+                        case Success(exp_avg_sq_proto):
+                            entry.exp_avg_sq.CopyFrom(exp_avg_sq_proto)
 
-            proto.state[param_id].CopyFrom(entry)
+            param_entries_results.append((param_id, Success(entry)))
+
+        # Check for first failure and return it early
+        first_failure = next(
+            (result for _, result in param_entries_results if isinstance(result, Failure)), None
+        )
+        if first_failure is not None:
+            return first_failure
+
+        # All conversions succeeded - populate proto (mutation required by protobuf API)
+        for param_id, result in param_entries_results:
+            if isinstance(result, Success):
+                proto.state[param_id].CopyFrom(result.value)
 
         proto.param_groups.extend(
             [
@@ -226,7 +270,7 @@ class AdamOptimizerStateConverter:
     @staticmethod
     def from_proto(
         proto: tensors_pb2.AdamOptimizerStateProto,
-    ) -> AdamOptimizerState:
+    ) -> Result[AdamOptimizerState, SerializationError | TorchFacadeError]:
         """
         Deserialize AdamOptimizerStateProto to AdamOptimizerState.
 
@@ -234,17 +278,52 @@ class AdamOptimizerStateConverter:
             proto: AdamOptimizerStateProto message
 
         Returns:
-            AdamOptimizerState instance
+            Result containing AdamOptimizerState instance or serialization error
         """
-        param_states: dict[int, AdamParamState] = {
-            param_id: AdamParamState.from_torch(
+        # Pure: convert all param states from proto, collecting Results
+        param_state_results: list[
+            tuple[int, Result[AdamParamState, SerializationError | TorchFacadeError]]
+        ] = []
+
+        for param_id, param_proto in proto.state.items():
+            # Convert tensors from proto, handling Result types
+            exp_avg_result = TensorStateConverter.from_proto(param_proto.exp_avg)
+            if isinstance(exp_avg_result, Failure):
+                # InvalidTensorState is part of SerializationError
+                return Failure(exp_avg_result.error)
+
+            exp_avg_sq_result = TensorStateConverter.from_proto(param_proto.exp_avg_sq)
+            if isinstance(exp_avg_sq_result, Failure):
+                # InvalidTensorState is part of SerializationError
+                return Failure(exp_avg_sq_result.error)
+
+            param_state_result = AdamParamState.from_torch(
                 {
                     "step": param_proto.step,
-                    "exp_avg": TensorStateConverter.from_proto(param_proto.exp_avg),
-                    "exp_avg_sq": TensorStateConverter.from_proto(param_proto.exp_avg_sq),
+                    "exp_avg": exp_avg_result.value,
+                    "exp_avg_sq": exp_avg_sq_result.value,
                 }
             )
-            for param_id, param_proto in proto.state.items()
+
+            # Type widening: Pattern match to widen TorchFacadeError -> (SerializationError | TorchFacadeError)
+            match param_state_result:
+                case Success(value):
+                    param_state_results.append((param_id, Success(value)))
+                case Failure(error):
+                    param_state_results.append((param_id, Failure(error)))
+
+        # Check for first failure
+        first_failure = next(
+            (result for _, result in param_state_results if isinstance(result, Failure)), None
+        )
+        if first_failure is not None:
+            return first_failure
+
+        # All conversions succeeded - build dict
+        param_states = {
+            param_id: result.value
+            for param_id, result in param_state_results
+            if isinstance(result, Success)
         }
 
         param_groups: list[AdamParamGroup] = [
@@ -259,7 +338,7 @@ class AdamOptimizerStateConverter:
             for group_proto in proto.param_groups
         ]
 
-        return AdamOptimizerState(param_states=param_states, param_groups=param_groups)
+        return Success(AdamOptimizerState(param_states=param_states, param_groups=param_groups))
 
 
 class RNGStateConverter:
@@ -316,7 +395,7 @@ class ModelCheckpointConverter:
         torch_cpu_rng_state: bytes,
         torch_cuda_rng_states: list[bytes],
         global_step: int,
-    ) -> SerializationResult[tensors_pb2.ModelCheckpointProto]:
+    ) -> Result[tensors_pb2.ModelCheckpointProto, SerializationError | TorchFacadeError]:
         """
         Serialize complete model checkpoint to protobuf.
 
@@ -332,16 +411,18 @@ class ModelCheckpointConverter:
         """
         proto = tensors_pb2.ModelCheckpointProto()
 
-        proto.model_state_dict.update(
-            {
-                name: TensorStateConverter.to_proto(tensor)
-                for name, tensor in model_state_dict.items()
-            }
-        )
+        # Convert model state dict with error propagation
+        for name, tensor in model_state_dict.items():
+            match TensorStateConverter.to_proto(tensor):
+                case Failure(error):
+                    return Failure(error)
+                case Success(tensor_proto):
+                    proto.model_state_dict[name].CopyFrom(tensor_proto)
 
-        match AdamOptimizerStateConverter.to_proto(optimizer_state):
-            case Failure(error):
-                return Failure(error)
+        opt_result = AdamOptimizerStateConverter.to_proto(optimizer_state)
+        match opt_result:
+            case Failure():
+                return opt_result
             case Success(optimizer_proto):
                 proto.optimizer_state.CopyFrom(optimizer_proto)
 
@@ -358,7 +439,10 @@ class ModelCheckpointConverter:
     @staticmethod
     def from_proto(
         proto: tensors_pb2.ModelCheckpointProto,
-    ) -> tuple[dict[str, torch.Tensor], AdamOptimizerState, bytes, list[bytes], int]:
+    ) -> Result[
+        tuple[dict[str, torch.Tensor], AdamOptimizerState, bytes, list[bytes], int],
+        SerializationError | TorchFacadeError,
+    ]:
         """
         Deserialize ModelCheckpointProto to checkpoint components.
 
@@ -366,14 +450,21 @@ class ModelCheckpointConverter:
             proto: ModelCheckpointProto message
 
         Returns:
-            Tuple of (model_state_dict, optimizer_state, cpu_rng, cuda_rngs, global_step)
+            Result containing tuple of (model_state_dict, optimizer_state, cpu_rng, cuda_rngs, global_step)
         """
-        model_state_dict: dict[str, torch.Tensor] = {
-            name: TensorStateConverter.from_proto(tensor_proto)
-            for name, tensor_proto in proto.model_state_dict.items()
-        }
+        model_state_dict: dict[str, torch.Tensor] = {}
+        for name, tensor_proto in proto.model_state_dict.items():
+            tensor_result = TensorStateConverter.from_proto(tensor_proto)
+            if isinstance(tensor_result, Failure):
+                # InvalidTensorState is part of SerializationError
+                return Failure(tensor_result.error)
+            model_state_dict[name] = tensor_result.value
 
-        optimizer_state = AdamOptimizerStateConverter.from_proto(proto.optimizer_state)
+        match AdamOptimizerStateConverter.from_proto(proto.optimizer_state):
+            case Failure(error):
+                return Failure(error)
+            case Success(optimizer_state):
+                pass
 
         # Deserialize RNG state
         cpu_rng, cuda_rngs = RNGStateConverter.from_proto(proto.rng_state)
@@ -381,4 +472,4 @@ class ModelCheckpointConverter:
         # Global step
         global_step = int(proto.global_step)
 
-        return model_state_dict, optimizer_state, cpu_rng, cuda_rngs, global_step
+        return Success((model_state_dict, optimizer_state, cpu_rng, cuda_rngs, global_step))

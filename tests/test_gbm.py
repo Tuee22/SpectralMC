@@ -24,7 +24,7 @@ from spectralmc.gbm import (
 from spectralmc.models.numerical import Precision
 from spectralmc.quantlib import bs_price_quantlib
 from spectralmc.result import Failure, Success
-from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler
+from spectralmc.sobol_sampler import SobolConfig, SobolSampler, build_bound_spec
 
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
@@ -35,12 +35,12 @@ HostPriceResults: TypeAlias = BlackScholes.HostPricingResults
 
 # ──────────────────────────────── constants ─────────────────────────────────
 _BS_DIMENSIONS = {
-    "X0": BoundSpec(lower=0.001, upper=10_000),
-    "K": BoundSpec(lower=0.001, upper=20_000),
-    "T": BoundSpec(lower=0.0, upper=10.0),
-    "r": BoundSpec(lower=-0.20, upper=0.20),
-    "d": BoundSpec(lower=-0.20, upper=0.20),
-    "v": BoundSpec(lower=0.0, upper=2.0),
+    "X0": build_bound_spec(0.001, 10_000).unwrap(),
+    "K": build_bound_spec(0.001, 20_000).unwrap(),
+    "T": build_bound_spec(0.0, 10.0).unwrap(),
+    "r": build_bound_spec(-0.20, 0.20).unwrap(),
+    "d": build_bound_spec(-0.20, 0.20).unwrap(),
+    "v": build_bound_spec(0.0, 2.0).unwrap(),
 }
 
 _TIMESTEPS = 1
@@ -82,8 +82,8 @@ def _make_engine(precision: Precision, *, skip: int = 0) -> BlackScholes:
         skip=skip,
         dtype=precision,
     ):
-        case Failure(err):
-            pytest.fail(f"SimulationParams creation failed: {err}")
+        case Failure(sim_err):
+            pytest.fail(f"SimulationParams creation failed: {sim_err}")
         case Success(sim_params):
             pass
 
@@ -92,8 +92,8 @@ def _make_engine(precision: Precision, *, skip: int = 0) -> BlackScholes:
         simulate_log_return=True,
         normalize_forwards=False,
     ):
-        case Failure(err):
-            pytest.fail(f"BlackScholesConfig creation failed: {err}")
+        case Failure(cfg_err):
+            pytest.fail(f"BlackScholesConfig creation failed: {cfg_err}")
         case Success(cfg):
             return BlackScholes(cfg)
 

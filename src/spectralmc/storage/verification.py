@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from botocore.exceptions import ClientError
 
+from ..errors.storage import VerificationError
 from ..result import Failure, Result, Success
 from .chain import ModelVersion
 from .errors import HeadNotFoundError, VersionNotFoundError
@@ -260,7 +261,7 @@ async def find_corruption(store: AsyncBlockchainModelStore) -> ModelVersion | No
 
 async def verify_version_completeness(
     store: AsyncBlockchainModelStore, version: ModelVersion
-) -> bool:
+) -> Result[bool, VerificationError]:
     """
     Verify that a version has all required artifacts.
 
@@ -274,10 +275,8 @@ async def verify_version_completeness(
         version: Version to check
 
     Returns:
-        True if all artifacts exist
-
-    Raises:
-        ValueError: If any required artifact is missing
+        Success(True) if all artifacts present
+        Failure(VerificationError) if any artifact missing
     """
     if store._s3_client is None:
         raise RuntimeError("S3 client not initialized. Use 'async with' context manager.")
@@ -292,7 +291,13 @@ async def verify_version_completeness(
     for key in required_files:
         try:
             await store._s3_client.head_object(Bucket=store.bucket_name, Key=key)
-        except ClientError as e:
-            raise ValueError(f"Version {version.counter} missing artifact: {key} - {e}")
+        except ClientError:
+            return Failure(
+                VerificationError(
+                    version_counter=version.counter,
+                    message=f"Missing artifact: {key}",
+                    missing_artifact=key,
+                )
+            )
 
-    return True
+    return Success(True)

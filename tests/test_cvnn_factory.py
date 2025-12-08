@@ -79,9 +79,10 @@ def _assert_state_dict_equal(a: dict[str, Tensor], b: dict[str, Tensor]) -> None
 
 
 T = TypeVar("T")
+E = TypeVar("E")
 
 
-def _expect_success(result: Result[T, object]) -> T:
+def _expect_success(result: Result[T, E]) -> T:
     match result:
         case Success(value):
             return value
@@ -129,7 +130,19 @@ def _single_train_step(
     cfg: CVNNConfig,
     dtype: DType,
 ) -> dict[str, Tensor]:
-    """Materialise → forward → backward → optimiser step → return state-dict."""
+    """Materialise → forward → backward → optimiser step → return state-dict.
+
+    Returns state dict on CPU for serialization testing and equality comparisons.
+    This is acceptable per CPU/GPU Compute Policy as it's used for checkpoint I/O
+    testing, not computational operations.
+
+    Args:
+        cfg: CVNN configuration
+        dtype: Data type precision
+
+    Returns:
+        State dict with all tensors on CPU
+    """
     model: nn.Module = _build_test_model(cfg, dtype=dtype)
 
     model.train()

@@ -22,7 +22,6 @@ from spectralmc.errors.cvnn_factory import (
     CVNNFactoryResult,
     ModelOnWrongDevice,
     SerializationDeviceMismatch,
-    UnhandledConfigNode,
 )
 from spectralmc.models.torch import (
     AnyDType,
@@ -31,7 +30,8 @@ from spectralmc.models.torch import (
     default_device,
     default_dtype,
 )
-from spectralmc.result import Failure, Success
+from spectralmc.result import Failure, Success, collect_results, fold_results
+from dataclasses import dataclass
 
 
 __all__: tuple[str, ...] = (
@@ -168,20 +168,43 @@ def _maybe_project(mod: nn.Module, in_w: int, out_w: int) -> tuple[nn.Module, in
     return (mod, in_w) if in_w == out_w else (_seq(mod, ComplexLinear(in_w, out_w)), out_w)
 
 
+@dataclass(frozen=True)
+class _LayerBuildState:
+    """Immutable state for layer sequence building."""
+
+    modules: tuple[nn.Module, ...]
+    width: int
+
+
+def _build_single_layer(
+    state: _LayerBuildState,
+    layer: LayerCfg,
+) -> CVNNFactoryResult[_LayerBuildState]:
+    """Build a single layer, returning new immutable state or propagating error."""
+    build_result = _build_from_cfg(layer, state.width)
+
+    # Pattern match to safely extract tuple without using .value
+    match build_result:
+        case Success((built_mod, next_w)):
+            return Success(_LayerBuildState(modules=state.modules + (built_mod,), width=next_w))
+        case Failure():
+            return build_result
+    # mypy exhaustiveness check: Success | Failure covers all Result cases
+    raise AssertionError("Unreachable: Result must be Success or Failure")
+
+
 def _build_layer_sequence(
     layers: list[LayerCfg],
     init_w: int,
 ) -> CVNNFactoryResult[tuple[list[nn.Module], int]]:
-    modules: list[nn.Module] = []
-    width = init_w
-    for layer in layers:
-        match _build_from_cfg(layer, width):
-            case Failure(error):
-                return Failure(error)
-            case Success((built_mod, next_w)):
-                modules.append(built_mod)
-                width = next_w
-    return Success((modules, width))
+    initial_state = _LayerBuildState(modules=(), width=init_w)
+    final_state_result = fold_results(layers, _build_single_layer, initial_state)
+
+    match final_state_result:
+        case Failure(error):
+            return Failure(error)
+        case Success(final_state):
+            return Success((list(final_state.modules), final_state.width))
 
 
 def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> CVNNFactoryResult[tuple[nn.Module, int]]:
@@ -261,8 +284,8 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> CVNNFactoryResult[tuple[nn.Mod
             )
             return Success((res, body_w))
 
-        case _:
-            return Failure(UnhandledConfigNode(node=type(cfg).__name__))
+    # Unreachable: all LayerCfg variants are handled above in match statement
+    raise AssertionError(f"Unreachable: unexpected LayerCfg variant {type(cfg).__name__}")
 
 
 # ───────────────────────────── public API ───────────────────────────────────
@@ -292,6 +315,18 @@ def build_model(*, n_inputs: int, n_outputs: int, cfg: CVNNConfig) -> CVNNFactor
         return Success(net)
 
 
+def _convert_tensor_state_entry(
+    name_ts: tuple[str, TensorState],
+) -> CVNNFactoryResult[tuple[str, torch.Tensor]]:
+    """Convert single TensorState entry to PyTorch tensor."""
+    name, ts = name_ts
+    match ts.to_torch():
+        case Failure(error):
+            return Failure(error)
+        case Success(tensor):
+            return Success((name, tensor))
+
+
 def load_model(
     *, model: nn.Module, tensors: dict[str, TensorState]
 ) -> CVNNFactoryResult[nn.Module]:
@@ -299,16 +334,27 @@ def load_model(
     if off_cpu is not None:
         return Failure(ModelOnWrongDevice(device=str(off_cpu.device)))
 
-    state_dict: dict[str, torch.Tensor] = {}
-    for name, ts in tensors.items():
-        match ts.to_torch():
-            case Failure(error):
-                return Failure(error)
-            case Success(tensor):
-                state_dict[name] = tensor
+    tensor_results = [_convert_tensor_state_entry((name, ts)) for name, ts in tensors.items()]
 
-    model.load_state_dict(state_dict, assign=True)
-    return Success(model)
+    match collect_results(tensor_results):
+        case Failure(error):
+            return Failure(error)
+        case Success(entries):
+            state_dict = dict(entries)
+            model.load_state_dict(state_dict, assign=True)
+            return Success(model)
+
+
+def _convert_torch_tensor_entry(
+    name_tensor: tuple[str, torch.Tensor],
+) -> CVNNFactoryResult[tuple[str, TensorState]]:
+    """Convert PyTorch tensor to TensorState entry."""
+    name, tensor = name_tensor
+    match TensorState.from_torch(tensor):
+        case Failure(error):
+            return Failure(error)
+        case Success(state):
+            return Success((name, state))
 
 
 def get_safetensors(model: nn.Module) -> CVNNFactoryResult[dict[str, TensorState]]:
@@ -316,11 +362,12 @@ def get_safetensors(model: nn.Module) -> CVNNFactoryResult[dict[str, TensorState
     if off_cpu is not None:
         return Failure(ModelOnWrongDevice(device=str(off_cpu.device)))
 
-    safetensors: dict[str, TensorState] = {}
-    for name, tensor in model.state_dict().items():
-        match TensorState.from_torch(tensor):
-            case Failure(error):
-                return Failure(error)
-            case Success(state):
-                safetensors[name] = state
-    return Success(safetensors)
+    tensor_results = [
+        _convert_torch_tensor_entry((name, tensor)) for name, tensor in model.state_dict().items()
+    ]
+
+    match collect_results(tensor_results):
+        case Failure(error):
+            return Failure(error)
+        case Success(entries):
+            return Success(dict(entries))

@@ -34,8 +34,22 @@ class NegativeSamples:
 
 
 @dataclass(frozen=True)
+class BoundSpecInvalid:
+    """Lower bound must be strictly less than upper bound."""
+
+    lower: float
+    upper: float
+    kind: Literal["BoundSpecInvalid"] = "BoundSpecInvalid"
+
+
+@dataclass(frozen=True)
 class SamplerValidationFailed:
     """Pydantic validation failed when constructing sampler inputs."""
 
     error: ValidationError
     kind: Literal["SamplerValidationFailed"] = "SamplerValidationFailed"
+
+
+SamplerError = (
+    DimensionMismatch | InvalidBounds | BoundSpecInvalid | NegativeSamples | SamplerValidationFailed
+)

@@ -9,7 +9,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from ..result import Failure, Success
+from ..errors.storage import GCError
+from ..result import Failure, Result, Success
 from .chain import ModelVersion
 from .store import AsyncBlockchainModelStore
 
@@ -88,7 +89,7 @@ class GarbageCollector:
         self.store = store
         self.policy = policy
 
-    async def collect(self, dry_run: bool = True) -> GCReport:
+    async def collect(self, dry_run: bool = True) -> Result[GCReport, GCError]:
         """
         Run garbage collection.
 
@@ -96,10 +97,8 @@ class GarbageCollector:
             dry_run: If True, only report what would be deleted without deleting
 
         Returns:
-            GCReport with deletion summary
-
-        Raises:
-            ValueError: If policy would delete too many versions
+            Success(GCReport) with deletion summary
+            Failure(GCError) if policy would violate minimum version requirement
         """
         # Fetch all versions
         head_result = await self.store.get_head()
@@ -107,11 +106,13 @@ class GarbageCollector:
         match head_result:
             case Failure(_):
                 # Empty chain, nothing to collect
-                return GCReport(
-                    deleted_versions=[],
-                    protected_versions=[],
-                    bytes_freed=0,
-                    dry_run=dry_run,
+                return Success(
+                    GCReport(
+                        deleted_versions=[],
+                        protected_versions=[],
+                        bytes_freed=0,
+                        dry_run=dry_run,
+                    )
                 )
             case Success(head):
                 pass  # Continue with GC logic
@@ -128,9 +129,12 @@ class GarbageCollector:
 
         # Safety check: ensure minimum versions retained
         if len(protected) < self.policy.keep_min_versions:
-            raise ValueError(
-                f"Retention policy would keep only {len(protected)} versions, "
-                f"but minimum is {self.policy.keep_min_versions}"
+            return Failure(
+                GCError(
+                    message="Retention policy would violate minimum version requirement",
+                    protected_count=len(protected),
+                    minimum_required=self.policy.keep_min_versions,
+                )
             )
 
         # Calculate bytes to free
@@ -147,11 +151,13 @@ class GarbageCollector:
                 freed = await self._estimate_version_size(version)
                 bytes_freed += freed
 
-        return GCReport(
-            deleted_versions=[v.counter for v in to_delete],
-            protected_versions=[v.counter for v in protected],
-            bytes_freed=bytes_freed,
-            dry_run=dry_run,
+        return Success(
+            GCReport(
+                deleted_versions=[v.counter for v in to_delete],
+                protected_versions=[v.counter for v in protected],
+                bytes_freed=bytes_freed,
+                dry_run=dry_run,
+            )
         )
 
     def _plan_deletion(
@@ -287,7 +293,7 @@ async def run_gc(
     keep_min_versions: int = 3,
     protect_tags: list[int] | None = None,
     dry_run: bool = True,
-) -> GCReport:
+) -> Result[GCReport, GCError]:
     """
     Convenience function to run garbage collection.
 
@@ -299,17 +305,25 @@ async def run_gc(
         dry_run: If True, only report what would be deleted
 
     Returns:
-        GCReport with deletion summary
+        Success(GCReport) with deletion summary
+        Failure(GCError) if policy would violate minimum version requirement
 
     Example:
         ```python
         async with AsyncBlockchainModelStore("bucket") as store:
             # Dry run: preview deletions
-            report = await run_gc(store, keep_versions=10, dry_run=True)
-            print(f"Would delete: {len(report.deleted_versions)} versions")
+            match await run_gc(store, keep_versions=10, dry_run=True):
+                case Success(report):
+                    print(f"Would delete: {len(report.deleted_versions)} versions")
+                case Failure(error):
+                    print(f"GC error: {error.message}")
 
             # Actually delete
-            report = await run_gc(store, keep_versions=10, dry_run=False)
+            match await run_gc(store, keep_versions=10, dry_run=False):
+                case Success(report):
+                    print(f"Deleted {len(report.deleted_versions)} versions")
+                case Failure(error):
+                    print(f"GC failed: {error.message}")
         ```
     """
     policy = RetentionPolicy(

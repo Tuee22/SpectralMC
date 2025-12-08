@@ -81,8 +81,8 @@ class SimulationParamsConverter:
             dtype=precision,
         )
         match params_result:
-            case Failure(error):
-                return Failure(ValidationFailed(error=error.error))
+            case Failure(params_err):
+                return Failure(params_err)
             case Success(params):
                 return Success(params)
 
@@ -117,8 +117,8 @@ class BlackScholesConfigConverter:
             normalize_forwards=proto.normalize_forwards,
         )
         match config_result:
-            case Failure(error):
-                return Failure(ValidationFailed(error=error.error))
+            case Failure(config_err):
+                return Failure(config_err)
             case Success(config):
                 return Success(config)
 

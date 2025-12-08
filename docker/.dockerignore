@@ -1,0 +1,24 @@
+# Docker Build Context Ignore Rules
+# See: documents/engineering/build_artifact_management.md
+
+# Poetry lockfiles (regenerated inside container)
+../poetry.lock
+
+# Python caches
+../__pycache__/
+../.pytest_cache/
+../.mypy_cache/
+
+# Build artifacts
+../dist/
+../build/
+../*.egg-info/
+
+# Protobuf generated code (regenerated during build from .proto sources)
+../src/spectralmc/proto/*_pb2.py
+
+# Development artifacts
+../.miniodata/
+
+# Git metadata
+../.git/

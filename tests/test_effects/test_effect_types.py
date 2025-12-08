@@ -21,6 +21,7 @@ from spectralmc.effects import (
     ForwardPass,
     GenerateNormals,
     GPUEffect,
+    InvalidTransferError,
     KernelLaunch,
     MonteCarloEffect,
     OptimizerStep,
@@ -31,10 +32,12 @@ from spectralmc.effects import (
     StorageEffect,
     StreamSync,
     TensorTransfer,
+    tensor_transfer,
     TrainingEffect,
     WriteObject,
 )
 from spectralmc.models.torch import Device
+from spectralmc.result import Failure
 
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
@@ -57,9 +60,11 @@ class TestGPUEffects:
             setattr(effect, "tensor_id", "other")
 
     def test_tensor_transfer_same_device_raises(self) -> None:
-        """TensorTransfer raises ValueError for same source and target device."""
-        with pytest.raises(ValueError, match="source and target are both"):
-            TensorTransfer(source_device=Device.cpu, target_device=Device.cpu, tensor_id="x")
+        """tensor_transfer factory returns Failure for same source and target device."""
+        result = tensor_transfer(Device.cpu, Device.cpu, tensor_id="x")
+        assert isinstance(result, Failure)
+        assert isinstance(result.error, InvalidTransferError)
+        assert result.error.device == Device.cpu
 
     def test_stream_sync_creation(self) -> None:
         """StreamSync is created with correct defaults."""

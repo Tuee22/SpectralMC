@@ -330,24 +330,28 @@ async def cmd_gc_preview(bucket_name: str, keep_versions: int, protect_tags: str
                 tags = [int(t.strip()) for t in protect_tags.split(",")]
 
             # Run GC in dry-run mode
-            report = await run_gc(
+            result = await run_gc(
                 store, keep_versions=keep_versions, protect_tags=tags, dry_run=True
             )
 
-            print(
-                json.dumps(
-                    {
-                        "dry_run": True,
-                        "deleted_versions": report.deleted_versions,
-                        "protected_versions": report.protected_versions,
-                        "bytes_freed": report.bytes_freed,
-                        "mb_freed": round(report.bytes_freed / (1024 * 1024), 2),
-                    },
-                    indent=2,
-                )
-            )
-
-            return 0
+            match result:
+                case Success(report):
+                    print(
+                        json.dumps(
+                            {
+                                "dry_run": True,
+                                "deleted_versions": report.deleted_versions,
+                                "protected_versions": report.protected_versions,
+                                "bytes_freed": report.bytes_freed,
+                                "mb_freed": round(report.bytes_freed / (1024 * 1024), 2),
+                            },
+                            indent=2,
+                        )
+                    )
+                    return 0
+                case Failure(error):
+                    print(f"✗ GC preview failed: {error.message}", file=sys.stderr)
+                    return 2
 
     except (VersionNotFoundError, StorageError, HeadNotFoundError) as e:
         print(f"✗ Error during GC preview: {e}", file=sys.stderr)
@@ -378,31 +382,42 @@ async def cmd_gc_run(
 
             # First, preview what will be deleted
             if not confirm:
-                preview_report = await run_gc(
+                preview_result = await run_gc(
                     store, keep_versions=keep_versions, protect_tags=tags, dry_run=True
                 )
+                match preview_result:
+                    case Success(preview_report):
+                        print(f"Will delete {len(preview_report.deleted_versions)} versions:")
+                        print(f"  Versions to delete: {preview_report.deleted_versions}")
+                        print(f"  Versions to keep: {preview_report.protected_versions}")
+                        print(
+                            f"  Space to free: {round(preview_report.bytes_freed / (1024 * 1024), 2)} MB"
+                        )
+                        print()
 
-                print(f"Will delete {len(preview_report.deleted_versions)} versions:")
-                print(f"  Versions to delete: {preview_report.deleted_versions}")
-                print(f"  Versions to keep: {preview_report.protected_versions}")
-                print(f"  Space to free: {round(preview_report.bytes_freed / (1024 * 1024), 2)} MB")
-                print()
-
-                response = input("Proceed with deletion? [y/N] ")
-                if response.lower() != "y":
-                    print("Aborted")
-                    return 0
+                        response = input("Proceed with deletion? [y/N] ")
+                        if response.lower() != "y":
+                            print("Aborted")
+                            return 0
+                    case Failure(error):
+                        print(f"✗ GC preview failed: {error.message}", file=sys.stderr)
+                        return 2
 
             # Actually run GC
-            report = await run_gc(
+            result = await run_gc(
                 store, keep_versions=keep_versions, protect_tags=tags, dry_run=False
             )
-
-            print("✓ Garbage collection completed:")
-            print(f"  Deleted {len(report.deleted_versions)} versions: {report.deleted_versions}")
-            print(f"  Freed {round(report.bytes_freed / (1024 * 1024), 2)} MB")
-
-            return 0
+            match result:
+                case Success(report):
+                    print("✓ Garbage collection completed:")
+                    print(
+                        f"  Deleted {len(report.deleted_versions)} versions: {report.deleted_versions}"
+                    )
+                    print(f"  Freed {round(report.bytes_freed / (1024 * 1024), 2)} MB")
+                    return 0
+                case Failure(error):
+                    print(f"✗ GC failed: {error.message}", file=sys.stderr)
+                    return 2
 
     except (VersionNotFoundError, StorageError, HeadNotFoundError) as e:
         print(f"✗ Error during GC: {e}", file=sys.stderr)

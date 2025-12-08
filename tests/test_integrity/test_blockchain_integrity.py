@@ -172,8 +172,8 @@ def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPri
         skip=0,
         dtype=Precision.float32,
     ):
-        case Failure(err):
-            pytest.fail(f"SimulationParams creation failed: {err}")
+        case Failure(sim_err):
+            pytest.fail(f"SimulationParams creation failed: {sim_err}")
         case Success(sim_params):
             pass
 
@@ -182,8 +182,8 @@ def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPri
         simulate_log_return=True,
         normalize_forwards=True,
     ):
-        case Failure(err):
-            pytest.fail(f"BlackScholesConfig creation failed: {err}")
+        case Failure(bs_err):
+            pytest.fail(f"BlackScholesConfig creation failed: {bs_err}")
         case Success(bs_config):
             pass
 
