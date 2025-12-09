@@ -466,11 +466,14 @@ class GbmCVNNPricer:
         self._cupy_cdtype: cp.dtype = self._complex_dtype.to_cupy()
 
         # Execution context (CUDA-only) --------------------------------- #
-        if self._device != Device.cuda:
-            raise RuntimeError(
-                "GbmCVNNPricer requires CUDA. "
-                f"Model is on device={self._device}, but CUDA is required for training."
-            )
+        match self._device:
+            case Device.cuda:
+                pass  # Valid device
+            case other_device:
+                raise RuntimeError(
+                    "GbmCVNNPricer requires CUDA. "
+                    f"Model is on device={other_device}, but CUDA is required for training."
+                )
 
         self._context: CudaExecutionContext = CudaExecutionContext(
             torch_stream=torch.cuda.Stream(device=self._device.to_torch()),
@@ -489,26 +492,35 @@ class GbmCVNNPricer:
         self._sampler_result = sampler_result
 
         # Restore RNG states for deterministic reproducibility ----------- #
-        if cfg.torch_cpu_rng_state is not None:
-            torch.set_rng_state(
-                torch.from_numpy(np.frombuffer(cfg.torch_cpu_rng_state, dtype=np.uint8).copy())
-            )
-        if cfg.torch_cuda_rng_states is not None:
-            if not torch.cuda.is_available():
-                raise RuntimeError(
-                    "Cannot restore CUDA RNG state: CUDA is not available. "
-                    "Checkpoint contains CUDA RNG state but current environment has no GPU."
+        match cfg.torch_cpu_rng_state:
+            case None:
+                pass  # No CPU RNG state to restore
+            case cpu_state:
+                torch.set_rng_state(
+                    torch.from_numpy(np.frombuffer(cpu_state, dtype=np.uint8).copy())
                 )
-            torch.cuda.set_rng_state_all(
-                list(
-                    map(
-                        lambda state_bytes: torch.from_numpy(
-                            np.frombuffer(state_bytes, dtype=np.uint8).copy()
-                        ),
-                        cfg.torch_cuda_rng_states,
-                    )
-                )
-            )
+
+        match cfg.torch_cuda_rng_states:
+            case None:
+                pass  # No CUDA RNG state to restore
+            case cuda_states:
+                match torch.cuda.is_available():
+                    case False:
+                        raise RuntimeError(
+                            "Cannot restore CUDA RNG state: CUDA is not available. "
+                            "Checkpoint contains CUDA RNG state but current environment has no GPU."
+                        )
+                    case True:
+                        torch.cuda.set_rng_state_all(
+                            list(
+                                map(
+                                    lambda state_bytes: torch.from_numpy(
+                                        np.frombuffer(state_bytes, dtype=np.uint8).copy()
+                                    ),
+                                    cuda_states,
+                                )
+                            )
+                        )
 
         # Dedicated logging interpreter (side effects executed outside business logic)
         self._logging_interpreter: LoggingInterpreter = LoggingInterpreter(
@@ -1151,12 +1163,15 @@ class GbmCVNNPricer:
         # No need to check CUDA - _context guarantees we're on CUDA
         # (enforced by __init__ which raises RuntimeError if not on CUDA)
 
-        if (auto_commit or commit_interval is not None) and blockchain_store is None:
-            return Failure(
-                InvalidTrainerConfig(
-                    message="auto_commit or commit_interval requires blockchain_store to be provided"
+        match (auto_commit, commit_interval is not None, blockchain_store is not None):
+            case (True, _, False) | (_, True, False):
+                return Failure(
+                    InvalidTrainerConfig(
+                        message="auto_commit or commit_interval requires blockchain_store to be provided"
+                    )
                 )
-            )
+            case _:
+                pass  # Valid configuration
 
         match self._sampler_result:
             case Failure(error):
@@ -1173,16 +1188,19 @@ class GbmCVNNPricer:
         adam = optim.Adam(self._cvnn.parameters(), lr=config.learning_rate)
 
         # (re-)attach previous optimiser state -------------------------- #
-        if self._optimizer_state is not None:
-            match self._optimizer_state.to_torch():
-                case Failure(opt_err):
-                    return Failure(
-                        OptimizerStateSerializationFailed(
-                            message=f"Failed to deserialize optimizer state: {opt_err}"
+        match self._optimizer_state:
+            case None:
+                pass  # No previous optimizer state to restore
+            case optimizer_state:
+                match optimizer_state.to_torch():
+                    case Failure(opt_err):
+                        return Failure(
+                            OptimizerStateSerializationFailed(
+                                message=f"Failed to deserialize optimizer state: {opt_err}"
+                            )
                         )
-                    )
-                case Success(state_dict):
-                    adam.load_state_dict(state_dict)
+                    case Success(state_dict):
+                        adam.load_state_dict(state_dict)
 
         self._cvnn.train()
 

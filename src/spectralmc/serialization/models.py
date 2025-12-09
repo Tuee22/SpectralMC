@@ -96,8 +96,11 @@ class LinearCfgConverter:
         proto = models_pb2.LinearCfgProto()
         proto.width.CopyFrom(WidthSpecConverter.to_proto(cfg.width))
         proto.bias = cfg.bias
-        if cfg.activation:
-            proto.activation.CopyFrom(ActivationCfgConverter.to_proto(cfg.activation))
+        match cfg.activation:
+            case None:
+                pass  # No activation to serialize
+            case activation:
+                proto.activation.CopyFrom(ActivationCfgConverter.to_proto(activation))
         return proto
 
     @staticmethod
@@ -110,14 +113,16 @@ class LinearCfgConverter:
             case Success(width):
                 pass
 
-        activation: ActivationCfg | None = None
-        if proto.HasField("activation"):
-            activation_result = ActivationCfgConverter.from_proto(proto.activation)
-            match activation_result:
-                case Failure(error):
-                    return Failure(error)
-                case Success(act):
-                    activation = act
+        match proto.HasField("activation"):
+            case False:
+                activation: ActivationCfg | None = None
+            case True:
+                activation_result = ActivationCfgConverter.from_proto(proto.activation)
+                match activation_result:
+                    case Failure(error):
+                        return Failure(error)
+                    case Success(act):
+                        activation = act
 
         cfg_result = validate_model(
             LinearCfg,

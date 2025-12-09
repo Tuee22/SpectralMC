@@ -356,14 +356,9 @@ class TorchEnv(BaseModel):
 
     @classmethod
     def snapshot(cls) -> TorchEnv:
-        if _HAS_CUDA:
-            cuda_ver = torch.version.cuda or "<unknown>"
-            cudnn_ver = torch.backends.cudnn.version() or -1
-            gpu = torch.cuda.get_device_name(0)
-        else:
-            cuda_ver = "<not available>"
-            cudnn_ver = -1
-            gpu = "<cpu>"
+        cuda_ver = (torch.version.cuda or "<unknown>") if _HAS_CUDA else "<not available>"
+        cudnn_ver = (torch.backends.cudnn.version() or -1) if _HAS_CUDA else -1
+        gpu = torch.cuda.get_device_name(0) if _HAS_CUDA else "<cpu>"
         return cls(
             torch_version=torch.__version__,
             cuda_version=cuda_ver,

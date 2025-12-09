@@ -278,8 +278,11 @@ class AdamOptimizerStateConverter:
         first_failure = next(
             (result for result in param_entries_results if isinstance(result, Failure)), None
         )
-        if first_failure is not None:
-            return first_failure
+        match first_failure:
+            case None:
+                pass  # No failures, continue
+            case failure:
+                return failure
 
         # All conversions succeeded - populate proto (mutation required by protobuf API)
         # Use comprehension for iteration (CopyFrom mutation unavoidable with protobuf)
@@ -331,8 +334,11 @@ class AdamOptimizerStateConverter:
         first_failure = next(
             (result for result in param_state_results if isinstance(result, Failure)), None
         )
-        if first_failure is not None:
-            return first_failure
+        match first_failure:
+            case None:
+                pass  # No failures, continue
+            case failure:
+                return failure
 
         # All conversions succeeded - build dict
         param_states = {
@@ -443,9 +449,11 @@ class ModelCheckpointConverter:
             ),
             None,
         )
-        if first_failure_tuple is not None:
-            _, failure_result = first_failure_tuple
-            return Failure(failure_result.error)
+        match first_failure_tuple:
+            case None:
+                pass  # No failures, continue
+            case (_, failure_result):
+                return Failure(failure_result.error)
 
         # Populate proto (mutation required by protobuf API)
         _ = [
@@ -503,9 +511,11 @@ class ModelCheckpointConverter:
             ),
             None,
         )
-        if first_failure_tuple is not None:
-            _, failure_result = first_failure_tuple
-            return Failure(failure_result.error)
+        match first_failure_tuple:
+            case None:
+                pass  # No failures, continue
+            case (_, failure_result):
+                return Failure(failure_result.error)
 
         # Build dict from successful results
         model_state_dict: dict[str, torch.Tensor] = {

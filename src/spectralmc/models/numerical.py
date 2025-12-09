@@ -143,10 +143,11 @@ class Precision(str, Enum):
     @classmethod
     def from_numpy(cls, dtype: _NPDTypeLike) -> Result[Precision, UnsupportedNumPyDType]:
         """Map a NumPy *dtype* or scalar class back to :class:`Precision`."""
-        precision_str = _NP_TO_PRECISION_STR.get(dtype)
-        if precision_str is None:
-            return Failure(UnsupportedNumPyDType(dtype_repr=repr(dtype)))
-        return Success(cls(precision_str))
+        match _NP_TO_PRECISION_STR.get(dtype):
+            case None:
+                return Failure(UnsupportedNumPyDType(dtype_repr=repr(dtype)))
+            case precision_str:
+                return Success(cls(precision_str))
 
     # ------------------------------------------------------------------ #
     # CuPy helpers
@@ -158,25 +159,28 @@ class Precision(str, Enum):
     @classmethod
     def from_cupy(cls, dtype: _CPDTypeLike) -> Result[Precision, UnsupportedCuPyDType]:
         """Map a CuPy *dtype* or scalar class back to :class:`Precision`."""
-        precision_str = _CP_TO_PRECISION_STR.get(dtype)
-        if precision_str is None:
-            return Failure(UnsupportedCuPyDType(dtype_repr=repr(dtype)))
-        return Success(cls(precision_str))
+        match _CP_TO_PRECISION_STR.get(dtype):
+            case None:
+                return Failure(UnsupportedCuPyDType(dtype_repr=repr(dtype)))
+            case precision_str:
+                return Success(cls(precision_str))
 
     # ------------------------------------------------------------------ #
     # Complex helpers (pure, branch-free)
     # ------------------------------------------------------------------ #
     def to_complex(self) -> Result[Precision, InvalidComplexConversion]:
         """Return the complex counterpart (idempotent for complex inputs)."""
-        complex_str = _PRECISION_TO_COMPLEX_STR.get(self.value)
-        if complex_str is None:
-            return Failure(InvalidComplexConversion(precision=self.value))
-        return Success(Precision(complex_str))
+        match _PRECISION_TO_COMPLEX_STR.get(self.value):
+            case None:
+                return Failure(InvalidComplexConversion(precision=self.value))
+            case complex_str:
+                return Success(Precision(complex_str))
 
     @classmethod
     def from_complex(cls, prec: Precision) -> Result[Precision, InvalidComplexConversion]:
         """Return the *real* precision behind a complex format (idempotent)."""
-        float_str = _COMPLEX_TO_FLOAT_STR.get(prec.value)
-        if float_str is None:
-            return Failure(InvalidComplexConversion(precision=prec.value))
-        return Success(cls(float_str))
+        match _COMPLEX_TO_FLOAT_STR.get(prec.value):
+            case None:
+                return Failure(InvalidComplexConversion(precision=prec.value))
+            case float_str:
+                return Success(cls(float_str))

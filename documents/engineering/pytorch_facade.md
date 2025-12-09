@@ -17,6 +17,8 @@
 
 SpectralMC uses a custom PyTorch facade (`spectralmc.models.torch`) to ensure guaranteed reproducibility of training across different environments. This facade **must** be imported before any direct PyTorch imports.
 
+**Note on Purity**: The facade is infrastructure code and is **exempt from purity requirements** per [purity_doctrine.md#scope-and-architectural-boundaries](purity_doctrine.md#scope-and-architectural-boundaries). Its intentionally effectful patterns (import guards, global configuration, thread safety checks) provide the deterministic foundation that pure business logic relies on.
+
 ---
 
 ## Rationale

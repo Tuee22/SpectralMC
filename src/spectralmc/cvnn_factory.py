@@ -270,12 +270,15 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> CVNNFactoryResult[tuple[nn.Mod
                 proj_mod = ComplexLinear(cur_w, body_w)
                 proj_w = body_w
 
-            if proj_w != body_w:
-                return Failure(
-                    SerializationDeviceMismatch(
-                        message=f"Residual projection width {proj_w} does not match body width {body_w}."
+            match proj_w == body_w:
+                case False:
+                    return Failure(
+                        SerializationDeviceMismatch(
+                            message=f"Residual projection width {proj_w} does not match body width {body_w}."
+                        )
                     )
-                )
+                case True:
+                    pass  # Widths match, continue
 
             res = ComplexResidual(
                 body=body_mod,
@@ -331,8 +334,11 @@ def load_model(
     *, model: nn.Module, tensors: dict[str, TensorState]
 ) -> CVNNFactoryResult[nn.Module]:
     off_cpu = next((p for p in model.parameters() if p.device.type != Device.cpu.value), None)
-    if off_cpu is not None:
-        return Failure(ModelOnWrongDevice(device=str(off_cpu.device)))
+    match off_cpu:
+        case None:
+            pass  # All parameters on CPU, continue
+        case param:
+            return Failure(ModelOnWrongDevice(device=str(param.device)))
 
     tensor_results = [_convert_tensor_state_entry((name, ts)) for name, ts in tensors.items()]
 
@@ -359,8 +365,11 @@ def _convert_torch_tensor_entry(
 
 def get_safetensors(model: nn.Module) -> CVNNFactoryResult[dict[str, TensorState]]:
     off_cpu = next((p for p in model.parameters() if p.device.type != Device.cpu.value), None)
-    if off_cpu is not None:
-        return Failure(ModelOnWrongDevice(device=str(off_cpu.device)))
+    match off_cpu:
+        case None:
+            pass  # All parameters on CPU, continue
+        case param:
+            return Failure(ModelOnWrongDevice(device=str(param.device)))
 
     tensor_results = [
         _convert_torch_tensor_entry((name, tensor)) for name, tensor in model.state_dict().items()

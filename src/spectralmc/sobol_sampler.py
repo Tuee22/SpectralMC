@@ -185,8 +185,11 @@ class SobolSampler(Generic[PointT]):
             lower = np.array([dimensions[f].lower for f in fields], dtype=np.float64)
             upper = np.array([dimensions[f].upper for f in fields], dtype=np.float64)
             sampler = Sobol(d=len(fields), scramble=True, seed=config.seed)
-            if config.skip:
-                sampler.fast_forward(config.skip)
+            match config.skip:
+                case 0:
+                    pass  # No skip, use default starting point
+                case skip_count:
+                    sampler.fast_forward(skip_count)
         except Exception as exc:  # pragma: no cover - SciPy-specific edge
             return Failure(InvalidBounds(message=str(exc)))
 

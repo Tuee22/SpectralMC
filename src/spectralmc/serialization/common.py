@@ -54,10 +54,11 @@ class PrecisionConverter:
             common_pb2.PRECISION_FLOAT32: Precision.float32,
             common_pb2.PRECISION_FLOAT64: Precision.float64,
         }
-        precision = mapping.get(proto_value)
-        if precision is None:
-            return Failure(UnsupportedPrecision(proto_value=proto_value))
-        return Success(precision)
+        match mapping.get(proto_value):
+            case None:
+                return Failure(UnsupportedPrecision(proto_value=proto_value))
+            case precision:
+                return Success(precision)
 
 
 class DeviceConverter:
@@ -88,18 +89,20 @@ class DTypeConverter:
     @staticmethod
     def to_proto(dtype: AnyDType) -> SerializationResult[int]:
         """Convert FullPrecisionDType or ReducedPrecisionDType to proto enum value."""
-        proto_value = _DTYPE_TO_PROTO.get(dtype)
-        if proto_value is None:
-            return Failure(UnknownDType(proto_value=0))  # No valid proto value for unknown dtype
-        return Success(proto_value)
+        match _DTYPE_TO_PROTO.get(dtype):
+            case None:
+                return Failure(UnknownDType(proto_value=0))  # No valid proto value for unknown dtype
+            case proto_value:
+                return Success(proto_value)
 
     @staticmethod
     def from_proto(proto_value: int) -> SerializationResult[AnyDType]:
         """Convert proto enum value to FullPrecisionDType or ReducedPrecisionDType."""
-        dtype = _PROTO_TO_DTYPE.get(proto_value)
-        if dtype is None:
-            return Failure(UnknownDType(proto_value=proto_value))
-        return Success(dtype)
+        match _PROTO_TO_DTYPE.get(proto_value):
+            case None:
+                return Failure(UnknownDType(proto_value=proto_value))
+            case dtype:
+                return Success(dtype)
 
 
 __all__ = [

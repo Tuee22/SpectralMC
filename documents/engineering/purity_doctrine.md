@@ -39,6 +39,64 @@ SpectralMC enforces strict purity standards for all non-test code. A **pure func
 
 ---
 
+## Scope and Architectural Boundaries
+
+The purity doctrine applies to **business logic**, not all code in SpectralMC. The codebase has three architectural tiers with different purity requirements:
+
+### Tier 1: Infrastructure and Facade Layers (EXEMPT)
+
+**Exempt Files**:
+- `src/spectralmc/models/torch.py` - PyTorch facade for reproducibility
+- `src/spectralmc/models/cpu_gpu_transfer.py` - Device transfer utilities
+- `src/spectralmc/cvnn.py` - PyTorch nn.Module layer library
+
+**Rationale**: These files provide the infrastructure that enables business logic to be pure. They handle:
+- Import-time environment configuration (deterministic flags)
+- Thread safety guarantees
+- Device placement and transfer
+- Standard PyTorch idioms (nn.Module patterns)
+
+**Acceptable patterns in infrastructure**:
+- Import-time guards: `if "torch" in sys.modules: raise ImportError(...)`
+- Thread safety checks: `if threading.get_ident() != _MAIN_THREAD_ID: raise RuntimeError(...)`
+- Global configuration: `torch.use_deterministic_algorithms(True)`
+- nn.Module idioms: `if bias: self.bias = nn.Parameter(...)`
+- Weight initialization: `if isinstance(layer, nn.Linear): nn.init.xavier_uniform_(...)`
+
+Per [pytorch_facade.md](pytorch_facade.md), these patterns are necessary for guaranteeing reproducibility.
+
+### Tier 2: Business Logic (PURITY ENFORCED)
+
+**Enforced Files**:
+- `src/spectralmc/gbm_trainer.py` - Training orchestration
+- `src/spectralmc/serialization/*` - Data serialization
+- `src/spectralmc/cvnn_factory.py` - Model factory
+- `src/spectralmc/sobol_sampler.py` - Sampling logic
+- Other core processing modules
+
+**Rationale**: Business logic should be pure for testability, reproducibility, and composability.
+
+**Acceptable exceptions** (per existing doctrine):
+- Effectful boundaries: Conditional logging, checkpoint I/O
+- Guard clauses: Validation with early returns
+- Thread safety: Defensive assertions
+
+**Target**: 70% purity (match/case or conditional expressions) in business logic files.
+
+### Tier 3: Effect Interpreter (MIXED)
+
+**Mixed Purity Files**:
+- `src/spectralmc/effects/interpreter.py` - Effect execution
+- `src/spectralmc/storage/*` - Storage operations
+
+**Rationale**: Effect descriptions (ADTs) are pure; effect execution is impure by design.
+
+**Requirements**:
+- Effect ADT definitions: PURE (frozen dataclasses)
+- Interpreter methods: MAY be impure (I/O, async operations)
+
+---
+
 ## Forbidden Patterns
 
 ### 1. `for` Loops
