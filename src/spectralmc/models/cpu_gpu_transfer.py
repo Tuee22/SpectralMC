@@ -226,11 +226,11 @@ def get_tree_device_dtype(tree: TensorTree) -> Result[tuple[Device, AnyDType], T
         return Failure(UnsupportedTorchDType(dtype=str(dt)))
     dtype_str = _TORCH_DTYPE_TO_STR[dt]
 
-    dtype: AnyDType
-    if dtype_str in ("float32", "float64", "complex64", "complex128"):
-        dtype = FullPrecisionDType(dtype_str)
-    else:
-        dtype = ReducedPrecisionDType(dtype_str)
+    dtype: AnyDType = (
+        FullPrecisionDType(dtype_str)
+        if dtype_str in ("float32", "float64", "complex64", "complex128")
+        else ReducedPrecisionDType(dtype_str)
+    )
 
     match Device.from_torch(dev):
         case Success(device):

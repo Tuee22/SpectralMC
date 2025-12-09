@@ -5,7 +5,7 @@
 **Supersedes**: Prior blockchain storage notes  
 **Referenced by**: documents/product/deployment.md
 
-> **Purpose**: Summarize the blockchain model versioning approach used in SpectralMC.
+> **Purpose**: Define blockchain-based model versioning architecture using S3 storage, atomic CAS commits, and semantic versioning for production ML models.
 
 ## Cross-References
 - [effect_interpreter.md](effect_interpreter.md)

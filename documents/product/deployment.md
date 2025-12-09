@@ -1,9 +1,9 @@
 # File: documents/product/deployment.md
 # SpectralMC Blockchain Storage - Production Deployment Guide
 
-**Status**: Reference only  
-**Supersedes**: Prior blockchain storage deployment guides  
-**Referenced by**: documents/product/index.md; documents/testing_architecture.md
+**Status**: Reference only
+**Supersedes**: Prior blockchain storage deployment guides
+**Referenced by**: documents/product/index.md; engineering/testing_requirements.md
 
 > **Purpose**: Provide deployment guidance for SpectralMC blockchain storage across AWS S3 and MinIO environments.
 > **📖 Authoritative Reference**: [../engineering/blockchain_storage.md](../engineering/blockchain_storage.md)

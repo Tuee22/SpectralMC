@@ -32,21 +32,23 @@ class WidthSpecConverter:
     def to_proto(width: WidthSpec) -> models_pb2.WidthSpecProto:
         """Convert to proto."""
         proto = models_pb2.WidthSpecProto()
-        if isinstance(width, PreserveWidth):
-            proto.preserve.CopyFrom(models_pb2.PreserveWidthProto())
-        elif isinstance(width, ExplicitWidth):
-            proto.explicit.value = width.value
+        match width:
+            case PreserveWidth():
+                proto.preserve.CopyFrom(models_pb2.PreserveWidthProto())
+            case ExplicitWidth(value=v):
+                proto.explicit.value = v
         return proto
 
     @staticmethod
     def from_proto(proto: models_pb2.WidthSpecProto) -> SerializationResult[WidthSpec]:
         """Convert from proto."""
-        which = proto.WhichOneof("spec")
-        if which == "preserve":
-            return Success(PreserveWidth())
-        if which == "explicit":
-            return Success(ExplicitWidth(value=proto.explicit.value))
-        return Failure(InvalidWidthSpecProto(variant=which))
+        match proto.WhichOneof("spec"):
+            case "preserve":
+                return Success(PreserveWidth())
+            case "explicit":
+                return Success(ExplicitWidth(value=proto.explicit.value))
+            case variant:
+                return Failure(InvalidWidthSpecProto(variant=variant))
 
 
 class ActivationCfgConverter:
@@ -71,9 +73,12 @@ class ActivationCfgConverter:
             models_pb2.ACTIVATION_KIND_MOD_RELU: ActivationKind.MOD_RELU,
             models_pb2.ACTIVATION_KIND_Z_RELU: ActivationKind.Z_RELU,
         }
-        kind = kind_mapping.get(proto.kind)
-        if kind is None:
-            return Failure(UnknownActivationKind(value=proto.kind))
+        match kind_mapping.get(proto.kind):
+            case None:
+                return Failure(UnknownActivationKind(value=proto.kind))
+            case kind:
+                pass
+
         result = validate_model(ActivationCfg, kind=kind)
         match result:
             case Failure(error):

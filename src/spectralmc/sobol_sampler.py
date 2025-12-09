@@ -35,7 +35,7 @@ from typing import Annotated, Generic, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 from scipy.stats.qmc import Sobol
 
 from spectralmc.errors.sampler import (
@@ -82,6 +82,9 @@ class SobolConfig(BaseModel):
 class BoundSpec(BaseModel):
     """Inclusive numeric bounds for a single coordinate axis.
 
+    Construct via ``build_bound_spec()`` factory to ensure bounds are valid.
+    Direct construction bypasses validation and may create invalid states.
+
     Attributes
     ----------
     lower
@@ -89,23 +92,15 @@ class BoundSpec(BaseModel):
     upper
         Inclusive upper bound.
 
-    Raises
-    ------
-    ValueError
-        If ``lower`` ≥ ``upper`` after validation.
+    See Also
+    --------
+    build_bound_spec : Factory function with Result-typed validation
     """
 
     lower: float
     upper: float
 
     model_config = ConfigDict(frozen=True, extra="forbid")
-
-    @model_validator(mode="after")
-    def _validate(self) -> "BoundSpec":
-        """Ensure the lower bound is strictly less than the upper bound."""
-        if self.lower >= self.upper:
-            raise ValueError("`lower` must be strictly less than `upper`.")
-        return self
 
 
 def build_bound_spec(lower: float, upper: float) -> Result[BoundSpec, BoundSpecInvalid]:
@@ -168,13 +163,23 @@ class SobolSampler(Generic[PointT]):
         """Pure factory for SobolSampler."""
 
         fields: list[str] = list(pydantic_class.model_fields)
-        if set(fields) != set(dimensions.keys()):
-            return Failure(
+
+        # Validate dimension keys match model fields
+        dimension_check: Result[None, DimensionMismatch] = (
+            Failure(
                 DimensionMismatch(
                     expected_fields=tuple(fields),
                     provided_fields=tuple(dimensions.keys()),
                 )
             )
+            if set(fields) != set(dimensions.keys())
+            else Success(None)
+        )
+        match dimension_check:
+            case Failure() as f:
+                return f
+            case Success(_):
+                pass
 
         try:
             lower = np.array([dimensions[f].lower for f in fields], dtype=np.float64)
@@ -210,11 +215,18 @@ class SobolSampler(Generic[PointT]):
         self, n_samples: int
     ) -> Result[list[PointT], NegativeSamples | SamplerValidationFailed]:
         """Return a list of Sobol points."""
-        if n_samples < 0:
-            return Failure(NegativeSamples(n_samples=n_samples))
-        if n_samples == 0:
-            return Success([])
+        match n_samples:
+            case n if n < 0:
+                return Failure(NegativeSamples(n_samples=n_samples))
+            case 0:
+                return Success([])
+            case _:
+                return self._sample_nonzero(n_samples)
 
+    def _sample_nonzero(
+        self, n_samples: int
+    ) -> Result[list[PointT], NegativeSamples | SamplerValidationFailed]:
+        """Generate n_samples Sobol points (n_samples > 0)."""
         raw: NDArray[np.float64] = self._sampler.random(n_samples)
         scaled: NDArray[np.float64] = self._lower + (self._upper - self._lower) * raw
 

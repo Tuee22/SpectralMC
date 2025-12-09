@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
+from spectralmc.errors.sampler import BoundSpecInvalid
 from spectralmc.errors.serialization import (
     UnsupportedPrecision,
     UnknownThreadsPerBlock,
-    ValidationFailed,
 )
 from spectralmc.proto import common_pb2, simulation_pb2
 from spectralmc.result import Failure, Success
@@ -65,13 +65,15 @@ def test_simulation_params_invalid_dtype() -> None:
 
 
 def test_bound_spec_validation_failure() -> None:
-    """BoundSpec proto with invalid bounds yields ValidationFailed."""
+    """BoundSpec proto with invalid bounds yields BoundSpecInvalid."""
     proto = simulation_pb2.BoundSpecProto()
     proto.lower = 1.0
     proto.upper = 0.5
     result = BoundSpecConverter.from_proto(proto)
     match result:
         case Failure(error):
-            assert isinstance(error, ValidationFailed)
+            assert isinstance(error, BoundSpecInvalid)
+            assert error.lower == 1.0
+            assert error.upper == 0.5
         case Success(_):
-            raise AssertionError("expected ValidationFailed")
+            raise AssertionError("expected BoundSpecInvalid")

@@ -44,7 +44,7 @@ Only source-of-truth inputs are versioned. Anything produced by a build step is 
 
 - `.gitignore`: exclude lockfiles and build/caches with comments describing why/how to regenerate.
 - `.dockerignore`: exclude the same artifacts to keep build context minimal.
-- See [Documentation Standards](../documentation_standards.md#gitignore-and-dockerignore-rules) for comment format.
+- See [Documentation Standards](../documentation_standards.md) for file naming and comment formatting conventions.
 
 ## Regeneration Workflow (Inside Docker)
 

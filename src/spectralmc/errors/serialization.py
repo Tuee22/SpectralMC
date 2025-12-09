@@ -12,6 +12,7 @@ from spectralmc.errors.gbm import (
     InvalidBlackScholesConfig,
     InvalidSimulationParams,
 )
+from spectralmc.errors.sampler import BoundSpecInvalid
 from spectralmc.result import Result
 
 
@@ -92,6 +93,7 @@ SerializationError = (
     | InvalidSimulationParams
     | GPUMemoryLimitExceeded
     | InvalidBlackScholesConfig
+    | BoundSpecInvalid
 )
 
 T = TypeVar("T")

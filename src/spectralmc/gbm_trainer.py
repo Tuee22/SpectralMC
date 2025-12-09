@@ -46,6 +46,7 @@ import asyncio
 import math
 import time
 import warnings
+from collections import deque
 from dataclasses import dataclass
 from itertools import chain
 from typing import (
@@ -389,10 +390,25 @@ class TensorBoardLogger:
         w.add_scalar("BatchTime", metrics.batch_time, step)
 
         if step % self._hist_every == 0:
-            for name, param in metrics.model.named_parameters():
-                w.add_histogram(name, param, step)
-                if param.grad is not None:
-                    w.add_histogram(f"{name}.grad", param.grad, step)
+            # Pure: Build list of (name, param) pairs via comprehension
+            param_pairs = list(metrics.model.named_parameters())
+
+            # Write parameter histograms (consume generator for side effects)
+            # mypy limitation: add_histogram returns None, but deque(gen, maxlen=0) is idiomatic for side effects
+            deque(
+                (w.add_histogram(name, param, step) for name, param in param_pairs),  # type: ignore[func-returns-value]
+                maxlen=0,
+            )
+
+            # Write gradient histograms (consume generator for side effects)
+            deque(
+                (
+                    w.add_histogram(f"{name}.grad", param.grad, step)  # type: ignore[func-returns-value]
+                    for name, param in param_pairs
+                    if param.grad is not None
+                ),
+                maxlen=0,
+            )
 
         if step % self._flush_every == 0:
             w.flush()

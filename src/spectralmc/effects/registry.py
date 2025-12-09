@@ -114,10 +114,11 @@ class SharedRegistry:
         Returns:
             Success with tensor, or Failure with RegistryKeyNotFound.
         """
-        value = self._tensors.get(tensor_id)
-        if value is None:
-            return Failure(RegistryKeyNotFound(key=tensor_id, expected_type="tensor"))
-        return Success(value)
+        match self._tensors.get(tensor_id):
+            case None:
+                return Failure(RegistryKeyNotFound(key=tensor_id, expected_type="tensor"))
+            case value:
+                return Success(value)
 
     def get_torch_tensor(self, tensor_id: str) -> Result[torch.Tensor, RegistryError]:
         """Get a PyTorch tensor by ID with type validation.
@@ -128,18 +129,19 @@ class SharedRegistry:
         Returns:
             Success with torch.Tensor, or Failure with error.
         """
-        value = self._tensors.get(tensor_id)
-        if value is None:
-            return Failure(RegistryKeyNotFound(key=tensor_id, expected_type="torch.Tensor"))
-        if not isinstance(value, torch.Tensor):
-            return Failure(
-                RegistryTypeMismatch(
-                    key=tensor_id,
-                    expected_type="torch.Tensor",
-                    actual_type=type(value).__name__,
+        match self._tensors.get(tensor_id):
+            case None:
+                return Failure(RegistryKeyNotFound(key=tensor_id, expected_type="torch.Tensor"))
+            case torch.Tensor() as value:
+                return Success(value)
+            case value:
+                return Failure(
+                    RegistryTypeMismatch(
+                        key=tensor_id,
+                        expected_type="torch.Tensor",
+                        actual_type=type(value).__name__,
+                    )
                 )
-            )
-        return Success(value)
 
     def get_cupy_array(self, tensor_id: str) -> Result[cp.ndarray, RegistryError]:
         """Get a CuPy array by ID with type validation.
@@ -150,18 +152,19 @@ class SharedRegistry:
         Returns:
             Success with cp.ndarray, or Failure with error.
         """
-        value = self._tensors.get(tensor_id)
-        if value is None:
-            return Failure(RegistryKeyNotFound(key=tensor_id, expected_type="cp.ndarray"))
-        if not isinstance(value, cp.ndarray):
-            return Failure(
-                RegistryTypeMismatch(
-                    key=tensor_id,
-                    expected_type="cp.ndarray",
-                    actual_type=type(value).__name__,
+        match self._tensors.get(tensor_id):
+            case None:
+                return Failure(RegistryKeyNotFound(key=tensor_id, expected_type="cp.ndarray"))
+            case cp.ndarray() as value:
+                return Success(value)
+            case value:
+                return Failure(
+                    RegistryTypeMismatch(
+                        key=tensor_id,
+                        expected_type="cp.ndarray",
+                        actual_type=type(value).__name__,
+                    )
                 )
-            )
-        return Success(value)
 
     def has_tensor(self, tensor_id: str) -> bool:
         """Check if a tensor ID exists in the registry.
@@ -194,10 +197,11 @@ class SharedRegistry:
         Returns:
             Success with bytes, or Failure with RegistryKeyNotFound.
         """
-        value = self._bytes.get(key)
-        if value is None:
-            return Failure(RegistryKeyNotFound(key=key, expected_type="bytes"))
-        return Success(value)
+        match self._bytes.get(key):
+            case None:
+                return Failure(RegistryKeyNotFound(key=key, expected_type="bytes"))
+            case value:
+                return Success(value)
 
     def has_bytes(self, key: str) -> bool:
         """Check if a bytes key exists in the registry.
@@ -230,10 +234,11 @@ class SharedRegistry:
         Returns:
             Success with value, or Failure with RegistryKeyNotFound.
         """
-        value = self._metadata.get(key)
-        if value is None:
-            return Failure(RegistryKeyNotFound(key=key, expected_type="metadata"))
-        return Success(value)
+        match self._metadata.get(key):
+            case None:
+                return Failure(RegistryKeyNotFound(key=key, expected_type="metadata"))
+            case value:
+                return Success(value)
 
     def update_metadata(
         self,
@@ -257,22 +262,30 @@ class SharedRegistry:
                 return Success(value)
             case "add":
                 current = self._metadata.get(key, 0)
-                if isinstance(current, str) or isinstance(value, str):
-                    return Failure(
-                        RegistryTypeMismatch(key=key, expected_type="numeric", actual_type="str")
-                    )
-                new_value: int | float = current + value
-                self._metadata[key] = new_value
-                return Success(new_value)
+                match (current, value):
+                    case (str(), _) | (_, str()):
+                        return Failure(
+                            RegistryTypeMismatch(
+                                key=key, expected_type="numeric", actual_type="str"
+                            )
+                        )
+                    case _:
+                        new_value: int | float = current + value
+                        self._metadata[key] = new_value
+                        return Success(new_value)
             case "increment":
                 current = self._metadata.get(key, 0)
-                if isinstance(current, str):
-                    return Failure(
-                        RegistryTypeMismatch(key=key, expected_type="numeric", actual_type="str")
-                    )
-                new_value_inc: int | float = current + 1
-                self._metadata[key] = new_value_inc
-                return Success(new_value_inc)
+                match current:
+                    case str():
+                        return Failure(
+                            RegistryTypeMismatch(
+                                key=key, expected_type="numeric", actual_type="str"
+                            )
+                        )
+                    case _:
+                        new_value_inc: int | float = current + 1
+                        self._metadata[key] = new_value_inc
+                        return Success(new_value_inc)
 
     def has_metadata(self, key: str) -> bool:
         """Check if a metadata key exists in the registry.
@@ -305,10 +318,11 @@ class SharedRegistry:
         Returns:
             Success with model, or Failure with RegistryKeyNotFound.
         """
-        value = self._models.get(model_id)
-        if value is None:
-            return Failure(RegistryKeyNotFound(key=model_id, expected_type="model"))
-        return Success(value)
+        match self._models.get(model_id):
+            case None:
+                return Failure(RegistryKeyNotFound(key=model_id, expected_type="model"))
+            case value:
+                return Success(value)
 
     def has_model(self, model_id: str) -> bool:
         """Check if a model ID exists in the registry.
@@ -341,10 +355,11 @@ class SharedRegistry:
         Returns:
             Success with optimizer, or Failure with RegistryKeyNotFound.
         """
-        value = self._optimizers.get(optimizer_id)
-        if value is None:
-            return Failure(RegistryKeyNotFound(key=optimizer_id, expected_type="optimizer"))
-        return Success(value)
+        match self._optimizers.get(optimizer_id):
+            case None:
+                return Failure(RegistryKeyNotFound(key=optimizer_id, expected_type="optimizer"))
+            case value:
+                return Success(value)
 
     def has_optimizer(self, optimizer_id: str) -> bool:
         """Check if an optimizer ID exists in the registry.
@@ -377,10 +392,11 @@ class SharedRegistry:
         Returns:
             Success with kernel, or Failure with RegistryKeyNotFound.
         """
-        value = self._kernels.get(kernel_name)
-        if value is None:
-            return Failure(RegistryKeyNotFound(key=kernel_name, expected_type="kernel"))
-        return Success(value)
+        match self._kernels.get(kernel_name):
+            case None:
+                return Failure(RegistryKeyNotFound(key=kernel_name, expected_type="kernel"))
+            case value:
+                return Success(value)
 
     def has_kernel(self, kernel_name: str) -> bool:
         """Check if a kernel name exists in the registry.

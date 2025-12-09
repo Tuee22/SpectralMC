@@ -8,7 +8,6 @@ from typing import Literal
 from spectralmc.errors.serialization import (
     SerializationResult,
     UnknownThreadsPerBlock,
-    ValidationFailed,
 )
 from spectralmc.gbm import (
     BlackScholesConfig,
@@ -17,9 +16,8 @@ from spectralmc.gbm import (
     build_simulation_params,
 )
 from spectralmc.proto import simulation_pb2
-from spectralmc.sobol_sampler import BoundSpec
+from spectralmc.sobol_sampler import BoundSpec, build_bound_spec
 from spectralmc.result import Failure, Success
-from spectralmc.validation import validate_model
 
 from .common import PrecisionConverter
 
@@ -137,10 +135,9 @@ class BoundSpecConverter:
     @staticmethod
     def from_proto(proto: simulation_pb2.BoundSpecProto) -> SerializationResult[BoundSpec]:
         """Convert from proto."""
-        bound_result = validate_model(BoundSpec, lower=proto.lower, upper=proto.upper)
-        match bound_result:
-            case Failure(error):
-                return Failure(ValidationFailed(error=error))
+        match build_bound_spec(lower=proto.lower, upper=proto.upper):
+            case Failure() as f:
+                return f
             case Success(bound):
                 return Success(bound)
 

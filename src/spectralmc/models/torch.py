@@ -147,9 +147,11 @@ class FullPrecisionDType(str, Enum):
     @classmethod
     def from_torch(cls, dt: torch.dtype) -> TorchFacadeResult["FullPrecisionDType"]:
         dtype_str = _TORCH_DTYPE_TO_STR.get(dt)
-        if dtype_str not in ("float32", "float64", "complex64", "complex128"):
-            return Failure(UnsupportedTorchDType(dtype=str(dt)))
-        return Success(cls(dtype_str))
+        return (
+            Failure(UnsupportedTorchDType(dtype=str(dt)))
+            if dtype_str not in ("float32", "float64", "complex64", "complex128")
+            else Success(cls(dtype_str))
+        )
 
     def to_precision(self) -> Precision:
         """Return the numeric ``Precision`` representation of this dtype."""
@@ -174,9 +176,11 @@ class ReducedPrecisionDType(str, Enum):
     @classmethod
     def from_torch(cls, dt: torch.dtype) -> TorchFacadeResult["ReducedPrecisionDType"]:
         dtype_str = _TORCH_DTYPE_TO_STR.get(dt)
-        if dtype_str not in ("float16", "bfloat16"):
-            return Failure(UnsupportedTorchDType(dtype=str(dt)))
-        return Success(cls(dtype_str))
+        return (
+            Failure(UnsupportedTorchDType(dtype=str(dt)))
+            if dtype_str not in ("float16", "bfloat16")
+            else Success(cls(dtype_str))
+        )
 
 
 # Union type for contexts accepting any dtype
@@ -197,11 +201,13 @@ class Device(str, Enum):
 
     @classmethod
     def from_torch(cls, dev: torch.device) -> TorchFacadeResult["Device"]:
-        if dev.type == "cpu":
-            return Success(cls.cpu)
-        if dev.type == "cuda" and dev.index in {None, 0}:
-            return Success(cls.cuda)
-        return Failure(UnsupportedTorchDevice(device=str(dev)))
+        match (dev.type, dev.index):
+            case ("cpu", _):
+                return Success(cls.cpu)
+            case ("cuda", None | 0):
+                return Success(cls.cuda)
+            case _:
+                return Failure(UnsupportedTorchDevice(device=str(dev)))
 
 
 # --------------------------------------------------------------------------- #
@@ -276,11 +282,11 @@ class TensorState(BaseModel):
                 TensorStateConversionFailed(message=f"Unsupported torch.dtype {dt_torch!r}")
             )
 
-        dtype: AnyDType
-        if dtype_str in ("float32", "float64", "complex64", "complex128"):
-            dtype = FullPrecisionDType(dtype_str)
-        else:
-            dtype = ReducedPrecisionDType(dtype_str)
+        dtype: AnyDType = (
+            FullPrecisionDType(dtype_str)
+            if dtype_str in ("float32", "float64", "complex64", "complex128")
+            else ReducedPrecisionDType(dtype_str)
+        )
 
         return Success(TensorState(data=blob, shape=tuple(t.shape), dtype=dtype))
 
@@ -327,11 +333,11 @@ class TensorState(BaseModel):
                 TensorStateConversionFailed(message=f"Unsupported torch.dtype {dt_torch!r}")
             )
 
-        dtype: AnyDType
-        if dtype_str in ("float32", "float64", "complex64", "complex128"):
-            dtype = FullPrecisionDType(dtype_str)
-        else:
-            dtype = ReducedPrecisionDType(dtype_str)
+        dtype: AnyDType = (
+            FullPrecisionDType(dtype_str)
+            if dtype_str in ("float32", "float64", "complex64", "complex128")
+            else ReducedPrecisionDType(dtype_str)
+        )
 
         return Success(TensorState(data=raw, shape=tuple(t.shape), dtype=dtype))
 
@@ -395,14 +401,17 @@ class AdamParamState(BaseModel):
             return Success(obj)
 
         step_raw = s["step"]
-        if isinstance(step_raw, torch.Tensor):
-            if step_raw.ndim != 0 or step_raw.device != Device.cpu.to_torch():
+        match step_raw:
+            case torch.Tensor() if step_raw.ndim == 0 and step_raw.device == Device.cpu.to_torch():
+                step_val = int(step_raw.item())
+            case torch.Tensor():
                 return Failure(InvalidAdamState(message="Adam 'step' must be a CPU scalar tensor."))
-            step_val = int(step_raw.item())
-        elif isinstance(step_raw, int):
-            step_val = step_raw
-        else:
-            return Failure(InvalidAdamState(message="Adam 'step' must be an int or scalar tensor."))
+            case int():
+                step_val = step_raw
+            case _:
+                return Failure(
+                    InvalidAdamState(message="Adam 'step' must be an int or scalar tensor.")
+                )
 
         match _req_tensor("exp_avg"):
             case Failure(error):

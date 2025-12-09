@@ -1306,9 +1306,43 @@ match result:
                 assert_never(error)
 ```
 
-### Why assert_never()?
+### Exhaustiveness Checking: MyPy Strict Mode is Sufficient
 
-The `assert_never()` function provides **compile-time exhaustiveness checking**:
+SpectralMC's mypy strict configuration (`pyproject.toml`) already provides exhaustiveness checking:
+
+```toml
+strict = true                # Enables all strict checks
+warn_unreachable = true      # Detects unreachable code paths
+warn_no_return = true        # Detects missing return statements (in strict)
+```
+
+**For Result[T, E] types**, explicit case handling is sufficient:
+
+```python
+# File: documents/engineering/coding_standards.md
+# Preferred pattern - no case _: needed
+match result:
+    case Success(value):
+        return process(value)
+    case Failure(error):
+        return handle_error(error)
+# MyPy verifies exhaustiveness via warn_no_return
+```
+
+**MyPy catches incomplete matches**:
+
+```python
+# File: documents/engineering/coding_standards.md
+# Missing Failure case
+match result:
+    case Success(value):
+        return value
+# MyPy error: Missing return statement [return]
+```
+
+### When to Use assert_never()
+
+The `assert_never()` function is **optional** for exhaustiveness checking:
 
 ```python
 # File: documents/engineering/coding_standards.md
@@ -1319,12 +1353,17 @@ def assert_never(value: Never) -> Never:
     raise AssertionError(f"Unhandled value: {value} ({type(value).__name__})")
 ```
 
-**What it does**:
-1. **Compile-time**: mypy verifies all cases are handled (the `case _:` branch is unreachable)
-2. **Runtime safety**: If somehow a new variant appears at runtime, raises AssertionError
-3. **Refactoring safety**: Adding new ADT variant causes type error in all match statements
+**Use assert_never() for**:
+1. **Large union types** (5+ variants) where explicit listing aids refactoring
+2. **Effect types** with many variants
+3. **When warn_no_return doesn't apply** (e.g., functions without return types)
 
-**Example**:
+**Skip assert_never() for**:
+1. **Result[T, E] types** - explicit Success/Failure cases are clearer
+2. **Small unions** (2-3 variants) - explicit cases are sufficient
+3. **When mypy strict mode catches the error** - avoid redundant checks
+
+**Example with large union type**:
 
 ```python
 # File: documents/engineering/coding_standards.md
@@ -1344,9 +1383,11 @@ S3OperationError = (
     | S3RateLimited  # New variant
 )
 
-# ALL existing match statements will fail type checking:
+# assert_never() causes type error when new variant added:
 # error: Argument 1 to "assert_never" has incompatible type "S3RateLimited"; expected "Never"
 ```
+
+**Note**: `assert_never()` may fail with complex generic types like `Result[T, E]` due to mypy's type narrowing limitations. In these cases, mypy's `warn_no_return` provides equivalent exhaustiveness checking.
 
 ### Nested Pattern Matching
 
