@@ -57,7 +57,7 @@ async def test_fast_forward_validation(async_store: AsyncBlockchainModelStore) -
     # Verify rollback occurred - no version 3 artifacts
     # (would be v2_1.0.2 if it had succeeded)
 
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
     version_dirs = []
     async for page in paginator.paginate(Bucket=async_store.bucket_name, Prefix="versions/"):

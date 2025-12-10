@@ -191,6 +191,11 @@ SpectralMC enforces strict standards to prevent common errors in testing and imp
 - ❌ Ignoring numerical warnings
 - ❌ Mutable default arguments
 - ❌ Inconsistent device handling
+- ❌ For loops in business logic (Tier 2) - use comprehensions
+- ❌ If statements in business logic (Tier 2) - use conditional expressions or match/case
+- ❌ While loops in business logic (Tier 2) - use generators
+- ❌ Raise for expected errors (Tier 2) - use Result types
+- ❌ Side effects in business logic (print, logger) - use Effect ADTs
 
 ## Recovery Checklist
 
@@ -206,6 +211,7 @@ When you encounter test failures or bugs:
 8. **Verify random seeds** - ensure reproducibility
 9. **Check GPU memory** - OOM can cause silent failures
 10. **Profile if slow** - don't guess at bottlenecks
+11. **Run purity checker** - `docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-purity`
 
 ## Prevention: Pre-commit Checklist
 
@@ -213,6 +219,7 @@ Before committing:
 
 - [ ] All tests pass (CPU and GPU)
 - [ ] mypy type checking passes (strict mode)
+- [ ] Purity check passes (`poetry run check-purity`)
 - [ ] No NaN/Inf in test outputs
 - [ ] Convergence validated, not just "runs without error"
 - [ ] No pytest.skip() added
@@ -224,22 +231,29 @@ Before committing:
 
 ## 🔒 Git Workflow Policy
 
-**Critical Rule**: Claude Code is NOT authorized to commit or push changes.
+**Critical Rule**: Claude Code and ALL LLMs are NOT authorized to commit, push, or create branches.
 
-### Forbidden Git Operations
+### Absolutely Forbidden Git Operations
 - ❌ **NEVER** run `git commit` (including `--amend`, `--no-verify`, etc.)
 - ❌ **NEVER** run `git push` (including `--force`, `--force-with-lease`, etc.)
+- ❌ **NEVER** run `git checkout -b` or `git branch` to create new branches
+- ❌ **NEVER** run `git switch -c` to create and switch branches
 - ❌ **NEVER** run `git add` followed by commit operations
-- ❌ **NEVER** create commits under any circumstances
+- ❌ **NEVER** create commits or branches under any circumstances
+- ❌ **NEVER** modify git history with rebase, reset, or amend
 
-### Required Workflow
+### Required Workflow - ONLY Permitted Git Operations
+- ✅ `git status` - Check working directory status
+- ✅ `git diff` - Review changes
+- ✅ `git log` - View commit history
+- ✅ `git branch` (without -b flag) - List existing branches
 - ✅ Make all code changes as requested
 - ✅ Run tests and validation (via Docker: `docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all`)
-- ✅ Leave ALL changes as **uncommitted** working directory changes
+- ✅ Leave ALL changes as **uncommitted** working directory changes on current branch
 - ✅ User reviews changes using `git status` and `git diff`
-- ✅ User manually commits and pushes when satisfied
+- ✅ User manually creates branches, commits, and pushes when satisfied
 
-**Rationale**: All changes must be human-reviewed before entering version control. This ensures code quality, prevents automated commit mistakes, and maintains clear authorship.
+**Rationale**: All changes must be human-reviewed before entering version control. This ensures code quality, prevents automated commit mistakes, maintains clear authorship, and prevents unauthorized branch proliferation. The user alone decides when and how to commit changes to version control.
 
 ## Dependency Management - Quick Reference
 

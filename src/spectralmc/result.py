@@ -203,13 +203,16 @@ def fold_results(
 
     # Functional fold using recursion instead of for loop
     def fold_impl(remaining: list[T], current: U) -> Result[U, E]:
-        if not remaining:
-            return Success(current)
-        head, *tail = remaining
-        match f(current, head):
-            case Failure(err):
-                return Failure(err)
-            case Success(val):
-                return fold_impl(tail, val)
+        match remaining:
+            case []:
+                return Success(current)
+            case [head, *tail]:
+                match f(current, head):
+                    case Failure(err):
+                        return Failure(err)
+                    case Success(val):
+                        return fold_impl(tail, val)
+            case _:
+                raise AssertionError("Unreachable: list pattern match exhaustive")
 
     return fold_impl(items, initial)

@@ -74,7 +74,7 @@ async def test_tensorboard_basic_initialization(
 
         assert writer.store is async_store
         assert writer.log_dir == Path(tmpdir)
-        assert writer.writer is not None
+        assert writer.writer is not None, "TensorBoard writer should be initialized"
 
         writer.close()
 

@@ -1041,6 +1041,7 @@ SpectralMC uses **Result types and pattern matching** for all expected errors. E
 4. **Explicit Error Context**: Preserve full error information in ADT variants
 5. **Immutability**: All error types are immutable (see [Immutability Doctrine](./immutability_doctrine.md))
 6. **Factory Functions**: Constructor validation via factory functions returning Result (see [Purity Doctrine](./purity_doctrine.md))
+7. **Zero Tolerance in Business Logic (Tier 2)**: No exception-based error handling in business logic; use Result types for ALL expected errors (see [Purity Doctrine](./purity_doctrine.md#tier-2-business-logic-zero-tolerance-purity))
 
 ---
 
@@ -1562,6 +1563,58 @@ except botocore.exceptions.ClientError:
     # Best-effort cleanup - bucket may already be deleted
     pass
 ```
+
+### Business Logic Exception Policy (Tier 2)
+
+**ZERO TOLERANCE** for exception-based error handling in Tier 2 business logic.
+
+**Forbidden Patterns in Tier 2**:
+```python
+# ❌ FORBIDDEN - Raising for expected errors
+def load_checkpoint(path: str) -> Checkpoint:
+    if not path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {path}")
+    return deserialize(path.read_bytes())
+
+# ❌ FORBIDDEN - Try/except for expected errors
+def parse_config(data: str) -> Config:
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError:
+        return DEFAULT_CONFIG  # Lost error context!
+
+# ❌ FORBIDDEN - Broad except (even for Result conversion)
+try:
+    result = operation()
+except Exception:
+    return Failure(GenericError())  # Too broad! Be specific
+```
+
+**Required Patterns in Tier 2**:
+```python
+# ✅ CORRECT - Result type for file not found
+def load_checkpoint(path: Path) -> Result[Checkpoint, LoadError]:
+    return (
+        Failure(CheckpointNotFound(path=path))
+        if not path.exists()
+        else Success(deserialize(path.read_bytes()))
+    )
+
+# ✅ CORRECT - Result type preserves error context
+def parse_config(data: str) -> Result[Config, ParseError]:
+    try:
+        return Success(json.loads(data))
+    except json.JSONDecodeError as e:
+        return Failure(InvalidJSON(error=str(e), data=data))
+```
+
+**Why Zero Tolerance?**
+- Pure functions cannot use try/except (control flow side effect)
+- Result types enable static type checking of error paths
+- ADT errors preserve full diagnostic context
+- Pattern matching ensures exhaustive error handling
+
+**Acceptable in Tier 1/3**: Infrastructure (Tier 1) and effect interpreters (Tier 3) may use try/except for boundary conversions (external library exceptions → Result types). See [Purity Doctrine](./purity_doctrine.md#tier-specific-purity-requirements) for tier definitions.
 
 ---
 

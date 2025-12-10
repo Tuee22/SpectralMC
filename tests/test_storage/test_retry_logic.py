@@ -29,7 +29,7 @@ async def test_retry_on_throttling(async_store: AsyncBlockchainModelStore) -> No
     """
     # Create a function that throttles 3 times then succeeds
     call_count = 0
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     original_get_object = async_store._s3_client.get_object
 
     async def get_object_with_throttling(*args: object, **kwargs: object) -> S3ResponseProtocol:
@@ -103,7 +103,7 @@ async def test_retry_exhaustion(async_store: AsyncBlockchainModelStore) -> None:
 
     # Create a function that always throttles
     call_count = 0
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     _original_get_object = async_store._s3_client.get_object
 
     async def always_throttle(*args: object, **kwargs: object) -> dict[str, object]:
@@ -139,7 +139,7 @@ async def test_no_retry_on_conflict(async_store: AsyncBlockchainModelStore) -> N
     _version1 = await async_store.commit(checkpoint1, hash1, "First")
 
     # Get current ETag
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     response = await async_store._s3_client.get_object(
         Bucket=async_store.bucket_name,
         Key="chain.json",
@@ -155,7 +155,7 @@ async def test_no_retry_on_conflict(async_store: AsyncBlockchainModelStore) -> N
 
     # Track put_object calls
     call_count = 0
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     original_put_object = async_store._s3_client.put_object
 
     async def track_put_calls(*args: object, **kwargs: object) -> object:
@@ -166,7 +166,9 @@ async def test_no_retry_on_conflict(async_store: AsyncBlockchainModelStore) -> N
 
     with patch.object(async_store._s3_client, "put_object", side_effect=track_put_calls):
         # Try to write with stale ETag
-        assert async_store._s3_client is not None
+        assert (
+            async_store._s3_client is not None
+        ), "S3 client should be initialized in async context"
         with pytest.raises(ClientError, match="PreconditionFailed"):
             await async_store._s3_client.put_object(
                 Bucket=async_store.bucket_name,

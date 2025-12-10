@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import TypeAlias, Union
+from typing import TypeAlias
 
 import torch
 from pydantic import BaseModel, ConfigDict, PositiveInt
@@ -122,9 +122,6 @@ class CovBNCfg(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
-LayerCfg: TypeAlias = Union[LinearCfg, NaiveBNCfg, CovBNCfg, "SequentialCfg", "ResidualCfg"]
-
-
 class SequentialCfg(BaseModel):
     kind: LayerKind = LayerKind.SEQ
     layers: list[LayerCfg]
@@ -140,6 +137,9 @@ class ResidualCfg(BaseModel):
     activation: ActivationCfg | None = None
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+LayerCfg: TypeAlias = LinearCfg | NaiveBNCfg | CovBNCfg | SequentialCfg | ResidualCfg
 
 
 class CVNNConfig(BaseModel):
@@ -207,6 +207,40 @@ def _build_layer_sequence(
             return Success((list(final_state.modules), final_state.width))
 
 
+def _build_projection(
+    projection_cfg: LinearCfg | None,
+    cur_w: int,
+    body_w: int,
+) -> CVNNFactoryResult[tuple[nn.Module | None, int]]:
+    """Build projection module for residual connection.
+
+    Returns (projection_module, output_width) or Failure if projection invalid.
+
+    Three cases:
+    1. User specified projection: Use it
+    2. Widths match, no projection needed: Return (None, body_w)
+    3. Widths differ, auto-create: Return (ComplexLinear(cur_w, body_w), body_w)
+    """
+    match projection_cfg:
+        case None if body_w == cur_w:
+            # No projection needed, widths already match
+            return Success((None, body_w))
+        case None:
+            # Auto-create projection to match widths
+            return Success((ComplexLinear(cur_w, body_w), body_w))
+        case LinearCfg() as proj:
+            # User-specified projection (explicit type widening: Module -> Module | None)
+            match _build_from_cfg(proj, cur_w):
+                case Success((module, width)):
+                    return Success((module, width))
+                case Failure(error):
+                    return Failure(error)
+                case _:
+                    raise AssertionError("Unreachable: Result must be Success or Failure")
+        case _:
+            raise AssertionError("Unreachable: all projection_cfg cases handled")
+
+
 def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> CVNNFactoryResult[tuple[nn.Module, int]]:
     match cfg:
 
@@ -254,22 +288,14 @@ def _build_from_cfg(cfg: LayerCfg, cur_w: int) -> CVNNFactoryResult[tuple[nn.Mod
                 case Success((body_mod, body_w)):
                     pass
 
-            proj_mod: nn.Module | None
-            proj_w: int
-            if c.projection is not None:
-                match _build_from_cfg(c.projection, cur_w):
-                    case Failure(error):
-                        return Failure(error)
-                    case Success((proj_candidate, width)):
-                        proj_mod = proj_candidate
-                        proj_w = width
-            elif body_w == cur_w:
-                proj_mod = None
-                proj_w = body_w
-            else:
-                proj_mod = ComplexLinear(cur_w, body_w)
-                proj_w = body_w
+            # Use helper to build projection
+            match _build_projection(c.projection, cur_w, body_w):
+                case Failure(error):
+                    return Failure(error)
+                case Success((proj_mod, proj_w)):
+                    pass
 
+            # Validate widths match
             match proj_w == body_w:
                 case False:
                     return Failure(

@@ -174,7 +174,9 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
     }
 
     net = _make_cvnn(6, sim.network_size, seed=seed, device=device, dtype=torch_dtype)
-    return GbmCVNNPricer(GbmCVNNPricerConfig(cfg=cfg, domain_bounds=bounds, cvnn=net))
+    return _expect_success(
+        GbmCVNNPricer.create(GbmCVNNPricerConfig(cfg=cfg, domain_bounds=bounds, cvnn=net))
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -219,7 +221,7 @@ def test_snapshot_cycle_deterministic(precision: Precision) -> None:
     snap = _expect_success(trainer.snapshot()).model_copy(
         update={"cvnn": _clone_model(trainer._cvnn)}
     )
-    clone = GbmCVNNPricer(snap)
+    clone = _expect_success(GbmCVNNPricer.create(snap))
 
     cfg = TrainingConfig(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
     trainer.train(cfg)
@@ -241,16 +243,25 @@ def test_snapshot_restart_without_optimizer(precision: Precision) -> None:
     snap = _expect_success(trainer.snapshot()).model_copy(
         update={"optimizer_state": None, "cvnn": _clone_model(trainer._cvnn)}
     )
-    restarted = GbmCVNNPricer(snap)
+    restarted = _expect_success(GbmCVNNPricer.create(snap))
 
-    # Reset original trainer's optimizer state to match restarted trainer
-    trainer._optimizer_state = None
+    # Create a fresh trainer without optimizer state for comparison
+    # (same model state as restarted, but created fresh)
+    trainer_without_opt = _make_gbm_trainer(precision, seed=45)
+    trainer_without_opt.train(
+        TrainingConfig(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE)
+    )
+    # Create fresh trainer from same snapshot (no optimizer state)
+    snap_for_comparison = _expect_success(trainer_without_opt.snapshot()).model_copy(
+        update={"optimizer_state": None, "cvnn": _clone_model(trainer_without_opt._cvnn)}
+    )
+    trainer_without_opt = _expect_success(GbmCVNNPricer.create(snap_for_comparison))
 
     cfg = TrainingConfig(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
-    trainer.train(cfg)
+    trainer_without_opt.train(cfg)
     restarted.train(cfg)
 
-    assert _max_param_diff(trainer._cvnn, restarted._cvnn) == 0.0
+    assert _max_param_diff(trainer_without_opt._cvnn, restarted._cvnn) == 0.0
 
 
 # --------------------------------------------------------------------------- #
@@ -265,7 +276,11 @@ def test_snapshot_optimizer_serialization_roundtrip(precision: Precision) -> Non
     snap = _expect_success(trainer.snapshot())
 
     opt_state = snap.optimizer_state
-    assert opt_state is not None
+    assert opt_state is not None, "Optimizer state should be preserved in snapshot after training"
+    assert isinstance(opt_state, AdamOptimizerState), "Optimizer state should be AdamOptimizerState"
+    # Validate structure - param_states dict should have entries for trained parameters
+    assert len(opt_state.param_states) > 0, "Optimizer state should track parameters"
+    assert len(opt_state.param_groups) > 0, "Optimizer state should have parameter groups"
 
     round_trip = AdamOptimizerState.model_validate(opt_state.model_dump(mode="python"))
     torch_state = _expect_success(opt_state.to_torch())

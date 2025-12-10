@@ -35,9 +35,8 @@ Implementation notes
 * The trainer *always* stores the optimiser snapshot on **CPU**.  During
   a restart we immediately migrate the state back to the training
   device.
-* Strict typing is enforced with **mypy --strict**; no `Any` or `cast` are used.
-  Uses minimal `type: ignore` for known mypy limitations with generic type
-  inference in lambdas.
+* Strict typing is enforced with **mypy --strict**; no `Any`, `cast`, or
+  `type: ignore` are used.
 """
 
 from __future__ import annotations
@@ -102,7 +101,8 @@ from spectralmc.effects import (
 )
 from spectralmc.effects.types import Effect
 from spectralmc.errors.gbm import NormalsGenerationFailed, NormalsUnavailable
-from spectralmc.errors.serialization import SerializationResult
+from spectralmc.errors.serialization import SerializationError
+from spectralmc.errors.torch_facade import TorchFacadeError
 from spectralmc.errors.trainer import (
     InvalidTrainerConfig,
     OptimizerStateSerializationFailed,
@@ -129,14 +129,6 @@ LOGGER_NAME = __name__
 LogLevel = Literal["debug", "info", "warning", "error", "critical"]
 
 S = TypeVar("S")
-
-
-def _expect_serialization(result: SerializationResult[S]) -> S:
-    match result:
-        case Success(value):
-            return value
-        case Failure(error):
-            raise RuntimeError(f"Serialization failure: {error}")
 
 
 def _consume_log_task_exception(task: asyncio.Task[object]) -> None:
@@ -287,7 +279,7 @@ class StepMetrics(BaseModel):
     loss: float
     grad_norm: float
     lr: float
-    optimizer: optim.Adam
+    optimizer: optim.Optimizer
     model: ComplexValuedModel
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra="forbid")
@@ -380,42 +372,121 @@ class TensorBoardLogger:
     # ------------------------------------------------------------------ #
 
     def __call__(self, metrics: StepMetrics) -> None:
-        """Write one optimisation step to disk."""
+        """Write one optimisation step to disk.
+
+        Pure: Uses conditional expressions for policy checks.
+        """
         w = self._writer
         step = metrics.step
 
+        # Always log scalar metrics
         w.add_scalar("Loss/train", metrics.loss, step)
         w.add_scalar("LR", metrics.lr, step)
         w.add_scalar("GradNorm", metrics.grad_norm, step)
         w.add_scalar("BatchTime", metrics.batch_time, step)
 
-        if step % self._hist_every == 0:
-            # Pure: Build list of (name, param) pairs via comprehension
-            param_pairs = list(metrics.model.named_parameters())
+        # Conditional histogram logging (pure: match on boolean predicate)
+        match step % self._hist_every == 0:
+            case True:
+                self._log_histograms(w, metrics.model, step)
+            case False:
+                pass
 
-            # Write parameter histograms (consume generator for side effects)
-            # mypy limitation: add_histogram returns None, but deque(gen, maxlen=0) is idiomatic for side effects
-            deque(
-                (w.add_histogram(name, param, step) for name, param in param_pairs),  # type: ignore[func-returns-value]
-                maxlen=0,
-            )
+        # Conditional flush (pure: match on boolean predicate)
+        match step % self._flush_every == 0:
+            case True:
+                w.flush()
+            case False:
+                pass
 
-            # Write gradient histograms (consume generator for side effects)
-            deque(
-                (
-                    w.add_histogram(f"{name}.grad", param.grad, step)  # type: ignore[func-returns-value]
-                    for name, param in param_pairs
-                    if param.grad is not None
-                ),
-                maxlen=0,
-            )
+    def _log_histograms(
+        self,
+        writer: SummaryWriter,
+        model: ComplexValuedModel,
+        step: int,
+    ) -> None:
+        """Write parameter and gradient histograms to TensorBoard.
 
-        if step % self._flush_every == 0:
-            w.flush()
+        Pure: Extracted helper to enable conditional expression in __call__().
+        """
+        param_pairs = list(model.named_parameters())
+        self._write_parameter_histograms(writer, param_pairs, step)
+        self._write_gradient_histograms(writer, param_pairs, step)
+
+    @staticmethod
+    def _write_parameter_histograms(
+        writer: SummaryWriter,
+        param_pairs: list[tuple[str, nn.Parameter]],
+        step: int,
+    ) -> None:
+        """Write parameter histograms to TensorBoard.
+
+        Pure: Uses deque to consume generator for side effects without building list.
+        """
+        deque(
+            (writer.add_histogram(name, param, step) for name, param in param_pairs),
+            maxlen=0,
+        )
+
+    @staticmethod
+    def _write_gradient_histograms(
+        writer: SummaryWriter,
+        param_pairs: list[tuple[str, nn.Parameter]],
+        step: int,
+    ) -> None:
+        """Write gradient histograms to TensorBoard.
+
+        Pure: Uses deque to consume filtered generator for side effects.
+        """
+        deque(
+            (
+                writer.add_histogram(f"{name}.grad", param.grad, step)
+                for name, param in param_pairs
+                if param.grad is not None
+            ),
+            maxlen=0,
+        )
 
     def close(self) -> None:
         """Close the underlying :class:`~torch.utils.tensorboard.SummaryWriter`."""
         self._writer.close()
+
+
+# =============================================================================
+#  Trainer Error Types
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class DeviceDTypeError:
+    """Failed to determine device/dtype from model state."""
+
+    kind: Literal["DeviceDTypeError"] = "DeviceDTypeError"
+    message: str = ""
+    underlying_error: object | None = None
+
+
+@dataclass(frozen=True)
+class DeviceNotCUDA:
+    """Model is not on CUDA device but CUDA is required."""
+
+    kind: Literal["DeviceNotCUDA"] = "DeviceNotCUDA"
+    device: Device = Device.cpu
+    message: str = "GbmCVNNPricer requires CUDA device"
+
+
+@dataclass(frozen=True)
+class CudaUnavailableForRNGRestore:
+    """Checkpoint contains CUDA RNG state but CUDA is not available."""
+
+    kind: Literal["CudaUnavailableForRNGRestore"] = "CudaUnavailableForRNGRestore"
+    message: str = (
+        "Cannot restore CUDA RNG state: CUDA not available but checkpoint contains CUDA RNG state"
+    )
+
+
+# Union type for pricer creation errors
+GbmPricerError = DeviceDTypeError | DeviceNotCUDA | CudaUnavailableForRNGRestore
 
 
 # =============================================================================
@@ -430,8 +501,74 @@ class GbmCVNNPricer:
     # Construction                                                       #
     # ------------------------------------------------------------------ #
 
-    def __init__(self, cfg: GbmCVNNPricerConfig) -> None:
-        """Instantiate a trainer from its immutable configuration."""
+    @staticmethod
+    def create(cfg: GbmCVNNPricerConfig) -> Result[GbmCVNNPricer, GbmPricerError]:
+        """Create GbmCVNNPricer with validation.
+
+        This is the ONLY way to create a GbmCVNNPricer. The constructor is private.
+
+        Args:
+            cfg: Configuration for the pricer
+
+        Returns:
+            Success[GbmCVNNPricer] if validation passes
+            Failure[GbmPricerError] if device validation fails
+
+        Example:
+            >>> match GbmCVNNPricer.create(config):
+            ...     case Success(pricer):
+            ...         # Use pricer
+            ...     case Failure(error):
+            ...         # Handle error
+        """
+        # Step 1: Get device/dtype from model
+        device_dtype_result = module_state_device_dtype(cfg.cvnn.state_dict())
+        match device_dtype_result:
+            case Failure(dtype_err):
+                return Failure(
+                    DeviceDTypeError(
+                        message=f"Failed to get device/dtype from CVNN: {dtype_err}",
+                        underlying_error=dtype_err,
+                    )
+                )
+            case Success((device, dtype)):
+                pass  # Continue validation
+
+        # Step 2: Validate CUDA requirement
+        match device:
+            case Device.cuda:
+                pass  # Valid device
+            case other_device:
+                return Failure(
+                    DeviceNotCUDA(
+                        device=other_device,
+                        message=f"Model on {other_device}, but CUDA required for training",
+                    )
+                )
+
+        # Step 3: Validate CUDA availability for RNG restoration
+        match cfg.torch_cuda_rng_states:
+            case None:
+                pass  # No CUDA RNG state to restore, validation passes
+            case _:
+                # Checkpoint has CUDA RNG state - verify CUDA is available
+                match torch.cuda.is_available():
+                    case False:
+                        return Failure(
+                            CudaUnavailableForRNGRestore(
+                                message="Checkpoint contains CUDA RNG state but CUDA is not available"
+                            )
+                        )
+                    case True:
+                        pass  # CUDA available, validation passes
+
+        # Step 4: Create instance (all validation passed) - call private constructor
+        pricer = GbmCVNNPricer.__new__(GbmCVNNPricer)
+        pricer._initialize(cfg, device, dtype)
+        return Success(pricer)
+
+    def _initialize(self, cfg: GbmCVNNPricerConfig, device: Device, dtype: AnyDType) -> None:
+        """Private initialization after validation. Called by create() factory."""
         # User payload -------------------------------------------------- #
         self._sim_params: SimulationParams = cfg.cfg.sim_params
         self._cvnn: ComplexValuedModel = cfg.cvnn
@@ -440,21 +577,14 @@ class GbmCVNNPricer:
         self._global_step: int = cfg.global_step
         self._sobol_skip: int = cfg.sobol_skip
 
-        self._device: Device
-        dtype_any: AnyDType
-        device_dtype_result = module_state_device_dtype(self._cvnn.state_dict())
-        match device_dtype_result:
-            case Failure(dtype_err):
-                raise RuntimeError(f"Failed to get device/dtype from CVNN: {dtype_err}")
-            case Success((device, dtype)):
-                self._device = device
-                dtype_any = dtype
+        # Device and dtype (validated by factory, passed as parameters)
+        self._device: Device = device
 
         # GBM simulation requires full precision (not float16/bfloat16)
-        assert isinstance(dtype_any, FullPrecisionDType), (
-            f"CVNN must use full precision dtype (float32/64, complex64/128), " f"got {dtype_any}"
+        assert isinstance(dtype, FullPrecisionDType), (
+            f"CVNN must use full precision dtype (float32/64, complex64/128), " f"got {dtype}"
         )
-        self._dtype: FullPrecisionDType = dtype_any
+        self._dtype: FullPrecisionDType = dtype
 
         assert (
             self._dtype.to_precision() == cfg.cfg.sim_params.dtype
@@ -465,15 +595,7 @@ class GbmCVNNPricer:
         self._torch_cdtype: torch.dtype = DType.from_precision(self._complex_dtype).to_torch()
         self._cupy_cdtype: cp.dtype = self._complex_dtype.to_cupy()
 
-        # Execution context (CUDA-only) --------------------------------- #
-        match self._device:
-            case Device.cuda:
-                pass  # Valid device
-            case other_device:
-                raise RuntimeError(
-                    "GbmCVNNPricer requires CUDA. "
-                    f"Model is on device={other_device}, but CUDA is required for training."
-                )
+        # Execution context (CUDA-only, validated by factory) ----------- #
 
         self._context: CudaExecutionContext = CudaExecutionContext(
             torch_stream=torch.cuda.Stream(device=self._device.to_torch()),
@@ -504,23 +626,17 @@ class GbmCVNNPricer:
             case None:
                 pass  # No CUDA RNG state to restore
             case cuda_states:
-                match torch.cuda.is_available():
-                    case False:
-                        raise RuntimeError(
-                            "Cannot restore CUDA RNG state: CUDA is not available. "
-                            "Checkpoint contains CUDA RNG state but current environment has no GPU."
+                # Factory validation guarantees CUDA is available if we reach here
+                torch.cuda.set_rng_state_all(
+                    list(
+                        map(
+                            lambda state_bytes: torch.from_numpy(
+                                np.frombuffer(state_bytes, dtype=np.uint8).copy()
+                            ),
+                            cuda_states,
                         )
-                    case True:
-                        torch.cuda.set_rng_state_all(
-                            list(
-                                map(
-                                    lambda state_bytes: torch.from_numpy(
-                                        np.frombuffer(state_bytes, dtype=np.uint8).copy()
-                                    ),
-                                    cuda_states,
-                                )
-                            )
-                        )
+                    )
+                )
 
         # Dedicated logging interpreter (side effects executed outside business logic)
         self._logging_interpreter: LoggingInterpreter = LoggingInterpreter(
@@ -872,15 +988,10 @@ class GbmCVNNPricer:
         )
 
         # Pure: build list of Results via comprehension instead of imperative loop
+        # Avoid lambda to work around mypy generic type inference limitation
         epoch_effects_results: list[Result[list[object], NormalsUnavailable]] = [
-            self.build_epoch_effects(config).map(
-                lambda effects_seq: [
-                    # mypy limitation: Cannot infer .effects attribute on generic lambda parameter
-                    # effects_seq is EffectSequence[list[object]] but mypy sees it as generic T
-                    # See: https://github.com/python/mypy/issues/5485
-                    *effects_seq.effects,  # type: ignore[attr-defined]
-                    *checkpoint_builder(epoch),
-                ]
+            self._transform_epoch_effects(
+                self.build_epoch_effects(config), checkpoint_builder(epoch)
             )
             for epoch in range(num_epochs)
         ]
@@ -897,13 +1008,41 @@ class GbmCVNNPricer:
 
         return Success(sequence_effects(*typed_effects))
 
+    @staticmethod
+    def _transform_epoch_effects(
+        epoch_result: Result[EffectSequence[list[object]], NormalsUnavailable],
+        checkpoint_effects: list[Effect],
+    ) -> Result[list[object], NormalsUnavailable]:
+        """Transform epoch effects Result by combining with checkpoint effects.
+
+        Extracted to helper function to avoid mypy lambda type inference limitation.
+
+        Args:
+            epoch_result: Result containing epoch effects sequence
+            checkpoint_effects: Checkpoint effects to append
+
+        Returns:
+            Result containing combined list of effects (epoch + checkpoint)
+        """
+        match epoch_result:
+            case Success(effects_seq):
+                return Success([*effects_seq.effects, *checkpoint_effects])
+            case Failure(error):
+                return Failure(error)
+
     # ------------------------------------------------------------------ #
     # Blockchain storage integration                                     #
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _serialize_snapshot(snapshot: GbmCVNNPricerConfig) -> tuple[bytes, str]:
-        """Serialize a snapshot to checkpoint bytes and content hash."""
+    def _serialize_snapshot(
+        snapshot: GbmCVNNPricerConfig,
+    ) -> Result[tuple[bytes, str], SerializationError | TorchFacadeError]:
+        """Serialize a snapshot to checkpoint bytes and content hash.
+
+        Returns:
+            Result containing (checkpoint_bytes, content_hash) or SerializationError/TorchFacadeError
+        """
         optimizer_state = snapshot.optimizer_state or AdamOptimizerState(
             param_states={}, param_groups=[]
         )
@@ -915,12 +1054,11 @@ class GbmCVNNPricer:
             global_step=snapshot.global_step,
         )
         match checkpoint_result:
-            case Failure(ser_err):
-                raise RuntimeError(f"Serialization failure: {ser_err}")
+            case Failure(error):
+                return Failure(error)
             case Success(checkpoint_proto):
-                pass
-        checkpoint_bytes = checkpoint_proto.SerializeToString()
-        return checkpoint_bytes, compute_sha256(checkpoint_bytes)
+                checkpoint_bytes = checkpoint_proto.SerializeToString()
+                return Success((checkpoint_bytes, compute_sha256(checkpoint_bytes)))
 
     def _commit_to_blockchain(
         self,
@@ -999,7 +1137,16 @@ class GbmCVNNPricer:
 
             # Execute async commit synchronously
             async def _do_commit() -> None:
-                checkpoint_bytes, content_hash = self._serialize_snapshot(snapshot)
+                match self._serialize_snapshot(snapshot):
+                    case Failure(error):
+                        await self._log_async_internal(
+                            f"Serialization failed, skipping commit: {error}",
+                            level="error",
+                        )
+                        return
+                    case Success((checkpoint_bytes, content_hash)):
+                        pass
+
                 version = await blockchain_store.commit(
                     checkpoint_data=checkpoint_bytes,
                     content_hash=content_hash,
@@ -1108,7 +1255,17 @@ class GbmCVNNPricer:
                 batch=batch,
             )
 
-            checkpoint_bytes, content_hash = self._serialize_snapshot(snapshot)
+            # Serialize snapshot
+            match self._serialize_snapshot(snapshot):
+                case Failure(error):
+                    await self._log_async_internal(
+                        f"Serialization failed, skipping commit: {error}",
+                        level="error",
+                    )
+                    return
+                case Success((checkpoint_bytes, content_hash)):
+                    pass
+
             version = await blockchain_store.commit(
                 checkpoint_data=checkpoint_bytes,
                 content_hash=content_hash,
@@ -1131,6 +1288,63 @@ class GbmCVNNPricer:
     # ------------------------------------------------------------------ #
     # Public API: training                                               #
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _maybe_log_metrics(
+        logger: StepLogger | None,
+        step: int,
+        batch_time: float,
+        loss: float,
+        grad_norm: float,
+        lr: float,
+        optimizer: optim.Optimizer,
+        model: ComplexValuedModel,
+    ) -> None:
+        """Log metrics if logger is provided. No-op if logger is None."""
+        match logger:
+            case None:
+                pass
+            case log_fn:
+                log_fn(
+                    StepMetrics(
+                        step=step,
+                        batch_time=batch_time,
+                        loss=loss,
+                        grad_norm=grad_norm,
+                        lr=lr,
+                        optimizer=optimizer,
+                        model=model,
+                    )
+                )
+
+    @staticmethod
+    def _should_commit_now(
+        blockchain_store: AsyncBlockchainModelStore | None,
+        commit_interval: int | None,
+        global_step: int,
+    ) -> bool:
+        """Check if periodic commit should happen this step."""
+        match (blockchain_store, commit_interval):
+            case (None, _) | (_, None):
+                return False
+            case (_, interval):
+                return global_step % interval == 0
+            case _:
+                raise AssertionError("Unreachable: tuple pattern match exhaustive")
+
+    @staticmethod
+    def _should_commit_final(
+        blockchain_store: AsyncBlockchainModelStore | None,
+        auto_commit: bool,
+    ) -> bool:
+        """Check if final commit should happen after training."""
+        match (blockchain_store, auto_commit):
+            case (None, _) | (_, False):
+                return False
+            case (_, True):
+                return True
+            case _:
+                raise AssertionError("Unreachable: tuple pattern match exhaustive")
 
     def train(
         self,
@@ -1241,38 +1455,38 @@ class GbmCVNNPricer:
 
             updated_loss = loss.item()
             updated_grad_norm = grad_norm
-            if logger is not None:
-                logger(
-                    StepMetrics(
-                        step=global_step,
-                        batch_time=time.perf_counter() - tic,
-                        loss=updated_loss,
-                        grad_norm=updated_grad_norm,
-                        lr=float(adam.param_groups[0]["lr"]),
-                        optimizer=adam,
-                        model=self._cvnn,
-                    )
-                )
+            self._maybe_log_metrics(
+                logger=logger,
+                step=global_step,
+                batch_time=time.perf_counter() - tic,
+                loss=updated_loss,
+                grad_norm=updated_grad_norm,
+                lr=float(adam.param_groups[0]["lr"]),
+                optimizer=adam,
+                model=self._cvnn,
+            )
             global_step += 1
 
-            if (
-                blockchain_store is not None
-                and commit_interval is not None
-                and global_step % commit_interval == 0
-            ):
-                self._log_sync_message(
-                    f"Periodic commit at step {global_step}",
-                    level="info",
-                )
-                self._global_step = global_step
-                self._sobol_skip = sobol_skip
-                self._commit_to_blockchain(
-                    blockchain_store,
-                    adam,
-                    commit_message_template,
-                    updated_loss,
-                    batch=global_step,
-                )
+            # Periodic blockchain commits
+            match self._should_commit_now(blockchain_store, commit_interval, global_step):
+                case True:
+                    self._log_sync_message(
+                        f"Periodic commit at step {global_step}",
+                        level="info",
+                    )
+                    self._global_step = global_step
+                    self._sobol_skip = sobol_skip
+                    # Type narrowing: blockchain_store guaranteed non-None by _should_commit_now
+                    assert blockchain_store is not None
+                    self._commit_to_blockchain(
+                        blockchain_store,
+                        adam,
+                        commit_message_template,
+                        updated_loss,
+                        batch=global_step,
+                    )
+                case False:
+                    pass
 
             return Success(
                 _BatchState(
@@ -1337,18 +1551,23 @@ class GbmCVNNPricer:
         self._sobol_skip = current_sobol_skip
 
         # ── Final blockchain commit ─────────────────────────────────── #
-        if blockchain_store is not None and auto_commit:
-            self._log_sync_message(
-                f"Final commit after training at step {current_global_step}",
-                level="info",
-            )
-            self._commit_to_blockchain(
-                blockchain_store,
-                adam,
-                commit_message_template,
-                final_loss,
-                batch=config.num_batches,
-            )
+        match self._should_commit_final(blockchain_store, auto_commit):
+            case True:
+                self._log_sync_message(
+                    f"Final commit after training at step {current_global_step}",
+                    level="info",
+                )
+                # Type narrowing: blockchain_store guaranteed non-None by _should_commit_final
+                assert blockchain_store is not None
+                self._commit_to_blockchain(
+                    blockchain_store,
+                    adam,
+                    commit_message_template,
+                    final_loss,
+                    batch=config.num_batches,
+                )
+            case False:
+                pass
 
         # ── Return immutable training result ────────────────────────── #
         updated_config = self.snapshot()
@@ -1396,8 +1615,11 @@ class GbmCVNNPricer:
         self, inputs: Sequence[BlackScholes.Inputs]
     ) -> Result[list[BlackScholes.HostPricingResults], TrainerError]:
         """Vectorised valuation of plain-vanilla European options (returns `Success`/`Failure`)."""
-        if not inputs:
-            return Success([])
+        match inputs:
+            case [] | ():
+                return Success([])
+            case _:
+                pass
 
         self._cvnn.eval()
         real_in, imag_in = _split_inputs(

@@ -122,6 +122,10 @@ typecheck = "tools.check_type_safety:run_mypy_only"
 check-types = "tools.check_type_safety:main"
 type-check-all = "tools.check_type_safety:run_full_check"
 
+# Purity checking (zero-tolerance enforcement for Tier 2 business logic)
+# Usage: poetry run check-purity [--verbose] [--explain RULE]
+check-purity = "tools.check_purity:main"
+
 # Protobuf code generation
 regen-proto = "tools.regen_proto:main"
 
@@ -189,6 +193,7 @@ warn_unreachable = false
 module = "spectralmc_proto.*"
 ignore_missing_imports = true
 disallow_any_unimported = false
+disallow_any_explicit = false
 warn_return_any = false
 disallow_any_generics = false
 
@@ -210,6 +215,13 @@ module = [
 disallow_any_unimported = false
 warn_return_any = false
 ignore_missing_imports = true
+
+# TensorBoardLogger: I/O boundary using void-returning functions for side effects
+[[tool.mypy.overrides]]
+module = "spectralmc.gbm_trainer"
+# Disable func-returns-value check for TensorBoard histogram writing at I/O boundary
+# Pattern: deque((void_func() for x in items), maxlen=0) consumes generator for side effects
+disable_error_code = ["func-returns-value"]
 
 [tool.pydantic-mypy]
 init_forbid_extra = true
@@ -243,3 +255,28 @@ filterwarnings = [
 [tool.black]
 line-length = 100
 target-version = ['py312']
+
+# --------------------------------------------------------------------------- #
+#                          P U R I T Y   C O N F I G                          #
+# --------------------------------------------------------------------------- #
+[tool.purity]
+# Tier 1: Infrastructure files (exempt from purity enforcement)
+tier1_infrastructure = [
+    "src/spectralmc/models/torch.py",
+    "src/spectralmc/models/cpu_gpu_transfer.py",
+    "src/spectralmc/cvnn.py",
+]
+
+# Tier 3: Effect interpreter files (exempt from purity enforcement)
+tier3_effects = [
+    "src/spectralmc/effects/interpreter.py",
+    "src/spectralmc/effects/mock.py",  # Test infrastructure
+    "src/spectralmc/storage/*.py",
+    "src/spectralmc/__main__.py",
+    "src/spectralmc/test_runner.py",  # CLI entry point
+]
+
+# Whitelisted violations (2 total) - genuine infrastructure boundaries
+[tool.purity.whitelist]
+"src/spectralmc/async_normals.py" = { "311" = "RNG fast-forward for checkpoint resume (infrastructure boundary)" }
+"src/spectralmc/serialization/tensors.py" = { "174" = "Protobuf requires_grad mutation (I/O boundary)" }

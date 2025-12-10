@@ -35,7 +35,7 @@ async def test_rollback_on_cas_failure(async_store: AsyncBlockchainModelStore) -
     assert version1.counter == 0
 
     # Get current ETag
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     response = await async_store._s3_client.get_object(
         Bucket=async_store.bucket_name,
         Key="chain.json",
@@ -88,7 +88,7 @@ async def test_rollback_on_cas_failure(async_store: AsyncBlockchainModelStore) -
     version_dir = "v2_1.0.2"  # Would be version 2's directory
 
     # Check that artifacts were cleaned up
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     with pytest.raises(ClientError) as exc_info:
         await async_store._s3_client.head_object(
             Bucket=async_store.bucket_name, Key=f"versions/{version_dir}/checkpoint.pb"
@@ -140,7 +140,7 @@ async def test_rollback_on_upload_failure(
 
     # Verify no artifacts were left behind
     # List all objects in versions/
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
     all_objects = []
     async for page in paginator.paginate(Bucket=async_store.bucket_name, Prefix="versions/"):

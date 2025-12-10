@@ -64,25 +64,25 @@ class SimulationParamsConverter:
             512: 512,
             1024: 1024,
         }
-        threads = threads_mapping.get(proto.threads_per_block)
-        if threads is None:
-            return Failure(UnknownThreadsPerBlock(value=proto.threads_per_block))
-
-        params_result = build_simulation_params(
-            skip=proto.skip,
-            timesteps=proto.timesteps,
-            network_size=proto.network_size,
-            batches_per_mc_run=proto.batches_per_mc_run,
-            threads_per_block=threads,
-            mc_seed=proto.mc_seed,
-            buffer_size=proto.buffer_size,
-            dtype=precision,
-        )
-        match params_result:
-            case Failure(params_err):
-                return Failure(params_err)
-            case Success(params):
-                return Success(params)
+        match threads_mapping.get(proto.threads_per_block):
+            case None:
+                return Failure(UnknownThreadsPerBlock(value=proto.threads_per_block))
+            case threads:
+                params_result = build_simulation_params(
+                    skip=proto.skip,
+                    timesteps=proto.timesteps,
+                    network_size=proto.network_size,
+                    batches_per_mc_run=proto.batches_per_mc_run,
+                    threads_per_block=threads,
+                    mc_seed=proto.mc_seed,
+                    buffer_size=proto.buffer_size,
+                    dtype=precision,
+                )
+                match params_result:
+                    case Failure(params_err):
+                        return Failure(params_err)
+                    case Success(params):
+                        return Success(params)
 
 
 class BlackScholesConfigConverter:

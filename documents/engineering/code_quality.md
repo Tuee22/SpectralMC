@@ -52,7 +52,7 @@ flowchart TB
 ## Doctrines
 
 - **Zero escape hatches**: No `Any`, no `cast`, no `# type: ignore`, strict typing everywhere (prod, tests, docs, scripts). Enforced via `poetry run check-code` and AST-based checks.
-- **Purity-first**: Pure code forbids `for`/`while` and even `if` branching; use `match`/comprehensions/expressions and Result/ADT flows. Side effects live only in interpreters and adapters.
+- **Purity-first (Zero Tolerance)**: Tier 2 business logic enforces ZERO TOLERANCE for `for`/`while`/statement-level `if` (use `match`/comprehensions/conditional expressions). Tier 1 infrastructure and Tier 3 interpreters may use imperative patterns. Side effects in business logic must be modeled as Effect ADTs. See [purity_enforcement.md](purity_enforcement.md) for AST linter rules.
 - **Immutability by default**: All domain/effect dataclasses are `frozen=True`; updates use `dataclasses.replace` or new instances. No mutation through `__dict__`, `object.__setattr__`, or tuple hacks.
 - **Effects as data**: Programs yield effect ADTs; interpreters execute. No direct infrastructure calls inside programs or models.
 - **GPU determinism**: CPU-only initialization + explicit device transfer; PyTorch imports flow through the facade for deterministic settings and thread safety.
@@ -63,6 +63,8 @@ flowchart TB
 | Anti-pattern | Fix | SSoT |
 |--------------|-----|------|
 | `Any`/`cast`/`type: ignore` | Remove and annotate; narrow via `match` | coding_standards.md |
+| `if` statements in Tier 2 | Convert to conditional expressions or match/case | purity_doctrine.md; purity_enforcement.md |
+| `for`/`while` in Tier 2 | Convert to comprehensions or generators | purity_doctrine.md; purity_enforcement.md |
 | Loops/`if` in pure code | Refactor to expressions or generator yields | purity_doctrine.md |
 | Mutable dataclasses | Convert to frozen + functional updates | immutability_doctrine.md |
 | Side effects in pure layers | Model as effect ADTs and interpret | effect_interpreter.md |

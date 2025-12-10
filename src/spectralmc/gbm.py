@@ -219,6 +219,7 @@ def build_black_scholes_config(
 # ─────────────────────────────── CUDA path kernel ───────────────────────────
 
 
+# TIER 3 BOUNDARY: CUDA kernel - imperative patterns acceptable for GPU efficiency
 @cuda.jit
 def SimulateBlackScholes(
     io: DeviceNDArray,
@@ -230,7 +231,12 @@ def SimulateBlackScholes(
     v: float,
     simulate_log_return: bool,
 ) -> None:
-    """Advance each path *in-place*.  One CUDA thread ≙ one path."""
+    """Advance each path *in-place*.  One CUDA thread ≙ one path.
+
+    NOTE: This kernel uses imperative patterns (if statements, for loops) which are
+    acceptable at the GPU compute boundary (Tier 3). Purity rules apply to the
+    calling code, not kernel internals.
+    """
     idx = cuda.grid(1)
     if idx < io.shape[1]:
         sqrt_dt = sqrt(dt)
@@ -426,9 +432,12 @@ class BlackScholes:
 
         # optional forward normalisation
         self._numba_stream.synchronize()
-        if self._cfg.normalize_forwards:
-            row_means = cp.mean(sims, axis=1, keepdims=True).squeeze()
-            sims *= cp.expand_dims(forwards / row_means, 1)
+        match self._cfg.normalize_forwards:
+            case True:
+                row_means = cp.mean(sims, axis=1, keepdims=True).squeeze()
+                sims *= cp.expand_dims(forwards / row_means, 1)
+            case False:
+                pass
 
         self._cp_stream.synchronize()
         return Success(self.SimResults(times=times, sims=sims, forwards=forwards, df=df))

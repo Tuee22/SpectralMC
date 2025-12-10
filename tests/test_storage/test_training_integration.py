@@ -133,7 +133,7 @@ async def test_training_with_auto_commit(
     """Test training with manual commit after completion (auto_commit skipped in async context)."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
-    pricer = GbmCVNNPricer(config)
+    pricer = _expect_success(GbmCVNNPricer.create(config))
 
     training_config = TrainingConfig(
         num_batches=5,
@@ -162,7 +162,7 @@ async def test_training_with_commit_interval(
     """Test training with manual periodic commits (simulating commit_interval behavior)."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
-    pricer = GbmCVNNPricer(config)
+    pricer = _expect_success(GbmCVNNPricer.create(config))
 
     training_config = TrainingConfig(
         num_batches=15,
@@ -191,7 +191,7 @@ async def test_training_without_storage_backward_compat(
     """Test that training without blockchain_store still works (backward compatibility)."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
-    pricer = GbmCVNNPricer(config)
+    pricer = _expect_success(GbmCVNNPricer.create(config))
 
     training_config = TrainingConfig(
         num_batches=5,
@@ -218,7 +218,7 @@ async def test_training_validation_auto_commit_requires_store(
     """Test that auto_commit=True without blockchain_store raises error."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
-    pricer = GbmCVNNPricer(config)
+    pricer = _expect_success(GbmCVNNPricer.create(config))
 
     training_config = TrainingConfig(
         num_batches=5,
@@ -246,7 +246,7 @@ async def test_training_validation_commit_interval_requires_store(
     """Test that commit_interval without blockchain_store raises error."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
-    pricer = GbmCVNNPricer(config)
+    pricer = _expect_success(GbmCVNNPricer.create(config))
 
     training_config = TrainingConfig(
         num_batches=5,
@@ -274,7 +274,7 @@ async def test_training_commit_message_template(
     """Test that commit message can be formatted with training details."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
-    pricer = GbmCVNNPricer(config)
+    pricer = _expect_success(GbmCVNNPricer.create(config))
 
     training_config = TrainingConfig(
         num_batches=5,
@@ -302,7 +302,7 @@ async def test_training_commit_preserves_optimizer_state(
     """Test that committing after training preserves optimizer state."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
-    pricer = GbmCVNNPricer(config)
+    pricer = _expect_success(GbmCVNNPricer.create(config))
 
     training_config = TrainingConfig(
         num_batches=10,
@@ -317,7 +317,7 @@ async def test_training_commit_preserves_optimizer_state(
     snapshot = _expect_success(pricer.snapshot())
 
     # Verify optimizer state exists before commit
-    assert snapshot.optimizer_state is not None
+    assert snapshot.optimizer_state is not None, "Optimizer state should be preserved"
     assert snapshot.global_step == 10
     assert snapshot.sobol_skip > 0
 

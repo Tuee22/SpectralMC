@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from collections.abc import Hashable, Mapping
 from enum import Enum
-from typing import Union
 
 import torch
 
@@ -78,14 +77,14 @@ class TransferDestination(Enum):
 
 
 # ────────────────────────────── type aliases ────────────────────────────────
-Scalar = Union[int, float, bool, str, bytes, None]
-TensorTree = Union[
-    torch.Tensor,
-    Scalar,
-    list["TensorTree"],
-    tuple["TensorTree", ...],
-    Mapping[Hashable, "TensorTree"],
-]
+Scalar = int | float | bool | str | bytes | None
+TensorTree = (
+    torch.Tensor
+    | Scalar
+    | list["TensorTree"]
+    | tuple["TensorTree", ...]
+    | Mapping[Hashable, "TensorTree"]
+)
 
 # ──────────────────────────── global resources ──────────────────────────────
 # NOTE: Conditional stream creation is intentional. torch.cuda.Stream() fails

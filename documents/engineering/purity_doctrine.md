@@ -3,7 +3,7 @@
 
 **Status**: Authoritative source
 **Supersedes**: Prior purity doctrine drafts
-**Referenced by**: documents/documentation_standards.md, [PURITY_MIGRATION_PLAN.md](PURITY_MIGRATION_PLAN.md)
+**Referenced by**: documents/documentation_standards.md
 
 > **Purpose**: Define SpectralMC purity expectations and separation of side effects.
 
@@ -12,7 +12,38 @@
 - [Coding Standards](coding_standards.md)
 - [Reproducibility Proofs](reproducibility_proofs.md)
 - [Testing Requirements](testing_requirements.md)
-- [Purity Migration Plan](PURITY_MIGRATION_PLAN.md) - Complete migration history and remaining work analysis
+- [Purity Enforcement](purity_enforcement.md)
+
+## Zero Tolerance Policy for Business Logic
+
+**Critical Distinction**: SpectralMC enforces **ZERO TOLERANCE** for purity violations in **Tier 2 (Business Logic)** files, while preserving necessary exemptions for infrastructure and effect execution layers.
+
+### What Zero Tolerance Means
+
+**In Tier 2 Business Logic Files** (`gbm_trainer.py`, `serialization/*`, `cvnn_factory.py`, `sobol_sampler.py`):
+- ❌ ZERO statement-level `for` loops (use comprehensions, helper functions, or Effect ADTs)
+- ❌ ZERO statement-level `if` branches (use conditional expressions or `match`/`case`)
+- ❌ ZERO `while` loops (use generator expressions with `next()`)
+- ❌ ZERO `raise` for expected errors (use Result types; defensive assertions OK)
+- ❌ ZERO side effects (logging, I/O, mutation) - must use Effect ADTs
+
+**Acceptable in Tier 2 ONLY as expressions**:
+- ✅ Conditional expressions: `value if condition else default`
+- ✅ Match/case on ADTs: `match result: case Success(v): ...`
+- ✅ Comprehensions: `[f(x) for x in items]`
+- ✅ Generator expressions: `next((x for x in items if p(x)), None)`
+
+### Why Zero Tolerance?
+
+Business logic purity enables:
+1. **Bit-exact reproducibility** - Required for quantitative finance
+2. **Property-based testing** - Pure functions are trivially testable
+3. **Effect isolation** - All side effects captured in ADTs
+4. **Type-safe composition** - Pure functions compose without hidden state
+
+Infrastructure may be impure because it provides the deterministic foundation that business logic relies on.
+
+---
 
 ## Core Principle
 
@@ -65,7 +96,7 @@ The purity doctrine applies to **business logic**, not all code in SpectralMC. T
 
 Per [pytorch_facade.md](pytorch_facade.md), these patterns are necessary for guaranteeing reproducibility.
 
-### Tier 2: Business Logic (PURITY ENFORCED)
+### Tier 2: Business Logic (ZERO TOLERANCE PURITY)
 
 **Enforced Files**:
 - `src/spectralmc/gbm_trainer.py` - Training orchestration
@@ -74,14 +105,31 @@ Per [pytorch_facade.md](pytorch_facade.md), these patterns are necessary for gua
 - `src/spectralmc/sobol_sampler.py` - Sampling logic
 - Other core processing modules
 
-**Rationale**: Business logic should be pure for testability, reproducibility, and composability.
+**Rationale**: Business logic must be 100% pure for testability, reproducibility, and composability.
 
-**Acceptable exceptions** (per existing doctrine):
-- Effectful boundaries: Conditional logging, checkpoint I/O
-- Guard clauses: Validation with early returns
-- Thread safety: Defensive assertions
+**Zero Tolerance Enforcement**:
+- ❌ NO `for` loops (use comprehensions or Effect sequences)
+- ❌ NO statement-level `if` (use conditional expressions or match/case)
+- ❌ NO `while` loops (use generators or recursion)
+- ❌ NO `raise` for expected errors (use Result types)
+- ❌ NO logging/I/O (use Effect ADTs)
 
-**Target**: 70% purity (match/case or conditional expressions) in business logic files.
+**ONLY Acceptable Patterns**:
+- ✅ Conditional expressions: `x if cond else y`
+- ✅ Match/case on Result/ADTs
+- ✅ Comprehensions (no side effects)
+- ✅ Helper functions returning Result types
+- ✅ Defensive assertions for programming errors (not validation)
+
+**Whitelisted Boundaries** (4 total - documented for migration):
+- `gbm_trainer.py:382` - Logging interval check (infrastructure boundary)
+- `gbm_trainer.py:392` - TensorBoard flush check (infrastructure boundary)
+- `gbm_trainer.py:421` - Gradient existence guard (TensorBoard infrastructure)
+- `serialization/tensors.py:174` - Protobuf `requires_grad` mutation (API boundary)
+
+See [Purity Enforcement](purity_enforcement.md) for AST linter whitelist configuration.
+
+**Achievement**: 100% purity required for new code; 4 whitelisted exceptions in existing code documented for migration.
 
 ### Tier 3: Effect Interpreter (MIXED)
 
@@ -97,11 +145,20 @@ Per [pytorch_facade.md](pytorch_facade.md), these patterns are necessary for gua
 
 ---
 
-## Forbidden Patterns
+## Forbidden Patterns (Tier 2 Business Logic ONLY)
+
+The following patterns are **STRICTLY FORBIDDEN** in Tier 2 business logic files. These patterns are acceptable in Tier 1 infrastructure (see architectural boundaries above).
+
+**Files where these patterns are FORBIDDEN**:
+- `src/spectralmc/gbm_trainer.py` (except 3 whitelisted lines)
+- `src/spectralmc/serialization/*.py` (except tensors.py:174)
+- `src/spectralmc/cvnn_factory.py`
+- `src/spectralmc/sobol_sampler.py`
+- All other Tier 2 files
 
 ### 1. `for` Loops
 
-**Anti-pattern**:
+**Anti-pattern** (FORBIDDEN in Tier 2):
 ```python
 # File: documents/engineering/purity_doctrine.md
 def process_items(items: list[int]) -> list[int]:
@@ -156,6 +213,14 @@ def handle_result(result: Result[Model, LoadError]) -> str:
         case Failure(error):
             return f"Error: {error}"
 ```
+
+**Critical**: Conditional **expressions** (`x if cond else y`) are pure and encouraged. Statement-level `if` blocks are forbidden because they:
+- Break expression-oriented programming
+- Cannot be composed or assigned
+- Prevent type narrowing in some cases
+- Encourage imperative mutation patterns
+
+**Zero tolerance means**: Count of statement-level `if` in Tier 2 files must approach ZERO (4 whitelisted exceptions documented above).
 
 ### 3. `while` Loops
 
@@ -464,68 +529,73 @@ def use_bounds(lower: float, upper: float) -> Result[float, InvalidBoundsError]:
 
 ## Enforcement
 
-### Static Analysis
+### Primary: AST-Based Static Analysis
 
-mypy cannot detect all purity violations. Use code review and grep audits:
+SpectralMC uses **AST-based linting** to enforce purity in Tier 2 files. See [Purity Enforcement](purity_enforcement.md) for complete tooling guide.
 
+**Command**:
 ```bash
-# File: documents/engineering/purity_doctrine.md
-# FORBIDDEN: for-loops in business logic (training, pricing, models)
-# Allowed only in: effects/interpreter.py, storage/, __main__.py
-grep -rn "^\s*for " src/spectralmc/ --include="*.py" \
-  | grep -v "effects/interpreter.py" \
-  | grep -v "storage/" \
-  | grep -v "__main__.py"
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-purity
+```
 
-# FORBIDDEN: if-statements in pure code
-grep -rn "^\s*if " src/spectralmc/ --include="*.py" \
-  | grep -v "effects/interpreter.py" \
-  | grep -v "storage/" \
-  | grep -v "__main__.py" \
-  | grep -v "__post_init__"
+**What it checks**:
+1. **For loops**: Zero statement-level `for` in Tier 2 files
+2. **If statements**: Zero statement-level `if` in Tier 2 files (4 whitelisted exceptions)
+3. **While loops**: Zero `while` in Tier 2 files
+4. **Raise statements**: Classification via whitelist (defensive assertions OK)
+5. **Side effects**: No logging, I/O, or mutation in pure functions
 
-# FORBIDDEN: raise statements in pure code (except assert_never)
-grep -rn "^\s*raise " src/spectralmc/ --include="*.py" \
-  | grep -v "assert_never" \
-  | grep -v "effects/interpreter.py" \
-  | grep -v "storage/"
+**AST Detection Rules**:
+- `ast.For` nodes in Tier 2 → ERROR (zero tolerance)
+- `ast.If` nodes in Tier 2 (not in whitelist) → ERROR
+- `ast.While` nodes in Tier 2 → ERROR (zero tolerance)
+- `ast.Raise` nodes not in whitelist → WARNING (manual review required)
+- Function calls to `logger.*`, `print`, file I/O → ERROR
 
-# FORBIDDEN: print statements in business logic
-grep -rn "print(" src/spectralmc/ --include="*.py" \
-  | grep -v "__main__.py"
-
-# FORBIDDEN: logging in pure modules
-grep -rn "logger\." src/spectralmc/ --include="*.py" \
-  | grep -v "effects/interpreter.py" \
-  | grep -v "storage/"
+**Whitelist Configuration** (4 acceptable patterns):
+```python
+ACCEPTABLE_IF_STATEMENTS = {
+    ("src/spectralmc/gbm_trainer.py", 382): "Logging infrastructure boundary",
+    ("src/spectralmc/gbm_trainer.py", 392): "TensorBoard flush boundary",
+    ("src/spectralmc/gbm_trainer.py", 421): "Gradient guard (TensorBoard)",
+    ("src/spectralmc/serialization/tensors.py", 174): "Protobuf API boundary",
+}
 ```
 
 ### Code Review Checklist
 
-Before approving any PR in business logic (training, pricing, models):
+Before approving any PR touching Tier 2 files:
 
-- [ ] No `for` loops - use comprehensions or Effect sequences
-- [ ] No `if` statements - use conditional expressions or `match`/`case`
-- [ ] No `while` loops
-- [ ] No `raise` except in `assert_never()`
-- [ ] No `print()` or `logger.*()`
+- [ ] Zero `for` loops (verified by AST linter)
+- [ ] Zero statement-level `if` outside whitelist (verified by AST linter)
+- [ ] Zero `while` loops (verified by AST linter)
+- [ ] All `raise` statements are defensive assertions (not validation errors)
+- [ ] No `print()` or `logger.*()` calls
 - [ ] Returns Effect ADTs for side-effectful operations
 - [ ] Factory functions return `Result` for validation
 - [ ] Comprehensions have no side effects
+- [ ] Match/case uses exhaustive patterns
+
+### CI/CD Integration
+
+**Required gates** (must pass before merge):
+1. `poetry run check-code` (Ruff + Black + MyPy)
+2. `poetry run check-purity` (AST-based purity linting)
+3. `poetry run test-all` (all tests passing)
 
 ---
 
-## Exceptions: Where Impurity is Allowed
+## Tier-Specific Purity Requirements
 
 ### Hierarchy of Purity Requirements
 
-| Layer | Purity Requirement | Allowed Impurity |
-|-------|-------------------|------------------|
-| **Business Logic** (training, pricing, models) | **STRICT PURE** | NONE - must use Effect ADTs |
-| **Effect Interpreter** (`effects/interpreter.py`) | Impure by design | GPU ops, I/O, RNG mutation |
-| **Storage Layer** (`storage/`) | Impure by design | S3 I/O, network operations |
-| **Test Code** (`tests/`) | Relaxed | assert, pytest fixtures, setup |
-| **System Boundaries** (`__main__.py`, HTTP handlers) | Relaxed | Logging, argument parsing |
+| Layer | Purity Requirement | Allowed Impurity | Enforcement |
+|-------|-------------------|------------------|-------------|
+| **Tier 1: Infrastructure** | Relaxed | Thread safety, nn.Module idioms, device guards | Manual review |
+| **Tier 2: Business Logic** | **ZERO TOLERANCE** | NONE (4 whitelisted boundaries for migration) | AST linting + CI |
+| **Tier 3: Effect Interpreter** | Mixed (ADTs pure, execution impure) | GPU ops, I/O, RNG, network | Manual review |
+| **Test Code** | Relaxed | assert, fixtures, setup loops | Manual review |
+| **System Boundaries** | Relaxed | Logging, arg parsing, exit codes | Manual review |
 
 ### CUDA kernels (performance-focused exception)
 
@@ -541,6 +611,27 @@ Pydantic raises `ValidationError` internally. Keep call sites pure by wrapping
 construction in a helper that returns `Result[Model, ValidationError]` (see
 `src/spectralmc/validation.py::validate_model`). Use that wrapper instead of
 letting validation exceptions propagate; handle the Failure via `match/case`.
+
+### Protobuf Serialization Boundary (imperative API)
+
+Protobuf's generated code requires mutation via methods like `CopyFrom()`. This is
+acceptable at serialization boundaries where protobuf's imperative API is unavoidable:
+
+```python
+# Acceptable: protobuf mutation in serialization layer
+_ = [
+    proto.state[param_id].CopyFrom(entry_proto)
+    for result in param_entries_results
+    if isinstance(result, Success)
+    for param_id, entry_proto in [result.value]  # Unpack tuple from Success
+]
+```
+
+**Pattern**: Isolated to `serialization/` modules where protobuf interop is required.
+**Rationale**: Protobuf's generated API is inherently imperative; no functional alternative exists.
+**Location**: See `src/spectralmc/serialization/tensors.py` lines 288-294.
+
+Note: The comprehension is used for iteration (the side effect is unavoidable with protobuf's API design). This pattern is explicitly documented as a necessary evil at the serialization boundary.
 
 ### Import failures (fail-fast allowed)
 
@@ -609,22 +700,39 @@ def assert_effect_count(self, count: int) -> None:
 - Test failures (expected vs actual mismatch)
 - System boundary conversion (Result → exception for interop)
 
-### Business Logic Must Be Pure
+### Business Logic Must Be 100% Pure (Tier 2)
 
-Training orchestration, pricing logic, and model code **MUST be pure**:
+**ZERO TOLERANCE** for impurity in business logic files:
 
+**Forbidden in Tier 2** (except 4 whitelisted lines):
+- ❌ Statement-level `for` loops → Use: `[f(x) for x in items]`
+- ❌ Statement-level `if` branches → Use: `value if cond else default` or `match`/`case`
+- ❌ Direct GPU operations → Use: Effect ADTs (TensorTransfer, KernelLaunch)
+- ❌ Direct I/O or logging → Use: Effect ADTs (LogMessage, WriteCheckpoint)
+- ❌ RNG state mutation → Use: Pure RNG functions with explicit state
+- ❌ Exception raising for validation → Use: Result types
+
+**Required Patterns**:
 - ✅ Build Effect ADTs to describe operations
-- ✅ Return Effect sequences/compositions
+- ✅ Return Effect sequences for side effects
 - ✅ Use comprehensions for iteration
-- ❌ NO direct GPU operations
-- ❌ NO I/O or logging
-- ❌ NO `for` loops (use comprehensions instead)
-- ❌ NO `if` statements (use conditional expressions or `match`/`case`)
+- ✅ Use conditional expressions for branching
+- ✅ Use match/case for complex logic
+- ✅ Return Result types for errors
 
-**Why?** Training logic that builds effects is:
+**Whitelisted Boundaries** (4 lines with documented rationale):
+1. `gbm_trainer.py:382` - Logging histogram interval check (infrastructure boundary)
+2. `gbm_trainer.py:392` - TensorBoard flush interval check (infrastructure boundary)
+3. `gbm_trainer.py:421` - Gradient existence guard (TensorBoard infrastructure)
+4. `serialization/tensors.py:174` - Protobuf `requires_grad` mutation (API boundary)
+
+See [Purity Enforcement](purity_enforcement.md) for AST linter whitelist configuration.
+
+**Why Zero Tolerance?** Training logic that is 100% pure:
 - **Testable** with MockInterpreter (no GPU needed)
 - **Reproducible** (same inputs → same effect sequence)
 - **Composable** (effects combine without coupling)
+- **Type-safe** (all error paths explicit in types)
 
 ### Effect Interpreter (ONLY Place for Side Effects)
 
@@ -735,9 +843,6 @@ Mark with `# SYSTEM BOUNDARY:` comment.
 - **MyPy strict mode**: ✅ PASSING
 - **Type safety**: Zero regressions
 - **Functional correctness**: Zero behavioral changes
-
-**For complete migration history, refactoring patterns, and remaining work analysis**, see:
-📖 [Purity Migration Plan](PURITY_MIGRATION_PLAN.md)
 
 ### Summary
 

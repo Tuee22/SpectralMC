@@ -32,8 +32,8 @@ async def test_context_manager_cleanup() -> None:
 
     async with store:
         # Inside context, client should exist
-        assert store._s3_client is not None
-        assert store._client_context is not None
+        assert store._s3_client is not None, "S3 client should be initialized"
+        assert store._client_context is not None, "Client context should be active"
 
         # Should be able to create bucket
         await store._s3_client.create_bucket(Bucket=bucket_name)
@@ -69,7 +69,7 @@ async def test_context_manager_exception_handling() -> None:
     # Simulate an exception inside the context
     async with store:
         # Verify client was created
-        assert store._s3_client is not None
+        assert store._s3_client is not None, "S3 client should be initialized"
 
         # Create bucket for cleanup test
         await store._s3_client.create_bucket(Bucket=bucket_name)
@@ -84,7 +84,7 @@ async def test_context_manager_exception_handling() -> None:
 
     # Verify we can still use a new context with the same store instance
     async with store:
-        assert store._s3_client is not None
+        assert store._s3_client is not None, "S3 client should be initialized"
 
         # Bucket should still exist from before exception
         response = await store._s3_client.list_buckets()

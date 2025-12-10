@@ -38,12 +38,32 @@
 - Organize new cases alongside the feature’s area; mirror examples from `tests/test_storage` or `tests/test_effects`.
 - Capture and attach test logs from `poetry run test-all` in PRs for reviewability.
 
-## Commit & Pull Request Guidelines
-- Use small, focused commits with imperative summaries (e.g., “Add Sobol sampler fixture”).
-- Include what/why in PR descriptions, linked issues if applicable, and note GPU environment used.
-- Show validation: paste the `check-code` and `test-all` command outputs or attach the log file path.
-- Update docs/examples when behavior or APIs change; ensure stubs stay in sync with new library usage.
-- Avoid adding secrets; keep configuration in environment variables or `.env` files not tracked in git.
+## 🔒 Git Workflow Policy for LLMs
+
+**CRITICAL**: LLMs (including Claude Code, GitHub Copilot, and all AI assistants) are STRICTLY FORBIDDEN from making commits, creating branches, or pushing changes.
+
+### Absolutely Forbidden Operations
+- ❌ **NEVER** run `git commit` (any variant: `--amend`, `--no-verify`, etc.)
+- ❌ **NEVER** run `git push` (any variant: `--force`, `--force-with-lease`, etc.)
+- ❌ **NEVER** run `git checkout -b` or `git branch <name>` to create branches
+- ❌ **NEVER** run `git switch -c` to create branches
+- ❌ **NEVER** run `git add` followed by commit operations
+- ❌ **NEVER** modify git history (rebase, reset, amend)
+
+### Required LLM Workflow
+- ✅ Make all requested code changes
+- ✅ Run validation: `check-code` and `test-all`
+- ✅ Leave ALL changes as uncommitted working directory changes
+- ✅ Human reviews with `git status` and `git diff`
+- ✅ Human manually creates branches, commits, and pushes
+
+### Human Commit & Pull Request Guidelines
+When the human creates commits and PRs (NOT the LLM):
+- Use small, focused commits with imperative summaries (e.g., "Add Sobol sampler fixture")
+- Include what/why in PR descriptions, linked issues if applicable, and note GPU environment used
+- Show validation: paste the `check-code` and `test-all` command outputs or attach the log file path
+- Update docs/examples when behavior or APIs change; ensure stubs stay in sync with new library usage
+- Avoid adding secrets; keep configuration in environment variables or `.env` files not tracked in git
 
 ## Security & Configuration Tips
 - S3/chain credentials belong in runtime env/config, never in source control.

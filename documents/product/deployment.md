@@ -71,7 +71,7 @@ aws s3api put-bucket-versioning \
 
 **3. Configure Lifecycle Policy** (cost optimization):
 ```json
-// File: lifecycle-policy.json
+/* File: lifecycle-policy.json */
 {
   "Rules": [
     {
@@ -165,7 +165,7 @@ flowchart TB
 
 **Training Node Policy** (read/write access):
 ```json
-// File: iam/training_node_policy.json
+/* File: iam/training_node_policy.json */
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -188,7 +188,7 @@ flowchart TB
 
 **Inference Node Policy** (read-only access):
 ```json
-// File: iam/inference_node_policy.json
+/* File: iam/inference_node_policy.json */
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -209,7 +209,7 @@ flowchart TB
 
 **Garbage Collection Policy** (delete access):
 ```json
-// File: iam/gc_policy.json
+/* File: iam/gc_policy.json */
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -493,7 +493,7 @@ aws s3api put-bucket-logging \
 
 `logging.json`:
 ```json
-// File: logging.json
+/* File: logging.json */
 {
   "LoggingEnabled": {
     "TargetBucket": "spectralmc-logs",
@@ -540,7 +540,7 @@ aws s3api put-bucket-replication \
 
 `replication.json`:
 ```json
-// File: replication.json
+/* File: replication.json */
 {
   "Role": "arn:aws:iam::123456789012:role/s3-replication-role",
   "Rules": [{

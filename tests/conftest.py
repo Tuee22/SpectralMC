@@ -163,7 +163,12 @@ async def async_store() -> AsyncGenerator[AsyncBlockchainModelStore, None]:
 
     async with AsyncBlockchainModelStore(bucket_name) as store:
         # Create test bucket
-        assert store._s3_client is not None
+        assert (
+            store._s3_client is not None
+        ), "S3 client should be initialized after entering context"
+        assert hasattr(
+            store._s3_client, "create_bucket"
+        ), "S3 client should have create_bucket method"
         try:
             await store._s3_client.create_bucket(Bucket=bucket_name)
         except botocore.exceptions.ClientError as e:
@@ -174,7 +179,8 @@ async def async_store() -> AsyncGenerator[AsyncBlockchainModelStore, None]:
         yield store
 
         # Cleanup: Delete all objects in bucket, then delete bucket
-        assert store._s3_client is not None
+        assert store._s3_client is not None, "S3 client should still be available during cleanup"
+        assert hasattr(store._s3_client, "get_paginator"), "S3 client should support pagination"
         try:
             # List and delete all objects
             paginator = store._s3_client.get_paginator("list_objects_v2")

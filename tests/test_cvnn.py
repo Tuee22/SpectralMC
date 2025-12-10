@@ -96,7 +96,10 @@ def test_complex_linear_manual(dt: torch.dtype) -> None:
         layer.real_weight.copy_(torch.tensor([[1.0, 2.0], [3.0, 4.0]], device=GPU_DEV))
         layer.imag_weight.copy_(torch.tensor([[5.0, 6.0], [7.0, 8.0]], device=GPU_DEV))
 
-        assert layer.real_bias is not None and layer.imag_bias is not None
+        assert layer.real_bias is not None, "Real bias should exist when bias=True"
+        assert layer.imag_bias is not None, "Imag bias should exist when bias=True"
+        assert layer.real_bias.shape == (2,), "Real bias should have shape (out_features,)"
+        assert layer.imag_bias.shape == (2,), "Imag bias should have shape (out_features,)"
         layer.real_bias.copy_(torch.tensor([0.1, 0.2], device=GPU_DEV))
         layer.imag_bias.copy_(torch.tensor([0.3, 0.4], device=GPU_DEV))
 
@@ -129,10 +132,14 @@ def test_complex_linear_shapes_and_grad(bias: bool, dt: torch.dtype) -> None:
 
     for param in layer.parameters():
         grad = param.grad
-        assert grad is not None and torch.isfinite(grad).all()
+        assert grad is not None, f"Gradient should be computed for parameter {param.shape}"
+        assert torch.isfinite(grad).all(), "Gradient should not contain NaN/Inf"
+        assert grad.shape == param.shape, "Gradient should match parameter shape"
 
-    assert x_r.grad is not None and x_i.grad is not None
-    assert torch.isfinite(x_r.grad).all() and torch.isfinite(x_i.grad).all()
+    assert x_r.grad is not None, "Real input gradient should be computed"
+    assert x_i.grad is not None, "Imag input gradient should be computed"
+    assert torch.isfinite(x_r.grad).all(), "Real input gradient should not contain NaN/Inf"
+    assert torch.isfinite(x_i.grad).all(), "Imag input gradient should not contain NaN/Inf"
 
 
 # ───────────────────────────── zReLU ──────────────────────────────────────
@@ -151,7 +158,10 @@ def test_zrelu_masking_and_grad(dt: torch.dtype) -> None:
     (out_r.sum() + out_i.sum()).backward()
     mask = torch.tensor([[0.0, 0.0, 1.0]], device=GPU_DEV)
 
-    assert r_in.grad is not None and i_in.grad is not None
+    assert r_in.grad is not None, "Real input gradient should be computed"
+    assert i_in.grad is not None, "Imag input gradient should be computed"
+    assert torch.isfinite(r_in.grad).all(), "Real input gradient should not contain NaN/Inf"
+    assert torch.isfinite(i_in.grad).all(), "Imag input gradient should not contain NaN/Inf"
     assert_close(r_in.grad, mask)
     assert_close(i_in.grad, mask)
 
@@ -312,8 +322,12 @@ def test_complex_residual_grad_flow(dt: torch.dtype) -> None:
 
     (out_r.square().mean() + out_i.square().mean()).backward()
 
-    assert x_r.grad is not None and x_i.grad is not None
-    assert torch.isfinite(x_r.grad).all() and torch.isfinite(x_i.grad).all()
+    assert x_r.grad is not None, "Real input gradient should be computed"
+    assert x_i.grad is not None, "Imag input gradient should be computed"
+    assert x_r.grad.shape == x_r.shape, "Gradient shape should match input shape"
+    assert x_i.grad.shape == x_i.shape, "Gradient shape should match input shape"
+    assert torch.isfinite(x_r.grad).all(), "Real input gradient should not contain NaN/Inf"
+    assert torch.isfinite(x_i.grad).all(), "Imag input gradient should not contain NaN/Inf"
 
     grads: list[Tensor] = [
         p.grad for p in res.parameters() if p.grad is not None and p.requires_grad

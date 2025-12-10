@@ -91,7 +91,9 @@ class DTypeConverter:
         """Convert FullPrecisionDType or ReducedPrecisionDType to proto enum value."""
         match _DTYPE_TO_PROTO.get(dtype):
             case None:
-                return Failure(UnknownDType(proto_value=0))  # No valid proto value for unknown dtype
+                return Failure(
+                    UnknownDType(proto_value=0)
+                )  # No valid proto value for unknown dtype
             case proto_value:
                 return Success(proto_value)
 

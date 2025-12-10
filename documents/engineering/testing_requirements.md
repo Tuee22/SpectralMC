@@ -2,8 +2,8 @@
 # Testing Requirements
 
 **Status**: Authoritative source
-**Supersedes**: documents/engineering/testing.md (deprecated stub)
-**Referenced by**: documents/documentation_standards.md
+**Supersedes**: None (primary testing standards document)
+**Referenced by**: documents/documentation_standards.md, documents/engineering/testing.md
 
 > **Purpose**: SSoT for SpectralMC testing expectations, determinism, and GPU constraints.
 

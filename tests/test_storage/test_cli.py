@@ -96,7 +96,7 @@ async def test_cli_verify_corrupted_chain(
     metadata_key = f"versions/{v1.directory_name}/metadata.json"
 
     # Get current metadata
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     response = await async_store._s3_client.get_object(
         Bucket=async_store.bucket_name, Key=metadata_key
     )
@@ -108,7 +108,7 @@ async def test_cli_verify_corrupted_chain(
     metadata["content_hash"] = "corrupted_hash_xxx"
 
     # Put back corrupted metadata
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     await async_store._s3_client.put_object(
         Bucket=async_store.bucket_name,
         Key=metadata_key,
@@ -150,7 +150,7 @@ async def test_cli_find_corruption_detects(
 
     # Corrupt first version
     metadata_key = f"versions/{v1.directory_name}/metadata.json"
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     response = await async_store._s3_client.get_object(
         Bucket=async_store.bucket_name, Key=metadata_key
     )
@@ -158,7 +158,7 @@ async def test_cli_find_corruption_detects(
     assert hasattr(body, "read")
     metadata = json.loads(await body.read())
     metadata["content_hash"] = "corrupted"
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     await async_store._s3_client.put_object(
         Bucket=async_store.bucket_name,
         Key=metadata_key,

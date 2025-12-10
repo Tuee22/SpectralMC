@@ -284,7 +284,7 @@ async def test_detect_broken_merkle_chain(
     # Tamper with version 1's metadata.json parent_hash
 
     # Find v1 metadata
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
     async for page in paginator.paginate(
         Bucket=async_store.bucket_name, Prefix="versions/v0000000001"
@@ -296,7 +296,9 @@ async def test_detect_broken_merkle_chain(
                 if "metadata.json" in obj["Key"]:
                     metadata_key = obj["Key"]
 
-                    assert async_store._s3_client is not None
+                    assert (
+                        async_store._s3_client is not None
+                    ), "S3 client should be initialized in async context"
                     response = await async_store._s3_client.get_object(
                         Bucket=async_store.bucket_name, Key=metadata_key
                     )
@@ -307,7 +309,9 @@ async def test_detect_broken_merkle_chain(
                     # Corrupt parent_hash (should match v0's content_hash but we change it)
                     metadata["parent_hash"] = "tampered_parent_hash_12345"
 
-                    assert async_store._s3_client is not None
+                    assert (
+                        async_store._s3_client is not None
+                    ), "S3 client should be initialized in async context"
                     await async_store._s3_client.put_object(
                         Bucket=async_store.bucket_name,
                         Key=metadata_key,
@@ -334,7 +338,7 @@ async def test_detect_invalid_genesis_counter(
     # Tamper with counter in metadata
 
     # List objects to find exact version dir
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
     async for page in paginator.paginate(Bucket=async_store.bucket_name, Prefix="versions/"):
         if isinstance(page, dict) and "Contents" in page:
@@ -345,7 +349,9 @@ async def test_detect_invalid_genesis_counter(
                     metadata_key = obj["Key"]
 
                     # Read metadata
-                    assert async_store._s3_client is not None
+                    assert (
+                        async_store._s3_client is not None
+                    ), "S3 client should be initialized in async context"
                     response = await async_store._s3_client.get_object(
                         Bucket=async_store.bucket_name, Key=metadata_key
                     )
@@ -357,7 +363,9 @@ async def test_detect_invalid_genesis_counter(
                     metadata["counter"] = 999
 
                     # Write back
-                    assert async_store._s3_client is not None
+                    assert (
+                        async_store._s3_client is not None
+                    ), "S3 client should be initialized in async context"
                     await async_store._s3_client.put_object(
                         Bucket=async_store.bucket_name,
                         Key=metadata_key,
@@ -384,7 +392,7 @@ async def test_detect_non_sequential_counters(
     # Tamper with version 2's counter
 
     # Find v2 metadata
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
     async for page in paginator.paginate(
         Bucket=async_store.bucket_name, Prefix="versions/v0000000002"
@@ -396,7 +404,9 @@ async def test_detect_non_sequential_counters(
                 if "metadata.json" in obj["Key"]:
                     metadata_key = obj["Key"]
 
-                    assert async_store._s3_client is not None
+                    assert (
+                        async_store._s3_client is not None
+                    ), "S3 client should be initialized in async context"
                     response = await async_store._s3_client.get_object(
                         Bucket=async_store.bucket_name, Key=metadata_key
                     )
@@ -407,7 +417,9 @@ async def test_detect_non_sequential_counters(
                     # Skip counter (2 → 5)
                     metadata["counter"] = 5
 
-                    assert async_store._s3_client is not None
+                    assert (
+                        async_store._s3_client is not None
+                    ), "S3 client should be initialized in async context"
                     await async_store._s3_client.put_object(
                         Bucket=async_store.bucket_name,
                         Key=metadata_key,
@@ -418,7 +430,7 @@ async def test_detect_non_sequential_counters(
     # Should detect corruption (Note: will fail to fetch v3, v4 first)
     report = await verify_chain_detailed(async_store)
     assert not report.is_valid
-    assert report.corruption_type is not None
+    assert report.corruption_type is not None, "Corruption type should be identified"
     assert (
         "missing" in report.corruption_type.lower()
         or "non_sequential" in report.corruption_type.lower()
@@ -436,7 +448,7 @@ async def test_chain_corruption_error_raised(
 
     # Corrupt genesis parent_hash
     # Find metadata
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
     async for page in paginator.paginate(
         Bucket=async_store.bucket_name, Prefix="versions/v0000000000"
@@ -448,7 +460,9 @@ async def test_chain_corruption_error_raised(
                 if "metadata.json" in obj["Key"]:
                     metadata_key = obj["Key"]
 
-                    assert async_store._s3_client is not None
+                    assert (
+                        async_store._s3_client is not None
+                    ), "S3 client should be initialized in async context"
                     response = await async_store._s3_client.get_object(
                         Bucket=async_store.bucket_name, Key=metadata_key
                     )
@@ -459,7 +473,9 @@ async def test_chain_corruption_error_raised(
                     # Corrupt parent_hash
                     metadata["parent_hash"] = "invalid"
 
-                    assert async_store._s3_client is not None
+                    assert (
+                        async_store._s3_client is not None
+                    ), "S3 client should be initialized in async context"
                     await async_store._s3_client.put_object(
                         Bucket=async_store.bucket_name,
                         Key=metadata_key,

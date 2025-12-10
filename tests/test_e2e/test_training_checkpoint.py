@@ -156,8 +156,13 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
         ), f"Parameter {key} mismatch"
 
     # Verify optimizer state
-    assert loaded_snapshot.optimizer_state is not None
-    assert len(loaded_snapshot.optimizer_state.param_states) == len(optimizer_state.param_states)
+    assert loaded_snapshot.optimizer_state is not None, "Loaded optimizer state should be preserved"
+    assert isinstance(
+        loaded_snapshot.optimizer_state, type(optimizer_state)
+    ), "Optimizer state type should match"
+    assert len(loaded_snapshot.optimizer_state.param_states) == len(
+        optimizer_state.param_states
+    ), "Optimizer param states count should match"
 
     # Verify global step
     assert loaded_snapshot.global_step == 100

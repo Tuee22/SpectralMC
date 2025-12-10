@@ -34,7 +34,7 @@ Public helpers
 from __future__ import annotations
 
 from enum import Enum
-from typing import TypeAlias, Union
+from typing import TypeAlias
 
 import cupy as cp
 import numpy as np
@@ -56,29 +56,25 @@ _NPDTypeF32: TypeAlias = np.dtype[np.float32]
 _NPDTypeF64: TypeAlias = np.dtype[np.float64]
 _NPDTypeC64: TypeAlias = np.dtype[np.complex64]
 _NPDTypeC128: TypeAlias = np.dtype[np.complex128]
-_NPDTypeRet: TypeAlias = Union[_NPDTypeF32, _NPDTypeF64, _NPDTypeC64, _NPDTypeC128]
+_NPDTypeRet: TypeAlias = _NPDTypeF32 | _NPDTypeF64 | _NPDTypeC64 | _NPDTypeC128
 
-_NPDTypeLike: TypeAlias = Union[
-    type[np.float32],
-    type[np.float64],
-    type[np.complex64],
-    type[np.complex128],
-    _NPDTypeF32,
-    _NPDTypeF64,
-    _NPDTypeC64,
-    _NPDTypeC128,
-]
+_NPDTypeLike: TypeAlias = (
+    type[np.float32]
+    | type[np.float64]
+    | type[np.complex64]
+    | type[np.complex128]
+    | _NPDTypeF32
+    | _NPDTypeF64
+    | _NPDTypeC64
+    | _NPDTypeC128
+)
 
 # CuPy stub types do not expose scalar classes as valid annotation targets,
 # so we fall back to NumPy scalar types plus `cp.dtype`.
 _CPDTypeRet: TypeAlias = cp.dtype
-_CPDTypeLike: TypeAlias = Union[
-    cp.dtype,
-    type[np.float32],
-    type[np.float64],
-    type[np.complex64],
-    type[np.complex128],
-]
+_CPDTypeLike: TypeAlias = (
+    cp.dtype | type[np.float32] | type[np.float64] | type[np.complex64] | type[np.complex128]
+)
 
 # --------------------------------------------------------------------------- #
 # Mapping tables - generated *functionally* to avoid repetition

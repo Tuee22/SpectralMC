@@ -29,7 +29,7 @@ async def test_concurrent_commit_etag_changes(
     assert version1.counter == 0
 
     # Get ETag after first commit
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     response1 = await async_store._s3_client.get_object(
         Bucket=async_store.bucket_name,
         Key="chain.json",
@@ -45,7 +45,7 @@ async def test_concurrent_commit_etag_changes(
     assert version2.counter == 1
 
     # Get ETag after second commit
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     response2 = await async_store._s3_client.get_object(
         Bucket=async_store.bucket_name,
         Key="chain.json",
@@ -58,7 +58,7 @@ async def test_concurrent_commit_etag_changes(
     assert etag1 != etag2, "ETag must change with each commit for CAS to work"
 
     # Verify we can't write with stale ETag
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     with pytest.raises(ClientError) as exc_info:
         await async_store._s3_client.put_object(
             Bucket=async_store.bucket_name,
@@ -83,7 +83,7 @@ async def test_cas_etag_mismatch() -> None:
 
     async with AsyncBlockchainModelStore(bucket_name) as store1:
         # Create bucket
-        assert store1._s3_client is not None
+        assert store1._s3_client is not None, "S3 client should be initialized for store1"
         try:
             await store1._s3_client.create_bucket(Bucket=bucket_name)
         except ClientError:

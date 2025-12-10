@@ -33,7 +33,7 @@ async def test_audit_log_append(async_store: AsyncBlockchainModelStore) -> None:
         versions.append(version)
 
     # List all audit log entries
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
     audit_entries = []
     async for page in paginator.paginate(Bucket=async_store.bucket_name, Prefix="audit_log/"):
@@ -48,7 +48,9 @@ async def test_audit_log_append(async_store: AsyncBlockchainModelStore) -> None:
     # Verify each entry contains correct metadata
     for i, entry_key in enumerate(sorted(audit_entries)):
         # Download and parse the log entry
-        assert async_store._s3_client is not None
+        assert (
+            async_store._s3_client is not None
+        ), "S3 client should be initialized in async context"
         response = await async_store._s3_client.get_object(
             Bucket=async_store.bucket_name,
             Key=entry_key,
@@ -112,7 +114,7 @@ async def test_audit_log_failure_non_blocking(
                 pytest.fail("Expected HEAD to exist")
 
     # Verify no audit log entries were created (because it failed)
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
     paginator = async_store._s3_client.get_paginator("list_objects_v2")
     audit_entries = []
     async for page in paginator.paginate(Bucket=async_store.bucket_name, Prefix="audit_log/"):

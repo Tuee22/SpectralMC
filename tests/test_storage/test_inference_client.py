@@ -91,8 +91,10 @@ async def test_pinned_mode_basic(async_store: AsyncBlockchainModelStore) -> None
         assert snapshot.global_step == 100
 
         version = client.get_current_version()
-        assert version is not None
-        assert version.counter == 0
+        assert version is not None, "Version should be loaded in pinned mode"
+        assert isinstance(version.counter, int), "Version counter should be an integer"
+        assert version.counter == 0, "Should load version 0 in pinned mode"
+        assert len(version.content_hash) == 64, "Content hash should be SHA256 (64 hex chars)"
 
 
 @pytest.mark.asyncio
@@ -117,7 +119,7 @@ async def test_tracking_mode_basic(async_store: AsyncBlockchainModelStore) -> No
         assert snapshot.global_step == 42
 
         version = client.get_current_version()
-        assert version is not None
+        assert version is not None, "Version should be loaded"
         assert version.counter == 0
 
 
@@ -155,7 +157,7 @@ async def test_tracking_mode_auto_update(
 
         # Should have upgraded
         version = client.get_current_version()
-        assert version is not None
+        assert version is not None, "Version should be loaded"
         assert version.counter == 1
         assert client.get_model().global_step == 100
 
@@ -199,10 +201,10 @@ async def test_context_manager_lifecycle(
     assert client.get_current_version() is None
 
     async with client:
-        assert client.get_current_version() is not None
+        assert client.get_current_version() is not None, "Current version should be available"
 
     # After exit, version is cached
-    assert client.get_current_version() is not None
+    assert client.get_current_version() is not None, "Current version should be available"
 
 
 @pytest.mark.asyncio
@@ -221,10 +223,10 @@ async def test_manual_start_stop(async_store: AsyncBlockchainModelStore) -> None
     )
 
     await client.start()
-    assert client.get_current_version() is not None
+    assert client.get_current_version() is not None, "Current version should be available"
 
     await client.stop()
-    assert client.get_current_version() is not None
+    assert client.get_current_version() is not None, "Current version should be available"
 
 
 @pytest.mark.asyncio
@@ -264,8 +266,9 @@ async def test_graceful_shutdown_tracking(
     )
 
     async with client:
-        assert client._polling_task is not None
-        assert not client._polling_task.done()
+        assert client._polling_task is not None, "Polling task should be running in tracking mode"
+        assert not client._polling_task.done(), "Polling task should still be active"
+        assert not client._polling_task.cancelled(), "Polling task should not be cancelled"
 
         # Save task reference before exit
         polling_task = client._polling_task

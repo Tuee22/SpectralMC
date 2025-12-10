@@ -307,8 +307,9 @@ class ConcurrentNormGenerator:
         base_seed = config.seed
         served = config.skips
         np_rng = np.random.default_rng(base_seed)
-        if served:
-            np_rng.integers(0, _SEED_LIMIT, size=served)  # fast-forward
+        # Infrastructure boundary: Must mutate RNG state for checkpoint determinism
+        if served:  # Resume from checkpoint
+            np_rng.integers(0, _SEED_LIMIT, size=served)  # fast-forward to saved position
 
         def _make() -> (
             Result[_NormGenerator, InvalidShape | InvalidDType | QueueBusy | SeedOutOfRange]
@@ -349,14 +350,27 @@ class ConcurrentNormGenerator:
     # ------------------------------------------------------------------ #
 
     def _update_idle_state(self) -> None:
-        """Accumulate time spent with *all* workers simultaneously ready."""
+        """Accumulate time spent with *all* workers simultaneously ready.
+
+        State machine:
+        - (ready=True, tracking=None) → Start tracking (set start time)
+        - (ready=False, tracking=Some(t)) → Stop tracking (accumulate elapsed)
+        - Otherwise → No state change
+        """
         all_ready = all(gen.is_ready() for gen in self._pool)
         now = time()
-        if all_ready and self._idle_start is None:
-            self._idle_start = now
-        elif not all_ready and self._idle_start is not None:
-            self._idle_accum += now - self._idle_start
-            self._idle_start = None
+
+        match (all_ready, self._idle_start):
+            case (True, None):
+                # Transition: All workers ready, not currently tracking → start
+                self._idle_start = now
+            case (False, start_time) if start_time is not None:
+                # Transition: Some worker busy, was tracking → accumulate and stop
+                self._idle_accum += now - start_time
+                self._idle_start = None
+            case _:
+                # No state change needed
+                pass
 
     # ------------------------------------------------------------------ #
     # Public API                                                         #

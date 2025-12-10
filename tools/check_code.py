@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Ruff + Black + MyPy code quality checker.
+Ruff + Black + Purity + MyPy code quality checker.
 
-Runs ruff linting, black formatting, then mypy type checking with fail-fast behavior.
-Exits immediately on first failure.
+Runs ruff linting, black formatting, purity checking, then mypy type checking
+with fail-fast behavior. Exits immediately on first failure.
 """
 
 import subprocess
@@ -11,7 +11,7 @@ import sys
 
 
 def main() -> int:
-    """Run ruff, black, and mypy sequentially with fail-fast."""
+    """Run ruff, black, purity checker, and mypy sequentially with fail-fast."""
     # Step 1: Run Ruff
     print("🔍 Running Ruff linter...")
     ruff_result = subprocess.run(
@@ -38,7 +38,21 @@ def main() -> int:
 
     print("✅ Black passed!\n")
 
-    # Step 3: Run MyPy
+    # Step 3: Run Purity Checker (zero-tolerance for Tier 2 business logic)
+    print("🔍 Running Purity checker...")
+    purity_result = subprocess.run(
+        ["poetry", "run", "check-purity"],
+        check=False,
+    )
+
+    if purity_result.returncode != 0:
+        print(f"❌ Purity check failed with exit code {purity_result.returncode}")
+        print("Run with --verbose for details: poetry run check-purity --verbose")
+        return purity_result.returncode
+
+    print("✅ Purity check passed!\n")
+
+    # Step 4: Run MyPy
     # Paths match pyproject.toml [tool.mypy] files configuration
     print("🔍 Running MyPy type checker...")
     mypy_result = subprocess.run(

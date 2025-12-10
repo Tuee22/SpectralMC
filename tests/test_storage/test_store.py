@@ -18,7 +18,7 @@ async def test_store_initialization(async_store: AsyncBlockchainModelStore) -> N
     """Test store initializes correctly."""
     # S3 store doesn't have filesystem paths, but should be usable
     assert async_store.bucket_name.startswith("test-")
-    assert async_store._s3_client is not None
+    assert async_store._s3_client is not None, "S3 client should be initialized in async context"
 
 
 @pytest.mark.asyncio

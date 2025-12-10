@@ -8,6 +8,11 @@
 > **Purpose**: Placeholder alignment with effectful naming. SpectralMC alerting rules depend on the chosen telemetry platform and must be defined deployment-by-deployment. Use this file to document adopted rules once the platform is selected.
 > **📖 Authoritative Reference**: [Observability](observability.md)
 
+## Cross-References
+
+- [Observability](observability.md) — Core metrics and telemetry architecture
+- [Engineering README](README.md) — Engineering standards hub
+
 ## Interim Guidance
 
 - Build alerts on the core metrics defined in [observability.md](observability.md) (GPU utilization, training health, storage integrity, RNG determinism).
