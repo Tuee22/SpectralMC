@@ -213,6 +213,66 @@ When you encounter test failures or bugs:
 10. **Profile if slow** - don't guess at bottlenecks
 11. **Run purity checker** - `docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-purity`
 
+## When to Rebuild Docker Images
+
+> **📖 Authoritative Reference**: [Docker Build Philosophy](documents/engineering/docker_build_philosophy.md#entry-point-script-management)
+
+### Entry Point Scripts and pyproject.toml
+
+**Problem**: Volume mount syncs code but not Poetry-generated entry point scripts in `/usr/local/bin/`.
+
+**When to rebuild**:
+```bash
+# Rebuild required when pyproject.toml [tool.poetry.scripts] changes
+docker compose -f docker/docker-compose.yml up --build -d
+```
+
+**Why rebuild?**
+- Entry point scripts are generated at build time by `poetry install`
+- Volume mount overlays source code but NOT `/usr/local/bin/` scripts
+- Changes to pyproject.toml are visible immediately (via volume mount)
+- But new/changed scripts require image rebuild to regenerate
+
+**Symptoms of stale scripts**:
+```
+Warning: 'script-name' is an entry point defined in pyproject.toml, but it's not installed as a script.
+```
+
+**Quick fix** (temporary, until next rebuild):
+```bash
+docker compose -f docker/docker-compose.yml exec spectralmc poetry install
+```
+
+**Permanent fix**:
+```bash
+docker compose -f docker/docker-compose.yml up --build -d
+```
+
+### Build Triggers
+
+Rebuild the Docker image when:
+- ✅ `pyproject.toml` [tool.poetry.scripts] changes (new/removed/renamed scripts)
+- ✅ `pyproject.toml` [tool.poetry.dependencies] changes (new/updated packages)
+- ✅ Dockerfile or Dockerfile.source changes
+- ❌ Source code changes (`src/`, `tests/`, `tools/`) - volume mount handles these
+- ❌ Configuration changes (poetry.toml, pyproject.toml other sections) - volume mount handles these
+
+### Policy: No Custom Entrypoint Scripts
+
+**CRITICAL**: Do NOT add custom entrypoint scripts or startup hooks to work around script installation.
+
+**Forbidden approaches**:
+- ❌ Custom `ENTRYPOINT` scripts that run `poetry install`
+- ❌ Startup scripts that regenerate entry points
+- ❌ Runtime workarounds for build-time artifacts
+
+**Required approach**:
+- ✅ Rebuild image when `[tool.poetry.scripts]` changes
+- ✅ Use Poetry entry points exclusively
+- ✅ Maintain Docker image immutability
+
+**Why**: Docker images are immutable build artifacts. Scripts are generated at build time, not runtime.
+
 ## Prevention: Pre-commit Checklist
 
 Before committing:

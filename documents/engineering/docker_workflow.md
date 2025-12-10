@@ -78,15 +78,26 @@ alias smc='docker compose -f docker/docker-compose.yml exec spectralmc poetry ru
 - Build mode selection lives in compose args/`BUILD_FROM_SOURCE`; see `docker_build_philosophy.md` for details.
 - Keep host clean: `poetry.toml` disables venv creation; do not override with `poetry config` commands.
 
+## Entry Point Script Policy
+
+**CRITICAL**: Poetry entry point scripts are **build-time artifacts**.
+
+- **When to rebuild**: Changes to `pyproject.toml` [tool.poetry.scripts] require image rebuild
+- **No custom entrypoints**: Do NOT add custom ENTRYPOINT scripts or startup hooks
+- **Immutability first**: Docker images are immutable - scripts match build time, not runtime
+
+See [Docker Build Philosophy - Entry Point Script Management](docker_build_philosophy.md#entry-point-script-management) for complete policy.
+
 ## Troubleshooting (Inside Docker)
 
 - **Container not running**: `docker compose -f docker/docker-compose.yml ps` → start with `up -d`.
 - **GPU not visible**: check `nvidia-smi`; ensure Docker uses NVIDIA runtime.
 - **Poetry cache issues**: rebuild container (`docker compose ... build --no-cache`) rather than running host installs.
 - **Permission errors on bind mounts**: restart stack; avoid modifying permissions from host for mounted dirs.
+- **Entry point script warning**: If you see "script-name is an entry point defined in pyproject.toml, but it's not installed as a script" → rebuild image (`docker compose ... up --build -d`). Do NOT add custom entrypoint scripts.
 
 ## Cross-References
 
-- [Docker Build Philosophy](docker_build_philosophy.md) for image layout and lockfile policy.
-- [GPU Build Guide](gpu_build.md) for legacy GPUs (source build path).
-- [Command Reference](command_reference.md) for canonical commands.
+- [Docker Build Philosophy](docker_build_philosophy.md) - Image layout, lockfile policy, and entry point script management
+- [GPU Build Guide](gpu_build.md) - Legacy GPUs (source build path)
+- [Command Reference](command_reference.md) - Canonical commands

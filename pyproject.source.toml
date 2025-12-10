@@ -109,6 +109,13 @@ typecheck = "tools.check_type_safety:run_mypy_only"
 check-types = "tools.check_type_safety:main"
 type-check-all = "tools.check_type_safety:run_full_check"
 
+# Purity checking (zero-tolerance enforcement for Tier 2 business logic)
+# Usage: poetry run check-purity [--verbose] [--explain RULE]
+check-purity = "tools.check_purity:main"
+
+# Protobuf code generation
+regen-proto = "tools.regen_proto:main"
+
 # --------------------------------------------------------------------------- #
 #                               B U I L D                                     #
 # --------------------------------------------------------------------------- #

@@ -1,16 +1,18 @@
 # File: documents/engineering/docker_build_philosophy.md
 # Docker Build Philosophy
 
-**Status**: Authoritative source  
-**Supersedes**: Prior docker build philosophy drafts  
-**Referenced by**: documents/documentation_standards.md
+**Status**: Authoritative source
+**Supersedes**: Prior docker build philosophy drafts
+**Referenced by**: CLAUDE.md, docker_workflow.md, documentation_standards.md
 
-> **Purpose**: Define the dual-mode Docker build approach for SpectralMC across GPU generations.
+> **Purpose**: Define the dual-mode Docker build approach for SpectralMC across GPU generations, Poetry-first dependency management, and entry point script policies.
 
 ## Cross-References
-- [GPU Build Guide](gpu_build.md)
-- [Coding Standards](coding_standards.md)
-- [Documentation Standards](../documentation_standards.md)
+- [Docker Workflow](docker_workflow.md) - Development workflow and command patterns
+- [GPU Build Guide](gpu_build.md) - Legacy GPU build instructions
+- [Coding Standards](coding_standards.md) - Code quality standards
+- [Documentation Standards](../documentation_standards.md) - Documentation requirements
+- [CLAUDE.md](../../CLAUDE.md) - Quick reference for developers
 
 ## Overview
 
@@ -18,9 +20,13 @@ SpectralMC uses a **dual-mode Docker build strategy** to support both modern GPU
 
 ---
 
-## SSoT Scope and Sidecar Pattern
+## SSoT Scope
 
-This document is the SSoT for Docker build strategy, compose topology, and sidecar policy for SpectralMC.
+This document is the SSoT for:
+- Docker build strategy (binary vs source builds)
+- Compose topology and sidecar policy
+- Poetry-first dependency management
+- **Entry point script management and immutability policies**
 
 ### Sidecar Isolation Rule
 
@@ -180,6 +186,145 @@ poetry.lock
 4. **pyproject.toml is source of truth**: Version constraints in pyproject.toml control what gets installed
 
 **Trade-off**: Builds are less deterministic (different minor versions possible), but more flexible across environments.
+
+---
+
+## Entry Point Script Management
+
+### Problem: Volume Mount vs Build-Time Artifacts
+
+SpectralMC uses volume mounts for live code synchronization:
+
+```yaml
+# File: documents/engineering/docker_build_philosophy.md
+volumes:
+  - ..:/spectralmc  # Live code sync
+```
+
+**What syncs automatically** (via volume mount):
+- Source code: `src/spectralmc/`
+- Tools: `tools/`
+- Tests: `tests/`
+- Configuration: `pyproject.toml`, `poetry.toml`
+
+**What requires rebuild** (baked into image):
+- System packages (apt)
+- Python dependencies (via `poetry install`)
+- **Entry point scripts** (`/usr/local/bin/check-code`, etc.)
+
+### Rebuild Requirement
+
+When `pyproject.toml` [tool.poetry.scripts] changes:
+
+```toml
+# File: documents/engineering/docker_build_philosophy.md
+[tool.poetry.scripts]
+new-script = "module.submodule:main"  # Adding this requires rebuild
+```
+
+**Rebuild command**:
+```bash
+# File: documents/engineering/docker_build_philosophy.md
+docker compose -f docker/docker-compose.yml up --build -d
+```
+
+### Why Rebuild is Required
+
+```mermaid
+flowchart TB
+    Build[Docker Build]
+    Install[poetry install]
+    Scripts[Entry Point Scripts]
+    Image[Docker Image]
+    Runtime[Container Runtime]
+    VolumeMount[Volume Mount]
+    HostCode[Host pyproject.toml]
+
+    Build --> Install
+    Install --> Scripts
+    Scripts --> Image
+    Image --> Runtime
+    HostCode --> VolumeMount
+    VolumeMount --> Runtime
+
+    Scripts -.baked into.-> Image
+    VolumeMount -.overlays.-> Runtime
+```
+
+**Key insight**:
+- pyproject.toml changes are visible at runtime (volume mount)
+- Entry point scripts are not visible (baked into image at build time)
+- Result: pyproject.toml and scripts can be out of sync
+
+### Build-Time Script Installation
+
+Both Dockerfiles properly install scripts:
+
+**docker/Dockerfile**:
+```dockerfile
+# File: documents/engineering/docker_build_philosophy.md
+RUN poetry install --no-interaction --with dev
+# Generates scripts from pyproject.toml at build time
+```
+
+**docker/Dockerfile.source**:
+```dockerfile
+# File: documents/engineering/docker_build_philosophy.md
+RUN poetry install -vvv --no-interaction --with dev
+# Generates scripts from pyproject.toml at build time
+```
+
+### Temporary Workaround
+
+If you need scripts immediately without rebuilding:
+
+```bash
+# File: documents/engineering/docker_build_philosophy.md
+docker compose -f docker/docker-compose.yml exec spectralmc poetry install
+```
+
+**Warning**: This is temporary - scripts will revert on container restart. Always rebuild for permanent fix.
+
+### Prevention
+
+- Document when rebuilds are needed (CLAUDE.md)
+- Add pre-commit hooks to detect pyproject.toml [tool.poetry.scripts] changes
+- Use consistent workflow: changes to scripts → immediate rebuild
+
+### Policy: No Custom Entrypoint Scripts
+
+**CRITICAL**: SpectralMC uses **build-time script installation only**. Do NOT add custom entrypoint scripts or startup hooks to work around this.
+
+**Forbidden**:
+- ❌ `ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/custom-entrypoint.sh"]`
+- ❌ `CMD ["sh", "-c", "poetry install && ..."]`
+- ❌ Runtime `poetry install` in entrypoint scripts
+- ❌ Any script that regenerates entry points on container startup
+
+**Required**:
+- ✅ Use Poetry entry points defined in `[tool.poetry.scripts]`
+- ✅ Rebuild Docker image when `[tool.poetry.scripts]` changes
+- ✅ Keep `ENTRYPOINT ["/usr/bin/tini", "--"]` (process manager only)
+- ✅ Keep `CMD ["sleep", "infinity"]` (default behavior)
+
+**Rationale**:
+1. **Immutability**: Docker images should be immutable artifacts
+2. **Performance**: No startup overhead for script regeneration
+3. **Predictability**: Scripts match image build, not runtime state
+4. **Standards compliance**: Aligns with Docker best practices
+5. **Simplicity**: One clear contract - rebuild when scripts change
+
+**If you see this warning**:
+```
+Warning: 'script-name' is an entry point defined in pyproject.toml, but it's not installed as a script.
+```
+
+**Solution**: Rebuild the image, do NOT add entrypoint workarounds.
+
+```bash
+# File: documents/engineering/docker_build_philosophy.md
+docker compose -f docker/docker-compose.yml up --build -d
+```
 
 ---
 
@@ -374,22 +519,48 @@ docker builder prune -a
 BUILD_FROM_SOURCE=true docker compose up --build -d
 ```
 
+### Entry point script warning
+
+**Symptom**:
+```
+Warning: 'script-name' is an entry point defined in pyproject.toml, but it's not installed as a script.
+```
+
+**Cause**: pyproject.toml [tool.poetry.scripts] changed after image was built.
+
+**Solution**: Rebuild the image. Do NOT add custom entrypoint scripts.
+
+```bash
+# File: documents/engineering/docker_build_philosophy.md
+docker compose -f docker/docker-compose.yml up --build -d
+```
+
 ---
 
 ## Summary
 
+### Build Strategy
 - **Dual build strategy**: Binary (fast) vs Source (GTX 970 support)
 - **Separate Dockerfiles**:
   - `docker/Dockerfile` for binary builds (CUDA 12.8.1, PyTorch 2.7.1+cu128)
   - `docker/Dockerfile.source` for source builds (CUDA 11.8.0, PyTorch 2.4.1)
 - **Dockerfile selection**: docker-compose.yml uses shell parameter expansion based on BUILD_FROM_SOURCE
-- **Poetry installation**: Single pip command installs pip + Poetry together
-- **poetry.toml as SSoT**: Virtual environment configuration lives in `poetry.toml`, not in Dockerfiles
-- **No poetry.lock in Docker**: Regenerated from pyproject.toml
-- **Layer optimization**: Each Dockerfile optimized for its use case
 - **BUILD_FROM_SOURCE flag**: Selects which Dockerfile to use
 - **Binary build**: 10-15 minutes (supports RTX 5090 sm_120)
 - **Source build**: 2-4 hours first time (supports GTX 970 sm_52), cached thereafter
 - **Code changes**: ~2-5 minutes rebuild time (both modes)
 
-See also: [Coding Standards](coding_standards.md), [Testing Requirements](testing_requirements.md), [GPU Build Guide](gpu_build.md)
+### Dependency Management
+- **Poetry installation**: Single pip command installs pip + Poetry together
+- **poetry.toml as SSoT**: Virtual environment configuration lives in `poetry.toml`, not in Dockerfiles
+- **No poetry.lock in Docker**: Regenerated from pyproject.toml
+- **Layer optimization**: Each Dockerfile optimized for its use case
+
+### Entry Point Scripts
+- **Build-time artifacts**: Scripts generated during `poetry install` at build time
+- **No custom entrypoints**: Do NOT add custom ENTRYPOINT scripts or startup hooks
+- **Immutability policy**: Docker images are immutable - scripts match build, not runtime
+- **Rebuild trigger**: Changes to `pyproject.toml` [tool.poetry.scripts] require image rebuild
+- **Volume mount limitation**: Volume mount syncs code but NOT `/usr/local/bin/` scripts
+
+See also: [Docker Workflow](docker_workflow.md), [Coding Standards](coding_standards.md), [Testing Requirements](testing_requirements.md), [GPU Build Guide](gpu_build.md)
