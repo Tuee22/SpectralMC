@@ -168,7 +168,7 @@ def create_sampler(bounds, model_class):
     return SobolSampler(bounds=bounds, model_class=model_class)
 ```
 
-**mypy plugin configuration** (`pyproject.toml`):
+**mypy plugin configuration** (shared `[tool.pydantic-mypy]` section in both pyproject.binary.toml and pyproject.source.toml):
 
 ```toml
 # File: documents/engineering/pydantic_patterns.md

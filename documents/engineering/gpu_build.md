@@ -72,6 +72,14 @@ SpectralMC uses a **dual-Dockerfile strategy** to support both modern and legacy
 
 For general Docker build philosophy, Poetry installation patterns, and layer optimization strategy, see [Docker Build Philosophy](docker_build_philosophy.md). **This document focuses on GTX 970 / legacy GPU specific requirements.**
 
+**Dual-Pyproject Architecture**: Each build mode uses a different pyproject file:
+- Binary build → pyproject.binary.toml (copied to pyproject.toml at docker/Dockerfile line 88)
+- Source build → pyproject.source.toml (copied to pyproject.toml at docker/Dockerfile.source line 137)
+
+The files differ only in `[tool.poetry.dependencies]` (PyTorch 2.7.1+cu128 vs 2.4.1, CuPy cuda12x vs cuda11x) and `[[tool.poetry.source]]` (binary build defines custom pytorch-cu128 repository). All other sections (scripts, mypy, black, pytest config) are identical.
+
+See [Docker Build Philosophy - Dual-Pyproject Architecture](docker_build_philosophy.md#dual-pyproject-architecture) for complete details.
+
 ---
 
 ## Why Two Dockerfiles?

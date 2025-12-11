@@ -51,7 +51,7 @@ This is useful for CI/CD pipelines to verify that all code is properly formatted
 
 ### Configuration
 
-The Black version and settings are defined in `pyproject.toml`:
+The Black version and settings are defined in the appropriate pyproject file (shared `[tool.black]` section in both pyproject.binary.toml and pyproject.source.toml):
 
 ```toml
 # File: documents/engineering/coding_standards.md
@@ -59,7 +59,7 @@ The Black version and settings are defined in `pyproject.toml`:
 black = ">=25.1,<26.0"
 ```
 
-Black is configured in `pyproject.toml` with project-specific settings:
+Black is configured with project-specific settings (shared section in both pyproject files):
 
 ```toml
 # File: documents/engineering/coding_standards.md
@@ -73,6 +73,8 @@ target-version = ['py312']
 - **String quotes**: Double quotes (Black's default)
 - **Trailing commas**: Added where appropriate (Black's default)
 - **Import sorting**: Not handled by Black (use isort or similar if needed)
+
+**Note**: The `[tool.black]` section is identical in both pyproject.binary.toml and pyproject.source.toml. Changes to Black configuration must be synchronized across both files.
 
 ### Key Principles
 

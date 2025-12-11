@@ -91,8 +91,8 @@ SpectralMC uses **Poetry** as the single source of truth for all Python dependen
 
 ### Container Parity and Dependency Boundaries
 
-- **Single manifest + command**: `docker/Dockerfile` and `docker/Dockerfile.source` must use the same `pyproject.toml`, `poetry.toml`, and identical `poetry install` invocation—no per-container tweaks or extra flags.
-- **Minimal pyproject**: Keep `pyproject.toml` scoped to the smallest set of dependencies needed to run the binary-only build of SpectralMC. Build-only extras (including Python toolchains) belong outside this file.
+- **Single manifest + command**: `docker/Dockerfile` and `docker/Dockerfile.source` copy the appropriate pyproject variant (`pyproject.binary.toml` or `pyproject.source.toml`) to `pyproject.toml` at build time, then use identical `poetry install` invocations—no per-container tweaks or extra flags.
+- **Minimal pyproject files**: Keep both `pyproject.binary.toml` and `pyproject.source.toml` scoped to their respective build requirements. Binary build uses pre-compiled wheels; source build includes dependencies for PyTorch compilation.
 - **Source-build installs stay in-line**: Anything required solely to compile from source (Python included) lives inside the inline build script within the `BUILD_FROM_SOURCE` block in `Dockerfile.source`; do not scatter extra `RUN` steps elsewhere.
 - **Isolated artefacts**: Source-build outputs install into a dedicated `/opt` subtree reserved for build artefacts rather than the global interpreter site-packages.
 - **Swap-in workflow**: In `Dockerfile.source`, run the long C/CUDA build early, before `poetry install`. Use a Poetry dependency group (e.g., `binary-torch`) so binary wheels are skipped for source builds (`POETRY_WITHOUT=binary-torch`) yet installed for binary builds (`POETRY_WITH=binary-torch`). After `poetry install`, surface the built `/opt` wheel via `.pth`/`PYTHONPATH` activation. This remains Poetry-safe because container venvs are disabled via `poetry.toml`.
@@ -143,6 +143,122 @@ This file is automatically used by Poetry in the Docker build context. **Do NOT 
 
 ---
 
+## Dual-Pyproject Architecture
+
+SpectralMC uses **dual pyproject files** to support different PyTorch and CUDA versions across binary and source builds:
+
+- **pyproject.binary.toml** - Modern GPU binary build (PyTorch 2.7.1+cu128, CuPy cuda12x)
+- **pyproject.source.toml** - Legacy GPU source build (PyTorch 2.4.1, CuPy cuda11x)
+
+### Build-Time Generation
+
+Each Dockerfile copies the appropriate variant to `pyproject.toml` at build time:
+
+**docker/Dockerfile** (line 88):
+```dockerfile
+# File: documents/engineering/docker_build_philosophy.md
+RUN cp pyproject.binary.toml pyproject.toml
+```
+
+**docker/Dockerfile.source** (line 137):
+```dockerfile
+# File: documents/engineering/docker_build_philosophy.md
+RUN cp pyproject.source.toml pyproject.toml
+```
+
+Poetry then uses the generated `pyproject.toml` file for dependency resolution.
+
+### Shared vs Different Sections
+
+**Shared sections** (identical in both files):
+- `[tool.poetry]` - Package metadata (name, version, description, authors)
+- `[tool.poetry.scripts]` - Entry point scripts (check-code, test-all, check-purity, etc.)
+- `[tool.poetry.group.dev.dependencies]` - Development dependencies (pytest, mypy, black, ruff)
+- `[tool.mypy]` - Type checking configuration
+- `[tool.black]` - Code formatting configuration
+- `[tool.pytest.ini_options]` - Pytest configuration
+- `[tool.pydantic-mypy]` - Pydantic plugin configuration
+- `[build-system]` - Poetry core build backend
+
+**Different sections**:
+- `[tool.poetry.dependencies]` - PyTorch version (2.7.1+cu128 vs 2.4.1), CuPy variant (cuda12x vs cuda11x)
+- `[[tool.poetry.source]]` - Binary build defines custom pytorch-cu128 source (pyproject.binary.toml lines 14-21 only)
+
+### Why Dual Files?
+
+**Binary build (pyproject.binary.toml)**:
+- PyTorch 2.7.1+cu128 from custom wheel source
+- Requires `[[tool.poetry.source]]` entry for pytorch-cu128 repository
+- CuPy cuda12x for CUDA 12.8 compatibility
+- Pre-compiled binaries, 10-15 minute build
+
+**Source build (pyproject.source.toml)**:
+- PyTorch 2.4.1 compiled from source with sm_52 support
+- Uses standard PyPI sources (no custom [[tool.poetry.source]])
+- CuPy cuda11x for CUDA 11.8 compatibility
+- 2-4 hour first build for GTX 970 support
+
+### Source of Truth
+
+**pyproject.toml is the source of truth** for Poetry during builds. It's generated at build time from:
+- `pyproject.binary.toml` for binary builds (default)
+- `pyproject.source.toml` for source builds (BUILD_FROM_SOURCE=true)
+
+The dual-file approach ensures:
+- Clean separation of binary vs source dependencies
+- No conditional logic within pyproject files
+- Each build mode has optimized dependencies
+- Shared configuration sections remain synchronized
+
+### Synchronization Requirements
+
+**CRITICAL**: Changes to shared sections must be synchronized:
+
+```bash
+# File: documents/engineering/docker_build_philosophy.md
+# When updating [tool.poetry.scripts], edit BOTH files:
+vim pyproject.binary.toml  # Add new script
+vim pyproject.source.toml  # Add same script
+
+# When updating dependencies, edit appropriate file:
+vim pyproject.binary.toml  # Binary-specific (PyTorch 2.7.1+cu128)
+vim pyproject.source.toml  # Source-specific (PyTorch 2.4.1)
+```
+
+**Shared sections requiring sync**:
+- `[tool.poetry.scripts]`
+- `[tool.mypy]`
+- `[tool.black]`
+- `[tool.pytest.ini_options]`
+- `[tool.pydantic-mypy]`
+- `[tool.poetry.group.dev.dependencies]`
+
+### Automated Enforcement
+
+**Validation tool**:
+```bash
+# File: documents/engineering/docker_build_philosophy.md
+# Check synchronization manually
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-pyproject
+
+# Verbose mode with diff output
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-pyproject --verbose
+```
+
+**Integrated checks**:
+- ✅ `poetry run check-code` - Runs pyproject validation automatically
+- ✅ Pre-commit hook - Validates before each commit
+- ✅ CI/CD workflow - Validates on pull requests
+
+**Exit codes**:
+- `0` - All shared sections synchronized
+- `1` - Synchronization failures detected
+- `2` - File error (missing file, malformed TOML)
+
+See [PyProject Validation Tool](../../tools/check_pyproject.py) for implementation details.
+
+---
+
 ## poetry.lock Handling
 
 SpectralMC **does NOT copy `poetry.lock`** into Docker images. The lockfile is regenerated inside the container from `pyproject.toml`.
@@ -151,8 +267,10 @@ SpectralMC **does NOT copy `poetry.lock`** into Docker images. The lockfile is r
 
 ```dockerfile
 # File: documents/engineering/docker_build_philosophy.md
-# ✅ CORRECT - Only copy pyproject.toml
-COPY pyproject.toml ./
+# ✅ CORRECT - Copy both pyproject variants and poetry.toml
+COPY pyproject.binary.toml pyproject.source.toml poetry.toml ./
+RUN cp pyproject.binary.toml pyproject.toml  # Binary build
+# or: RUN cp pyproject.source.toml pyproject.toml  # Source build
 
 # ❌ INCORRECT - Don't copy poetry.lock
 # COPY pyproject.toml poetry.lock* ./
@@ -183,7 +301,7 @@ poetry.lock
 1. **Environment-specific**: Lockfiles can vary by platform (Linux/macOS/Windows)
 2. **Docker isolation**: Each build should resolve dependencies fresh
 3. **Avoid conflicts**: poetry.lock from host may conflict with container environment
-4. **pyproject.toml is source of truth**: Version constraints in pyproject.toml control what gets installed
+4. **pyproject.toml is source of truth**: Generated at build time from pyproject.binary.toml or pyproject.source.toml. Version constraints in the appropriate variant control what gets installed.
 
 **Trade-off**: Builds are less deterministic (different minor versions possible), but more flexible across environments.
 
@@ -205,7 +323,8 @@ volumes:
 - Source code: `src/spectralmc/`
 - Tools: `tools/`
 - Tests: `tests/`
-- Configuration: `pyproject.toml`, `poetry.toml`
+- Configuration: `pyproject.binary.toml`, `pyproject.source.toml`, `poetry.toml`
+- **Note**: Generated `pyproject.toml` is baked into image at build time, not synced by volume mount
 
 **What requires rebuild** (baked into image):
 - System packages (apt)
@@ -214,13 +333,16 @@ volumes:
 
 ### Rebuild Requirement
 
-When `pyproject.toml` [tool.poetry.scripts] changes:
+When `[tool.poetry.scripts]` changes in pyproject.binary.toml or pyproject.source.toml:
 
 ```toml
 # File: documents/engineering/docker_build_philosophy.md
+# Edit in BOTH pyproject.binary.toml AND pyproject.source.toml
 [tool.poetry.scripts]
 new-script = "module.submodule:main"  # Adding this requires rebuild
 ```
+
+**CRITICAL**: `[tool.poetry.scripts]` is a shared section. Changes must be synchronized in both files, otherwise binary and source builds will have different entry points.
 
 **Rebuild command**:
 ```bash
@@ -238,7 +360,7 @@ flowchart TB
     Image[Docker Image]
     Runtime[Container Runtime]
     VolumeMount[Volume Mount]
-    HostCode[Host pyproject.toml]
+    HostCode[Host pyproject.*.toml]
 
     Build --> Install
     Install --> Scripts
@@ -252,9 +374,10 @@ flowchart TB
 ```
 
 **Key insight**:
-- pyproject.toml changes are visible at runtime (volume mount)
-- Entry point scripts are not visible (baked into image at build time)
-- Result: pyproject.toml and scripts can be out of sync
+- Changes to pyproject.binary.toml or pyproject.source.toml are visible at runtime (volume mount)
+- Generated pyproject.toml and entry point scripts are baked into image at build time
+- Volume mount overlays source pyproject files but NOT generated pyproject.toml or scripts
+- Result: Source files and baked scripts can be out of sync after [tool.poetry.scripts] changes
 
 ### Build-Time Script Installation
 
@@ -302,8 +425,9 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry install
 - ❌ Any script that regenerates entry points on container startup
 
 **Required**:
-- ✅ Use Poetry entry points defined in `[tool.poetry.scripts]`
-- ✅ Rebuild Docker image when `[tool.poetry.scripts]` changes
+- ✅ Use Poetry entry points defined in `[tool.poetry.scripts]` (shared section in both pyproject files)
+- ✅ Keep `[tool.poetry.scripts]` synchronized in both pyproject.binary.toml and pyproject.source.toml
+- ✅ Rebuild Docker image when `[tool.poetry.scripts]` changes in either file
 - ✅ Keep `ENTRYPOINT ["/usr/bin/tini", "--"]` (process manager only)
 - ✅ Keep `CMD ["sleep", "infinity"]` (default behavior)
 
@@ -318,6 +442,8 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry install
 ```
 Warning: 'script-name' is an entry point defined in pyproject.toml, but it's not installed as a script.
 ```
+
+**Cause**: `[tool.poetry.scripts]` was added to pyproject.binary.toml or pyproject.source.toml after the image was built.
 
 **Solution**: Rebuild the image, do NOT add entrypoint workarounds.
 
@@ -553,6 +679,8 @@ docker compose -f docker/docker-compose.yml up --build -d
 ### Dependency Management
 - **Poetry installation**: Single pip command installs pip + Poetry together
 - **poetry.toml as SSoT**: Virtual environment configuration lives in `poetry.toml`, not in Dockerfiles
+- **Dual pyproject files**: pyproject.binary.toml and pyproject.source.toml copied to pyproject.toml at build time
+- **Shared sections**: Scripts, mypy, black, pytest config identical in both files; only dependencies differ
 - **No poetry.lock in Docker**: Regenerated from pyproject.toml
 - **Layer optimization**: Each Dockerfile optimized for its use case
 
@@ -560,7 +688,8 @@ docker compose -f docker/docker-compose.yml up --build -d
 - **Build-time artifacts**: Scripts generated during `poetry install` at build time
 - **No custom entrypoints**: Do NOT add custom ENTRYPOINT scripts or startup hooks
 - **Immutability policy**: Docker images are immutable - scripts match build, not runtime
-- **Rebuild trigger**: Changes to `pyproject.toml` [tool.poetry.scripts] require image rebuild
+- **Rebuild trigger**: Changes to `[tool.poetry.scripts]` in pyproject.binary.toml or pyproject.source.toml require image rebuild
+- **Script synchronization**: Keep `[tool.poetry.scripts]` identical in both pyproject.binary.toml and pyproject.source.toml
 - **Volume mount limitation**: Volume mount syncs code but NOT `/usr/local/bin/` scripts
 
 See also: [Docker Workflow](docker_workflow.md), [Coding Standards](coding_standards.md), [Testing Requirements](testing_requirements.md), [GPU Build Guide](gpu_build.md)

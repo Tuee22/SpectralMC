@@ -30,9 +30,33 @@ Only source-of-truth inputs are versioned. Anything produced by a build step is 
 3. Avoid leaking compiled outputs or cache churn into reviews.
 
 ## What Is Versioned (Sources)
-- `pyproject.toml`, `poetry.toml`, source code (including `.proto` files), stubs, scripts, docs.
+- `pyproject.binary.toml`, `pyproject.source.toml`, `poetry.toml`, source code (including `.proto` files), stubs, scripts, docs.
+- **Note**: `pyproject.toml` is NOT versioned - it's generated at build time from pyproject.binary.toml or pyproject.source.toml.
 - Minimal configs required to rebuild deterministically inside Docker.
 - **Note**: `.proto` schema files are versioned as source; the generated `*_pb2.py` files are build artifacts.
+
+### Dual-Pyproject Architecture
+
+SpectralMC uses two pyproject files that are copied to `pyproject.toml` at build time:
+
+- **pyproject.binary.toml** (7988 bytes) - Binary build with PyTorch 2.7.1+cu128, CuPy cuda12x, custom pytorch-cu128 wheel source
+- **pyproject.source.toml** (7499 bytes) - Source build with PyTorch 2.4.1, CuPy cuda11x, standard PyPI sources
+
+**Versioned**: pyproject.binary.toml and pyproject.source.toml (source files in git)
+**Not versioned**: pyproject.toml (generated at build time, excluded from git)
+
+**Build-time generation**:
+```dockerfile
+# docker/Dockerfile line 88
+RUN cp pyproject.binary.toml pyproject.toml
+
+# docker/Dockerfile.source line 137
+RUN cp pyproject.source.toml pyproject.toml
+```
+
+**Why**: Enables clean separation of binary vs source dependencies without conditional logic in pyproject files. Each build mode has optimized dependencies.
+
+See [Docker Build Philosophy - Dual-Pyproject Architecture](docker_build_philosophy.md#dual-pyproject-architecture) for complete details.
 
 ## What Is Not Versioned (Artifacts)
 - `poetry.lock`, `package-lock.json`.
@@ -50,7 +74,7 @@ Only source-of-truth inputs are versioned. Anything produced by a build step is 
 
 ```bash
 # File: documents/engineering/build_artifact_management.md
-# Binary or source build resolves deps without host lockfiles
+# Binary or source build copies appropriate pyproject variant and resolves deps
 docker compose -f docker/docker-compose.yml exec spectralmc poetry install
 
 # Full test run (captures outputs)

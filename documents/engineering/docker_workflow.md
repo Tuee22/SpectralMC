@@ -82,7 +82,8 @@ alias smc='docker compose -f docker/docker-compose.yml exec spectralmc poetry ru
 
 **CRITICAL**: Poetry entry point scripts are **build-time artifacts**.
 
-- **When to rebuild**: Changes to `pyproject.toml` [tool.poetry.scripts] require image rebuild
+- **When to rebuild**: Changes to `[tool.poetry.scripts]` in pyproject.binary.toml or pyproject.source.toml require image rebuild
+- **Script synchronization**: Keep `[tool.poetry.scripts]` identical in both pyproject.binary.toml and pyproject.source.toml
 - **No custom entrypoints**: Do NOT add custom ENTRYPOINT scripts or startup hooks
 - **Immutability first**: Docker images are immutable - scripts match build time, not runtime
 
@@ -94,7 +95,7 @@ See [Docker Build Philosophy - Entry Point Script Management](docker_build_philo
 - **GPU not visible**: check `nvidia-smi`; ensure Docker uses NVIDIA runtime.
 - **Poetry cache issues**: rebuild container (`docker compose ... build --no-cache`) rather than running host installs.
 - **Permission errors on bind mounts**: restart stack; avoid modifying permissions from host for mounted dirs.
-- **Entry point script warning**: If you see "script-name is an entry point defined in pyproject.toml, but it's not installed as a script" → rebuild image (`docker compose ... up --build -d`). Do NOT add custom entrypoint scripts.
+- **Entry point script warning**: If you see "script-name is an entry point defined in pyproject.toml, but it's not installed as a script" → `[tool.poetry.scripts]` changed in pyproject.binary.toml or pyproject.source.toml after image was built. Rebuild image (`docker compose ... up --build -d`). Do NOT add custom entrypoint scripts.
 
 ## Cross-References
 

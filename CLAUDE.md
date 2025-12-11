@@ -217,21 +217,30 @@ When you encounter test failures or bugs:
 
 > **📖 Authoritative Reference**: [Docker Build Philosophy](documents/engineering/docker_build_philosophy.md#entry-point-script-management)
 
-### Entry Point Scripts and pyproject.toml
+### Entry Point Scripts and Dual-Pyproject Architecture
 
-**Problem**: Volume mount syncs code but not Poetry-generated entry point scripts in `/usr/local/bin/`.
+**Architecture**: SpectralMC uses dual pyproject files (pyproject.binary.toml and pyproject.source.toml) that are copied to pyproject.toml at build time:
+- Binary build: `RUN cp pyproject.binary.toml pyproject.toml` (docker/Dockerfile line 88)
+- Source build: `RUN cp pyproject.source.toml pyproject.toml` (docker/Dockerfile.source line 137)
+
+The `[tool.poetry.scripts]` section is shared and must be synchronized between both files.
+
+**Problem**: Volume mount syncs source pyproject files but not the generated pyproject.toml or Poetry-generated entry point scripts in `/usr/local/bin/`.
 
 **When to rebuild**:
 ```bash
-# Rebuild required when pyproject.toml [tool.poetry.scripts] changes
+# Rebuild required when [tool.poetry.scripts] changes in either pyproject file
 docker compose -f docker/docker-compose.yml up --build -d
 ```
 
 **Why rebuild?**
-- Entry point scripts are generated at build time by `poetry install`
-- Volume mount overlays source code but NOT `/usr/local/bin/` scripts
-- Changes to pyproject.toml are visible immediately (via volume mount)
-- But new/changed scripts require image rebuild to regenerate
+- Each Dockerfile copies pyproject.binary.toml (or pyproject.source.toml) to pyproject.toml at build time
+- Entry point scripts are generated from the copied pyproject.toml by `poetry install`
+- Volume mount overlays source pyproject files but NOT the generated pyproject.toml or `/usr/local/bin/` scripts
+- Changes to pyproject.binary.toml or pyproject.source.toml are visible immediately (via volume mount)
+- But generated pyproject.toml and scripts require image rebuild to regenerate
+
+**Important**: Keep `[tool.poetry.scripts]` synchronized in both pyproject.binary.toml and pyproject.source.toml.
 
 **Symptoms of stale scripts**:
 ```
@@ -251,11 +260,11 @@ docker compose -f docker/docker-compose.yml up --build -d
 ### Build Triggers
 
 Rebuild the Docker image when:
-- ✅ `pyproject.toml` [tool.poetry.scripts] changes (new/removed/renamed scripts)
-- ✅ `pyproject.toml` [tool.poetry.dependencies] changes (new/updated packages)
+- ✅ `[tool.poetry.scripts]` changes in pyproject.binary.toml or pyproject.source.toml (new/removed/renamed scripts)
+- ✅ `[tool.poetry.dependencies]` changes in pyproject.binary.toml or pyproject.source.toml (new/updated packages)
 - ✅ Dockerfile or Dockerfile.source changes
 - ❌ Source code changes (`src/`, `tests/`, `tools/`) - volume mount handles these
-- ❌ Configuration changes (poetry.toml, pyproject.toml other sections) - volume mount handles these
+- ❌ Configuration changes (poetry.toml, shared pyproject sections like [tool.mypy]) - volume mount handles these
 
 ### Policy: No Custom Entrypoint Scripts
 
@@ -267,7 +276,8 @@ Rebuild the Docker image when:
 - ❌ Runtime workarounds for build-time artifacts
 
 **Required approach**:
-- ✅ Rebuild image when `[tool.poetry.scripts]` changes
+- ✅ Rebuild image when `[tool.poetry.scripts]` changes in either pyproject file
+- ✅ Keep `[tool.poetry.scripts]` synchronized in both pyproject.binary.toml and pyproject.source.toml
 - ✅ Use Poetry entry points exclusively
 - ✅ Maintain Docker image immutability
 
@@ -288,6 +298,49 @@ Before committing:
 - [ ] Type hints on all functions
 - [ ] Docstrings on public functions
 - [ ] No TODO comments without GitHub issues
+
+## PyProject Architecture Enforcement
+
+SpectralMC uses dual pyproject files that must stay synchronized in shared sections.
+
+### Automated Validation
+
+**Check synchronization**:
+```bash
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-pyproject
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-pyproject --verbose
+```
+
+**Integrated into check-code**:
+```bash
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-code
+```
+
+### Pre-Commit Hooks
+
+**Install**:
+```bash
+docker compose -f docker/docker-compose.yml exec spectralmc poetry add --group dev pre-commit
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run pre-commit install
+```
+
+**What hooks enforce**:
+- ✅ Shared sections synchronized before commit
+- ✅ Blocks commits of generated pyproject.toml
+- ✅ Runs check-code pipeline on Python changes
+
+### Synchronization Rules
+
+**When editing shared sections** (scripts, mypy, black, pytest, pydantic-mypy, dev dependencies):
+1. Edit in BOTH pyproject.binary.toml AND pyproject.source.toml
+2. Run `poetry run check-pyproject` to verify
+3. Commit both files together
+4. Pre-commit hook will validate automatically
+
+**When editing different sections** (dependencies, sources):
+- Edit only the relevant file (binary or source)
+- Different sections are expected to diverge
+- Validator allows these differences
 
 ## 🔒 Git Workflow Policy
 

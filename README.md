@@ -303,7 +303,7 @@ Run mypy from repository root (no path arguments):
 docker compose -f docker/docker-compose.yml exec spectralmc mypy
 ```
 
-This checks all configured paths (`src/spectralmc`, `tests`, `examples`) per `pyproject.toml`.
+This checks all configured paths (`src/spectralmc`, `tests`, `examples`) per the appropriate pyproject file (pyproject.binary.toml or pyproject.source.toml - they share identical `[tool.mypy]` configuration).
 
 ## Contribution
 

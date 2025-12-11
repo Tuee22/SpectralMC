@@ -79,6 +79,8 @@ repos:
         files: ^(src/spectralmc|tests|tools)/.*\.py$
 ```
 
+**Note**: All Poetry scripts (check-code, test-all, check-purity) are defined in `[tool.poetry.scripts]`, which is a shared section in both pyproject.binary.toml and pyproject.source.toml. Pre-commit hooks work identically for both build modes.
+
 ### 1.3 Usage
 
 Hooks run automatically on `git commit`. To bypass (NOT RECOMMENDED):

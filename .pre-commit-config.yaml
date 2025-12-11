@@ -1,0 +1,36 @@
+# SpectralMC Pre-Commit Hooks
+# Installation: docker compose -f docker/docker-compose.yml exec spectralmc poetry run pre-commit install
+
+repos:
+  # PyProject synchronization validation
+  - repo: local
+    hooks:
+      - id: check-pyproject
+        name: Validate PyProject Synchronization
+        entry: poetry run check-pyproject
+        language: system
+        files: ^pyproject\.(binary|source)\.toml$
+        pass_filenames: false
+        description: Ensures shared sections stay synchronized between pyproject.binary.toml and pyproject.source.toml
+
+  # Prevent committing generated pyproject.toml
+  - repo: local
+    hooks:
+      - id: forbid-pyproject-toml
+        name: Forbid pyproject.toml commits
+        entry: bash -c 'if git diff --cached --name-only | grep -q "^pyproject.toml$"; then echo "❌ ERROR: pyproject.toml is a generated file and should not be committed. Only commit pyproject.binary.toml or pyproject.source.toml."; exit 1; fi'
+        language: system
+        always_run: true
+        pass_filenames: false
+        description: Prevents accidental commits of generated pyproject.toml file
+
+  # Code quality hooks (optional - integrate existing tools)
+  - repo: local
+    hooks:
+      - id: check-code
+        name: Run check-code pipeline
+        entry: poetry run check-code
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [commit]

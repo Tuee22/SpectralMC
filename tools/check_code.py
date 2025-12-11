@@ -25,7 +25,21 @@ def main() -> int:
 
     print("✅ Ruff passed!\n")
 
-    # Step 2: Run Black
+    # Step 2: Run PyProject synchronization check
+    print("🔍 Running PyProject synchronization check...")
+    pyproject_result = subprocess.run(
+        ["poetry", "run", "check-pyproject"],
+        check=False,
+    )
+
+    if pyproject_result.returncode != 0:
+        print(f"❌ PyProject validation failed with exit code {pyproject_result.returncode}")
+        print("   Run: poetry run check-pyproject --verbose")
+        return pyproject_result.returncode
+
+    print("✅ PyProject files synchronized!\n")
+
+    # Step 3: Run Black
     print("🔍 Running Black formatter...")
     black_result = subprocess.run(
         ["poetry", "run", "black", "src/spectralmc/", "tools/", "tests/"],
@@ -38,7 +52,7 @@ def main() -> int:
 
     print("✅ Black passed!\n")
 
-    # Step 3: Run Purity Checker (zero-tolerance for Tier 2 business logic)
+    # Step 4: Run Purity Checker (zero-tolerance for Tier 2 business logic)
     print("🔍 Running Purity checker...")
     purity_result = subprocess.run(
         ["poetry", "run", "check-purity"],
@@ -52,7 +66,7 @@ def main() -> int:
 
     print("✅ Purity check passed!\n")
 
-    # Step 4: Run MyPy
+    # Step 5: Run MyPy
     # Paths match pyproject.toml [tool.mypy] files configuration
     print("🔍 Running MyPy type checker...")
     mypy_result = subprocess.run(

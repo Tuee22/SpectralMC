@@ -91,7 +91,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all 
 docker compose -f docker/docker-compose.yml exec spectralmc pytest tests/
 ```
 
-**Why**: `poetry run test-all` enforces test output redirection and ensures complete output capture (see CLAUDE.md testing policies).
+**Why**: `poetry run test-all` is defined in `[tool.poetry.scripts]` (shared section in both pyproject.binary.toml and pyproject.source.toml) and enforces test output redirection for complete output capture (see CLAUDE.md testing policies).
 
 ---
 
