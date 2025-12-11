@@ -22,6 +22,7 @@ flowchart TB
   Artifacts[Build Artifact Management]
   Observability[Observability]
   Monitoring[Monitoring Alerting]
+  TPM[Total Pure Modelling]
 
   Hub --> Arch
   Hub --> CQ
@@ -32,6 +33,7 @@ flowchart TB
   Hub --> Artifacts
   Hub --> Observability
   Hub --> Monitoring
+  Hub --> TPM
   Docker --> Cmds
   Test --> CQ
   Test --> Docker
@@ -43,6 +45,7 @@ flowchart TB
 | Enforce type/purity standards | [Code Quality](code_quality.md) |
 | Run tests correctly (GPU-only) | [Testing](testing.md) |
 | Test organization and DRY patterns | [Testing Architecture](testing_architecture.md) |
+| Model impossible states + device transitions | [Total Pure Modelling](total_pure_modelling.md) |
 | Run commands in Docker | [Docker Workflow](docker_workflow.md) |
 | Daily development loop | [Development Workflow](development_workflow.md) |
 | Exact command syntax | [Command Reference](command_reference.md) |
@@ -55,6 +58,7 @@ flowchart TB
 
 - **[Architecture](architecture.md)** — Layers, effect boundaries, and SpectralMC's GPU/storage/RNG topology.
 - **[Code Quality](code_quality.md)** — Aggregated type safety, purity, immutability, and interpreter doctrines.
+- **[Total Pure Modelling](total_pure_modelling.md)** — Pure ADTs and state machines that keep GPU/CPU/storage reality in sync.
 - **[Testing](testing.md)** — GPU-only test requirements, determinism, timeouts, and anti-patterns.
 - **[Testing Architecture](testing_architecture.md)** — Test organization, DRY doctrine, fixture patterns, helper consolidation.
 - **[Docker Workflow](docker_workflow.md)** — Docker-only contract, forbidden host commands, and command patterns.
@@ -70,6 +74,7 @@ flowchart TB
 - **[PyTorch Facade Pattern](pytorch_facade.md)** — Deterministic import order and device/dtype safety.
 - **[Effect Interpreter Doctrine](effect_interpreter.md)** — Effect ADTs and interpreter isolation.
 - **[Reproducibility Proofs](reproducibility_proofs.md)** — Formal guarantees for determinism and checkpointing.
+- **[Total Pure Modelling](total_pure_modelling.md)** — Total ADTs for device placement, retries, and storage ownership.
 - **[Blockchain Model Versioning](blockchain_storage.md)** — Storage CAS protocol and integrity checks.
 - **[Pydantic Best Practices](pydantic_patterns.md)** — Config and validation patterns.
 - **[GPU Build Guide](gpu_build.md)** — Legacy GPU build-from-source workflow.

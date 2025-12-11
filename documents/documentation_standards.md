@@ -45,6 +45,7 @@
 | [docker_build_philosophy.md](engineering/docker_build_philosophy.md) | Build strategy and topology |
 | [blockchain_storage.md](engineering/blockchain_storage.md) | Model versioning and atomic commits |
 | [effect_interpreter.md](engineering/effect_interpreter.md) | Effect ADTs and interpreter patterns |
+| [total_pure_modelling.md](engineering/total_pure_modelling.md) | Total ADTs and pure state machines |
 | [reproducibility_proofs.md](engineering/reproducibility_proofs.md) | Determinism proofs |
 
 Overlays must link to the canonical doc first, then list overrides only.

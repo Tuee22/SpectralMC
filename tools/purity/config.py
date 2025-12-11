@@ -43,10 +43,17 @@ def load_purity_config() -> PurityConfig:
         KeyError: If [tool.purity] section missing
     """
     project_root = Path(__file__).parent.parent.parent
-    pyproject_path = project_root / "pyproject.toml"
+    pyproject_candidates = [
+        project_root / "pyproject.toml",
+        project_root / "pyproject.source.toml",
+        project_root / "pyproject.binary.toml",
+    ]
 
-    if not pyproject_path.exists():
-        raise FileNotFoundError(f"pyproject.toml not found at {pyproject_path}")
+    pyproject_path = next((path for path in pyproject_candidates if path.exists()), None)
+    if pyproject_path is None:
+        raise FileNotFoundError(
+            f"No pyproject configuration found. Searched: {', '.join(str(p) for p in pyproject_candidates)}"
+        )
 
     with open(pyproject_path, "rb") as f:
         data = tomllib.load(f)
@@ -65,13 +72,11 @@ def load_purity_config() -> PurityConfig:
                 "src/spectralmc/__main__.py",
             ],
             "whitelist": {
-                "src/spectralmc/gbm_trainer.py": {
-                    382: "Logging interval check (boundary pattern)",
-                    392: "TensorBoard flush check (boundary pattern)",
-                    421: "Gradient existence guard (boundary pattern)",
-                },
                 "src/spectralmc/serialization/tensors.py": {
                     174: "Protobuf requires_grad mutation (I/O boundary)",
+                },
+                "src/spectralmc/async_normals.py": {
+                    311: "RNG advance guard (checkpoint resume)",
                 },
             },
         }

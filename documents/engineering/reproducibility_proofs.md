@@ -12,6 +12,7 @@
 - [Effect Interpreter](effect_interpreter.md)
 - [Immutability Doctrine](immutability_doctrine.md)
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)
+- [Total Pure Modelling](total_pure_modelling.md)
 
 ## Overview
 
@@ -22,6 +23,10 @@ SpectralMC achieves **provable reproducibility** through pure functional program
 3. Reproducibility violations are caught at compile time or import time
 
 **Key Insight**: Reproducibility is not just "tested" behavior - it is a **type property** enforced by the architecture.
+
+Total pure models (see [total_pure_modelling.md](total_pure_modelling.md)) ensure every
+state transition and device move is explicit before effects execute, so replay is
+deterministic and illegal states are unrepresentable.
 
 **Related Standards**:
 - [Purity Doctrine](purity_doctrine.md) - Pure functions enabling reproducibility

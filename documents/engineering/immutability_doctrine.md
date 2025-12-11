@@ -12,12 +12,17 @@
 - [Coding Standards](coding_standards.md)
 - [Effect Interpreter](effect_interpreter.md)
 - [Reproducibility Proofs](reproducibility_proofs.md)
+- [Total Pure Modelling](total_pure_modelling.md)
 
 ## Core Principle
 
 **NEVER bypass immutability guarantees provided by the language or type system.**
 
 Immutability is a contract, not a suggestion. Bypassing immutability protections creates runtime bugs that cannot be caught by static analysis.
+
+Total pure models (see [total_pure_modelling.md](total_pure_modelling.md)) rely on frozen
+ADTs to make impossible states unrepresentable. Mutations would invalidate the guarantees
+that effect interpreters and device guards depend on.
 
 **Related Standards**:
 - [Purity Doctrine](purity_doctrine.md) - Immutability is one aspect of purity

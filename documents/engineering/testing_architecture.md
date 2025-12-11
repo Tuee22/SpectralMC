@@ -13,6 +13,7 @@
 - [Coding Standards](coding_standards.md) — Type safety, purity doctrine
 - [Purity Doctrine](purity_doctrine.md) — Test code exemptions
 - [Documentation Standards](../documentation_standards.md) — Metadata and formatting
+- [Total Pure Modelling](total_pure_modelling.md) — Shapes to mirror in fixtures and generators
 
 ---
 
@@ -26,6 +27,10 @@ SpectralMC's test suite enforces a **DRY (Don't Repeat Yourself) doctrine** to m
 - Helper consolidation strategies
 
 The DRY doctrine applies both **within** test suites (unit/integration/e2e) and **across** them, with clear guidelines on where to place shared code.
+
+Tests should source scenarios from the total models in
+[total_pure_modelling.md](total_pure_modelling.md) to ensure coverage of every allowed
+state (including rejection and retry variants) without duplicating model definitions.
 
 ---
 

@@ -20,6 +20,7 @@
 - [Testing Requirements](testing_requirements.md) — SSoT for GPU enforcement, determinism, timeouts, fixtures, and anti-patterns
 - [Testing Architecture](testing_architecture.md) — DRY patterns, helper consolidation, fixture organization
 - [Code Quality](code_quality.md) — Purity/type rules that tests must satisfy
+- [Total Pure Modelling](total_pure_modelling.md) — Models to mirror in fixtures and generators
 - [Docker Workflow](docker_workflow.md) — Docker-only contract for running tests
 - [Command Reference](command_reference.md) — Canonical `poetry run test-all` invocations and log handling
 - [Documentation Standards](../documentation_standards.md) — Metadata and linking requirements for test docs

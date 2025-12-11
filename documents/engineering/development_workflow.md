@@ -23,6 +23,7 @@ flowchart TB
   Dev --> CQ
   Dev --> Test
   Dev --> Docs
+  Dev --> TPM[Total Pure Modelling]
   Test --> CQ
 ```
 
@@ -33,6 +34,7 @@ flowchart TB
 | Purity/type rules | [Code Quality](code_quality.md) |
 | Testing policy | [Testing](testing.md) |
 | Doc metadata | [Documentation Standards](../documentation_standards.md) |
+| Model purity/ADT shapes | [Total Pure Modelling](total_pure_modelling.md) |
 
 ## Daily Loop
 
@@ -44,11 +46,14 @@ flowchart TB
 
 ## Adding Effects or Models
 
-1. Define immutable ADTs/effects in `src/spectralmc/...` (`@dataclass(frozen=True)`).
+1. Define immutable ADTs/effects in `src/spectralmc/...` (`@dataclass(frozen=True)`)
+   following [total_pure_modelling.md](total_pure_modelling.md) so impossible states stay
+   unrepresentable.
 2. Extend unions/constructors per [Effect Interpreter Doctrine](effect_interpreter.md).
 3. Keep pure code free of loops/conditionals/`raise` per [Purity Doctrine](purity_doctrine.md).
 4. Add interpreter logic at boundaries; avoid direct infrastructure calls from pure layers.
-5. Write tests (GPU-only) alongside feature area; seed deterministically.
+5. Write tests (GPU-only) alongside feature area; seed deterministically and cover all
+   model variants (including rejections) from the total model.
 6. Update docs/stubs if APIs change; run `check-code` + `test-all`.
 
 ## Adding Configuration/Stubs

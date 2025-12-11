@@ -13,6 +13,7 @@
 - [Pydantic Patterns](pydantic_patterns.md)
 - [Testing Requirements](testing_requirements.md)
 - [Documentation Standards](../documentation_standards.md)
+- [Total Pure Modelling](total_pure_modelling.md)
 
 ## Overview
 

@@ -27,6 +27,7 @@ flowchart TB
   CQ --> CPUvsGPU
   CQ --> Testing
   CQ --> Docs
+  CQ --> TPM[Total Pure Modelling]
   Testing --> Docs
 ```
 
@@ -48,6 +49,7 @@ flowchart TB
 - [Coding Standards](coding_standards.md) — Lint/type configuration backing these policies.
 - [Testing Requirements](testing_requirements.md) — GPU-first test contracts and timeouts.
 - [Effect Interpreter Doctrine](effect_interpreter.md) — Execution boundaries and side-effect isolation.
+- [Total Pure Modelling](total_pure_modelling.md) — Source of total ADTs that keep models aligned to reality.
 
 ## Doctrines
 

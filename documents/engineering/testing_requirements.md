@@ -14,10 +14,15 @@
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)
 - [PyTorch Facade](pytorch_facade.md)
 - [Documentation Standards](../documentation_standards.md)
+- [Total Pure Modelling](total_pure_modelling.md)
 
 ## Overview
 
-All tests in SpectralMC must be fully typed, deterministic, and pass mypy strict mode. Tests are executed via `poetry run test-all`. All tests require GPU - silent CPU fallbacks are strictly forbidden.
+All tests in SpectralMC must be fully typed, deterministic, and pass mypy strict mode.
+Tests are executed via `poetry run test-all`. All tests require GPU - silent CPU fallbacks
+are strictly forbidden. Fixtures should mirror the total models from
+[total_pure_modelling.md](total_pure_modelling.md) so test inputs span every allowed
+variant (including rejection cases).
 
 ### Test Code Purity Exception
 

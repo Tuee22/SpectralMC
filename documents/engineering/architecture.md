@@ -27,6 +27,7 @@ flowchart TB
   Arch --> Repro
   Arch --> Docker
   CQ --> Purity
+  Arch --> TPM[Total Pure Modelling]
 ```
 
 ## Design Principles
@@ -35,6 +36,8 @@ flowchart TB
 - **Pure descriptions, isolated execution**: Programs describe work as generators of effect ADTs; interpreters own all I/O (GPU kernels, storage, RNG, logging).
 - **Deterministic GPU-first execution**: CPU-only initialization followed by explicit device transfer; PyTorch imports flow through the facade to enforce deterministic settings and thread safety.
 - **Immutable state**: Frozen dataclasses for models/effects; functional updates only.
+- **Total pure models drive effects**: Pure ADTs from [total_pure_modelling.md](total_pure_modelling.md)
+  choose device placement, retries, and hand-offs before interpreters run any side effects.
 
 ## Layered Architecture
 
@@ -62,6 +65,30 @@ flowchart TB
 - **Storage path**: Immutable model/version ADTs → CAS writes via blockchain storage interpreter.  
 - **RNG path**: RNG state captured/restored as effects; Sobol/PRNG selection is explicit and typed.
 
+### Pure Model → Effects → Infrastructure
+
+```mermaid
+flowchart TB
+  Reality[Domain Facts]
+  Model[Total Pure Model]
+  Decision[Pure Decision ADT]
+  Effects[Effect ADTs]
+  Interpreter[Interpreters]
+  Infra[GPU/Storage/RNG Infra]
+
+  Reality --> Model
+  Model --> Decision
+  Decision --> Effects
+  Effects --> Interpreter
+  Interpreter --> Infra
+```
+
+- Domain facts are encoded in total models that make impossible states unrepresentable.
+- Pure decisions select device placement, transfer caps, and storage ownership; no side
+  effects occur here.
+- Interpreters execute only the effects they are handed; infrastructure never bypasses
+  the model/decision boundary.
+
 ## Boundaries and Imports
 
 - Pure layers never import infrastructure modules directly; they depend on effect ADTs and domain types.
@@ -82,3 +109,4 @@ flowchart TB
 - [PyTorch Facade Pattern](pytorch_facade.md)
 - [Reproducibility Proofs](reproducibility_proofs.md)
 - [Docker Workflow](docker_workflow.md)
+- [Total Pure Modelling](total_pure_modelling.md)

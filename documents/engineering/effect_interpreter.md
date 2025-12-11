@@ -12,10 +12,14 @@
 - [Immutability Doctrine](immutability_doctrine.md)
 - [Reproducibility Proofs](reproducibility_proofs.md)
 - [Coding Standards](coding_standards.md)
+- [Total Pure Modelling](total_pure_modelling.md)
 
 ## Overview
 
-SpectralMC uses the **Effect Interpreter pattern** to separate the description of computations from their execution. All side effects (GPU operations, storage I/O, RNG state) are modeled as pure, immutable ADT types that are interpreted by a single execution layer.
+SpectralMC uses the **Effect Interpreter pattern** to separate the description of
+computations from their execution. All side effects (GPU operations, storage I/O, RNG
+state) are modeled as pure, immutable ADT types that are interpreted by a single execution
+layer.
 
 **Core Principle**: Pure code describes WHAT to do; the interpreter decides HOW and WHEN.
 
@@ -31,12 +35,16 @@ SpectralMC uses the **Effect Interpreter pattern** to separate the description o
 - [Immutability Doctrine](immutability_doctrine.md) - Frozen dataclasses
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) - Device placement rules
 - [Reproducibility Proofs](reproducibility_proofs.md) - Determinism guarantees
+- [Total Pure Modelling](total_pure_modelling.md) - Pure state machines that feed effects
 
 ---
 
 ## Effect ADT Hierarchy
 
-All side effects in SpectralMC are represented as frozen dataclasses organized into a discriminated union hierarchy. This follows the existing patterns in [`result.py`](../../src/spectralmc/result.py) and [`s3_errors.py`](../../src/spectralmc/storage/s3_errors.py).
+All side effects in SpectralMC are represented as frozen dataclasses organized into a
+discriminated union hierarchy. This follows the existing patterns in
+[`result.py`](../../src/spectralmc/result.py) and
+[`s3_errors.py`](../../src/spectralmc/storage/s3_errors.py).
 
 ### Type Hierarchy Diagram
 
@@ -94,7 +102,8 @@ flowchart TB
 
 ### Complete Effect ADT Implementation
 
-The following code is production-ready and follows SpectralMC's strict typing requirements (`mypy --strict`, no `Any`, `cast`, or `type: ignore`).
+The following code is production-ready and follows SpectralMC's strict typing requirements
+(`mypy --strict`, no `Any`, `cast`, or `type: ignore`).
 
 ```python
 # File: documents/engineering/effect_interpreter.md
@@ -430,7 +439,8 @@ Effect = GPUEffect | TrainingEffect | MonteCarloEffect | StorageEffect | RNGEffe
 
 ## Effect Interpreter Protocol
 
-The interpreter is the **only place** where effects are executed. All other code produces pure effect descriptions.
+The interpreter is the **only place** where effects are executed. All other code produces
+pure effect descriptions.
 
 ### Interpreter Flow Diagram
 
@@ -459,6 +469,40 @@ flowchart TB
     S3Client --> Result
     TorchRNG --> Result
 ```
+
+### Total Pure Models Driving Effects
+
+Effect construction is driven by total, pure state machines described in
+[total_pure_modelling.md](total_pure_modelling.md). Pure guards decide device placement,
+storage ownership, and retries; interpreters only execute those decisions.
+
+```mermaid
+flowchart TB
+    State[Placement State]
+    Guard[Transfer Guard]
+    Decision[Transfer Decision]
+    EffectNode[TensorTransfer Effect]
+    Interpreter[GPU Interpreter]
+    Runtime[CUDARuntime]
+    Result[Result]
+
+    State --> Guard
+    Guard --> Decision
+    Decision -->|Move| EffectNode
+    Decision -->|Stay| Result
+    Decision -->|Reject| Result
+    EffectNode --> Interpreter
+    Interpreter --> Runtime
+    Runtime --> Result
+```
+
+**Device transfer walkthrough**
+- Pure guard computes `StayOnGpu`, `MoveToCpu(reason)`, or `RejectTransfer(reason)`; no
+  silent fallbacks or missing variants.
+- Only `MoveToCpu` builds a `TensorTransfer` effect; `RejectTransfer` returns a pure
+  failure that tests assert on.
+- Interpreters read the effect and run CUDA or host operations; they never decide whether
+  a transfer is allowed.
 
 ### Pure vs Effectful Code Boundary
 
@@ -813,7 +857,8 @@ def flat_map_effect(
 
 ## Making Illegal States Unrepresentable
 
-The Effect ADT design uses type-level constraints and factory functions to prevent invalid effect combinations.
+The Effect ADT design uses type-level constraints and factory functions to prevent invalid
+effect combinations.
 
 ### Device Transfer Validation
 
@@ -1060,7 +1105,8 @@ flowchart TB
 
 ## Training Logic Must Be Pure
 
-Training orchestration builds Effect ADTs - it does **NOT** execute side effects directly. Only the Effect Interpreter executes effects.
+Training orchestration builds Effect ADTs - it does **NOT** execute side effects directly.
+Only the Effect Interpreter executes effects.
 
 ### Anti-Pattern: Impure Training Loop
 
@@ -1147,7 +1193,8 @@ async def run_training(interpreter: SpectralMCInterpreter) -> None:
 
 > **Pure code describes WHAT to do; the interpreter decides HOW and WHEN.**
 
-Training logic should produce a **description** of the training process as Effect ADTs. The Effect Interpreter then **executes** those effects. This separation enables:
+Training logic should produce a **description** of the training process as Effect ADTs. The
+Effect Interpreter then **executes** those effects. This separation enables:
 
 1. **Testing without GPU**: Mock interpreter returns predetermined results
 2. **Effect inspection**: Log or analyze effect sequence before execution
@@ -1192,3 +1239,5 @@ See [Purity Doctrine](purity_doctrine.md) for complete purity requirements.
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) - Device placement rules
 - [PyTorch Facade](pytorch_facade.md) - Determinism configuration as effect sequencing
 - [Blockchain Storage](blockchain_storage.md) - Storage effects implementation
+- [Total Pure Modelling](total_pure_modelling.md) - Source of the pure state machines that
+  feed effect builders

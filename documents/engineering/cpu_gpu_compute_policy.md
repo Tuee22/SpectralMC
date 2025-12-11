@@ -12,6 +12,7 @@
 - [Coding Standards](coding_standards.md)
 - [Testing Requirements](testing_requirements.md)
 - [Reproducibility Proofs](reproducibility_proofs.md)
+- [Total Pure Modelling](total_pure_modelling.md)
 
 ## Overview
 
@@ -285,28 +286,30 @@ def forward(self, real: Tensor, imag: Tensor) -> tuple[Tensor, Tensor]:
 
 ## Decision Tree: CPU vs GPU
 
-Use this flowchart to determine the correct device for each operation:
+Pure device models from [total_pure_modelling.md](total_pure_modelling.md) decide the
+allowed transitions; interpreters only execute them.
 
-```text
-# File: documents/engineering/cpu_gpu_compute_policy.md
-Operation Type?
-├─ Model Initialization
-│  └─ CPU (deterministic Sobol init) → Transfer to GPU
-│
-├─ Checkpoint I/O
-│  └─ CPU (serialization format) → Transfer to/from GPU
-│
-├─ RNG State Management
-│  └─ CPU (PyTorch limitation)
-│
-├─ Training or Inference
-│  └─ GPU (computational operations)
-│
-└─ Monte Carlo Simulations
-   └─ GPU (CuPy arrays)
+```mermaid
+flowchart TB
+  Placement[Placement State]
+  Guard[Device Guard]
+  Decision[CPU/GPU Decision]
+  Effects[Transfer/Compute Effects]
+  Interpreter[GPU Interpreter]
+  Runtime[CUDA Runtime]
+
+  Placement --> Guard
+  Guard --> Decision
+  Decision -->|CPU Init| Effects
+  Decision -->|GPU Compute| Effects
+  Decision -->|Reject Transfer| Runtime
+  Effects --> Interpreter
+  Interpreter --> Runtime
 ```
 
-**Key Principle**: Use CPU for **determinism** and **I/O**, GPU for **compute**.
+- Initialization and checkpoint I/O remain CPU-bound for determinism and format
+  constraints.
+- Compute stays on GPU; guards reject silent CPU fallbacks or oversized host transfers.
 
 ---
 

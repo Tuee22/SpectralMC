@@ -12,12 +12,15 @@
 - [Coding Standards](coding_standards.md)
 - [Code Quality](code_quality.md)
 - [Testing Requirements](testing_requirements.md)
+- [Total Pure Modelling](total_pure_modelling.md)
 
 ---
 
 ## Overview
 
-SpectralMC enforces **ZERO TOLERANCE** for purity violations in Tier 2 business logic through automated AST-based linting. This document specifies the complete enforcement system.
+SpectralMC enforces **ZERO TOLERANCE** for purity violations in Tier 2 business logic
+through automated AST-based linting. This document specifies the complete enforcement
+system and keeps pure ADT flows aligned with [total_pure_modelling.md](total_pure_modelling.md).
 
 ### Purpose
 
@@ -135,12 +138,10 @@ return next((item for item in items if predicate(item)), None)
 **Error Message**: "if statement forbidden in business logic (PUR003). Use match/case or conditional expression (x if cond else y)."
 **Automatic Exemptions**: Guard clauses returning Failure(...), CUDA kernels (@cuda.jit decorated functions)
 
-**Whitelisted Exceptions** (4 total):
+**Whitelisted Exceptions** (2 total):
 ```python
 ACCEPTABLE_IF_STATEMENTS = {
-    ("src/spectralmc/gbm_trainer.py", 382): "Logging infrastructure boundary",
-    ("src/spectralmc/gbm_trainer.py", 392): "TensorBoard flush boundary",
-    ("src/spectralmc/gbm_trainer.py", 421): "Gradient guard (TensorBoard)",
+    ("src/spectralmc/async_normals.py", 311): "RNG advance guard (checkpoint resume)",
     ("src/spectralmc/serialization/tensors.py", 174): "Protobuf API boundary",
 }
 ```
@@ -489,29 +490,18 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-cod
 
 ## Migration Path
 
-### Current Whitelisted Violations (4 total)
+### Current Whitelisted Violations (2 total)
 
 These patterns exist in current code and are documented for migration:
 
-1. **gbm_trainer.py:382** - Logging interval check
+1. **async_normals.py:311** - RNG advance guard (checkpoint resume)
    ```python
-   if step % self._hist_every == 0:  # WHITELISTED
+   if rerun_step <= checkpoint_step:  # WHITELISTED
+       return Failure(RNGAdvanceError(...))
    ```
-   **Migration**: Convert to conditional expression or Effect ADT
+   **Migration**: Consider expression-only guard or restructure state handling
 
-2. **gbm_trainer.py:392** - TensorBoard flush check
-   ```python
-   if step % self._flush_every == 0:  # WHITELISTED
-   ```
-   **Migration**: Convert to conditional expression or Effect ADT
-
-3. **gbm_trainer.py:421** - Gradient existence guard
-   ```python
-   if param.grad is not None:  # WHITELISTED
-   ```
-   **Migration**: Filter in comprehension: `if param.grad is not None`
-
-4. **serialization/tensors.py:174** - Protobuf requires_grad mutation
+2. **serialization/tensors.py:174** - Protobuf requires_grad mutation
    ```python
    if proto.requires_grad:  # WHITELISTED
        tensor.requires_grad_(True)
@@ -531,9 +521,7 @@ These patterns exist in current code and are documented for migration:
 
 ```python
 ACCEPTABLE_IF_STATEMENTS: dict[tuple[str, int], str] = {
-    ("src/spectralmc/gbm_trainer.py", 382): "Logging infrastructure boundary",
-    ("src/spectralmc/gbm_trainer.py", 392): "TensorBoard flush boundary",
-    ("src/spectralmc/gbm_trainer.py", 421): "Gradient guard (TensorBoard)",
+    ("src/spectralmc/async_normals.py", 311): "RNG advance guard (checkpoint resume)",
     ("src/spectralmc/serialization/tensors.py", 174): "Protobuf API boundary",
 }
 ```
@@ -640,13 +628,13 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-pur
 1. **Violation Count by Rule**:
    - PUR001 (for loops): Target 0
    - PUR002 (while loops): Target 0
-   - PUR003 (if statements): Target 4 (whitelisted only)
+   - PUR003 (if statements): Target 2 (whitelisted only)
    - PUR004 (raise): Target 0 (except defensive assertions)
    - PUR005 (side effects): Target 0
 
 2. **Purity Compliance Rate**:
    - Formula: `(clean_files / total_tier2_files) * 100%`
-   - Current: 100% (4 whitelisted exceptions documented)
+   - Current: 100% (2 whitelisted exceptions documented)
    - Target: 100% with 0 whitelist entries
 
 3. **Auto-fix Success Rate**:

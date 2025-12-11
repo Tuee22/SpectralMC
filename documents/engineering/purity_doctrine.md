@@ -13,6 +13,7 @@
 - [Reproducibility Proofs](reproducibility_proofs.md)
 - [Testing Requirements](testing_requirements.md)
 - [Purity Enforcement](purity_enforcement.md)
+- [Total Pure Modelling](total_pure_modelling.md)
 
 ## Zero Tolerance Policy for Business Logic
 
@@ -50,6 +51,32 @@ Infrastructure may be impure because it provides the deterministic foundation th
 **Pure functions depend only on their inputs and produce only their outputs.**
 
 Purity is the foundation of SpectralMC's architecture. Pure code is testable, reproducible, and composable. Side effects are isolated to the Effect Interpreter, keeping business logic deterministic and verifiable.
+
+### Total Pure Models as Purity Backbone
+
+Pure modelling (see [total_pure_modelling.md](total_pure_modelling.md)) is the bridge
+between domain facts and effect execution. Business logic builds and matches on total ADTs,
+then hands off to interpreters.
+
+```mermaid
+flowchart TB
+  Fact[Domain Fact]
+  PureModel[Total Pure Model]
+  Decision[Pure Decision ADT]
+  Program[Pure Program]
+  Effects[Effect ADTs]
+  Interpreter[Effect Interpreter]
+
+  Fact --> PureModel
+  PureModel --> Decision
+  Decision --> Program
+  Program --> Effects
+  Effects --> Interpreter
+```
+
+- Fact capture is pure and total; impossible device/storage states cannot appear.
+- Programs make exhaustive decisions; no default branches or silent CPU fallbacks.
+- Interpreters only execute described effects, preserving purity of upstream layers.
 
 ---
 
@@ -121,15 +148,13 @@ Per [pytorch_facade.md](pytorch_facade.md), these patterns are necessary for gua
 - ✅ Helper functions returning Result types
 - ✅ Defensive assertions for programming errors (not validation)
 
-**Whitelisted Boundaries** (4 total - documented for migration):
-- `gbm_trainer.py:382` - Logging interval check (infrastructure boundary)
-- `gbm_trainer.py:392` - TensorBoard flush check (infrastructure boundary)
-- `gbm_trainer.py:421` - Gradient existence guard (TensorBoard infrastructure)
+**Whitelisted Boundaries** (2 total - documented for migration):
+- `async_normals.py:311` - RNG advance guard (checkpoint resume)
 - `serialization/tensors.py:174` - Protobuf `requires_grad` mutation (API boundary)
 
 See [Purity Enforcement](purity_enforcement.md) for AST linter whitelist configuration.
 
-**Achievement**: 100% purity required for new code; 4 whitelisted exceptions in existing code documented for migration.
+**Achievement**: 100% purity required for new code; 2 whitelisted exceptions in existing code documented for migration.
 
 ### Tier 3: Effect Interpreter (MIXED)
 
@@ -150,8 +175,9 @@ See [Purity Enforcement](purity_enforcement.md) for AST linter whitelist configu
 The following patterns are **STRICTLY FORBIDDEN** in Tier 2 business logic files. These patterns are acceptable in Tier 1 infrastructure (see architectural boundaries above).
 
 **Files where these patterns are FORBIDDEN**:
-- `src/spectralmc/gbm_trainer.py` (except 3 whitelisted lines)
+- `src/spectralmc/gbm_trainer.py`
 - `src/spectralmc/serialization/*.py` (except tensors.py:174)
+- `src/spectralmc/async_normals.py` (whitelisted guard at line 311 only)
 - `src/spectralmc/cvnn_factory.py`
 - `src/spectralmc/sobol_sampler.py`
 - All other Tier 2 files
@@ -220,7 +246,7 @@ def handle_result(result: Result[Model, LoadError]) -> str:
 - Prevent type narrowing in some cases
 - Encourage imperative mutation patterns
 
-**Zero tolerance means**: Count of statement-level `if` in Tier 2 files must approach ZERO (4 whitelisted exceptions documented above).
+**Zero tolerance means**: Count of statement-level `if` in Tier 2 files must approach ZERO (2 whitelisted exceptions documented above).
 
 ### 3. `while` Loops
 
@@ -540,7 +566,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-pur
 
 **What it checks**:
 1. **For loops**: Zero statement-level `for` in Tier 2 files
-2. **If statements**: Zero statement-level `if` in Tier 2 files (4 whitelisted exceptions)
+2. **If statements**: Zero statement-level `if` in Tier 2 files (2 whitelisted exceptions)
 3. **While loops**: Zero `while` in Tier 2 files
 4. **Raise statements**: Classification via whitelist (defensive assertions OK)
 5. **Side effects**: No logging, I/O, or mutation in pure functions
@@ -555,9 +581,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-pur
 **Whitelist Configuration** (4 acceptable patterns):
 ```python
 ACCEPTABLE_IF_STATEMENTS = {
-    ("src/spectralmc/gbm_trainer.py", 382): "Logging infrastructure boundary",
-    ("src/spectralmc/gbm_trainer.py", 392): "TensorBoard flush boundary",
-    ("src/spectralmc/gbm_trainer.py", 421): "Gradient guard (TensorBoard)",
+    ("src/spectralmc/async_normals.py", 311): "RNG advance guard (checkpoint resume)",
     ("src/spectralmc/serialization/tensors.py", 174): "Protobuf API boundary",
 }
 ```
@@ -592,7 +616,7 @@ Before approving any PR touching Tier 2 files:
 | Layer | Purity Requirement | Allowed Impurity | Enforcement |
 |-------|-------------------|------------------|-------------|
 | **Tier 1: Infrastructure** | Relaxed | Thread safety, nn.Module idioms, device guards | Manual review |
-| **Tier 2: Business Logic** | **ZERO TOLERANCE** | NONE (4 whitelisted boundaries for migration) | AST linting + CI |
+| **Tier 2: Business Logic** | **ZERO TOLERANCE** | NONE (2 whitelisted boundaries for migration) | AST linting + CI |
 | **Tier 3: Effect Interpreter** | Mixed (ADTs pure, execution impure) | GPU ops, I/O, RNG, network | Manual review |
 | **Test Code** | Relaxed | assert, fixtures, setup loops | Manual review |
 | **System Boundaries** | Relaxed | Logging, arg parsing, exit codes | Manual review |
@@ -704,7 +728,7 @@ def assert_effect_count(self, count: int) -> None:
 
 **ZERO TOLERANCE** for impurity in business logic files:
 
-**Forbidden in Tier 2** (except 4 whitelisted lines):
+**Forbidden in Tier 2** (except 2 whitelisted lines):
 - ❌ Statement-level `for` loops → Use: `[f(x) for x in items]`
 - ❌ Statement-level `if` branches → Use: `value if cond else default` or `match`/`case`
 - ❌ Direct GPU operations → Use: Effect ADTs (TensorTransfer, KernelLaunch)
@@ -720,11 +744,9 @@ def assert_effect_count(self, count: int) -> None:
 - ✅ Use match/case for complex logic
 - ✅ Return Result types for errors
 
-**Whitelisted Boundaries** (4 lines with documented rationale):
-1. `gbm_trainer.py:382` - Logging histogram interval check (infrastructure boundary)
-2. `gbm_trainer.py:392` - TensorBoard flush interval check (infrastructure boundary)
-3. `gbm_trainer.py:421` - Gradient existence guard (TensorBoard infrastructure)
-4. `serialization/tensors.py:174` - Protobuf `requires_grad` mutation (API boundary)
+**Whitelisted Boundaries** (2 lines with documented rationale):
+1. `async_normals.py:311` - RNG advance guard (checkpoint resume)
+2. `serialization/tensors.py:174` - Protobuf `requires_grad` mutation (API boundary)
 
 See [Purity Enforcement](purity_enforcement.md) for AST linter whitelist configuration.
 
