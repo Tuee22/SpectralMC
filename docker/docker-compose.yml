@@ -80,10 +80,30 @@ services:
       - createbuckets
     restart: unless-stopped
     platform: linux/amd64
+    working_dir: /spectralmc
     volumes:
-      - ..:/spectralmc                     # live code sync
-      - pip-cache:/root/.cache/pip         # persist pip cache for fast restarts
-      - poetry-cache:/root/.cache/pypoetry # persist poetry cache
+      # Selective bind mounts keep the baked pyproject.toml visible inside the container
+      - type: bind
+        source: ../src
+        target: /spectralmc/src
+      - type: bind
+        source: ../tests
+        target: /spectralmc/tests
+      - type: bind
+        source: ../examples
+        target: /spectralmc/examples
+      - type: bind
+        source: ../documents
+        target: /spectralmc/documents
+      - type: bind
+        source: ../scripts
+        target: /spectralmc/scripts
+      - type: bind
+        source: ../stubs
+        target: /spectralmc/stubs
+      - type: bind
+        source: ../tools
+        target: /spectralmc/tools
     environment:
       AWS_ACCESS_KEY_ID:     minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
@@ -142,6 +162,4 @@ networks:
 # Volumes - persist cache for fast subsequent startups                        #
 # --------------------------------------------------------------------------- #
 volumes:
-  pip-cache:
-  poetry-cache:
   minio-data:

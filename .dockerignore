@@ -99,6 +99,9 @@ Desktop.ini
 $RECYCLE_BIN/
 **/.Trash-0
 
+# Build-time generated config
+pyproject.toml
+
 # Build artifacts
 *.whl
 *.tar.gz
