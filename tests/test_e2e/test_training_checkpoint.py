@@ -6,37 +6,23 @@ from __future__ import annotations
 import pytest
 import torch
 
-from spectralmc.gbm import BlackScholesConfig, build_black_scholes_config, build_simulation_params
+from spectralmc.gbm import BlackScholesConfig
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import AdamOptimizerState, AdamParamGroup, AdamParamState
-from typing import TypeVar
-
-from spectralmc.result import Failure, Result, Success
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     commit_snapshot,
     load_snapshot_from_checkpoint,
 )
+from tests.helpers import expect_success, make_black_scholes_config, make_simulation_params
 
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
-
-T = TypeVar("T")
-E = TypeVar("E")
-
-
-def _expect_success(result: Result[T, E]) -> T:
-    """Unwrap Success or raise on Failure. For test readability only."""
-    match result:
-        case Success(value):
-            return value
-        case Failure(error):
-            raise AssertionError(f"Expected Success, got Failure: {error}")
 
 
 def _make_checkpoint_black_scholes_config() -> BlackScholesConfig:
     """Create the shared Black-Scholes config used across these tests."""
-    match build_simulation_params(
+    sim_params = make_simulation_params(
         timesteps=100,
         network_size=1024,
         batches_per_mc_run=8,
@@ -45,21 +31,13 @@ def _make_checkpoint_black_scholes_config() -> BlackScholesConfig:
         buffer_size=10000,
         skip=0,
         dtype=Precision.float32,
-    ):
-        case Failure(sim_err):
-            pytest.fail(f"SimulationParams creation failed: {sim_err}")
-        case Success(sim_params):
-            pass
+    )
 
-    match build_black_scholes_config(
+    return make_black_scholes_config(
         sim_params=sim_params,
         simulate_log_return=True,
         normalize_forwards=True,
-    ):
-        case Failure(bs_err):
-            pytest.fail(f"BlackScholesConfig creation failed: {bs_err}")
-        case Success(bs_config):
-            return bs_config
+    )
 
 
 @pytest.mark.asyncio
@@ -73,17 +51,15 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
     )
 
     # Create optimizer state
-    match AdamParamState.from_torch(
-        {
-            "step": 10,
-            "exp_avg": torch.randn(10, 5),
-            "exp_avg_sq": torch.randn(10, 5),
-        }
-    ):
-        case Success(param_state_0):
-            pass
-        case Failure(error):
-            pytest.fail(f"AdamParamState.from_torch failed: {error}")
+    param_state_0 = expect_success(
+        AdamParamState.from_torch(
+            {
+                "step": 10,
+                "exp_avg": torch.randn(10, 5),
+                "exp_avg_sq": torch.randn(10, 5),
+            }
+        )
+    )
 
     param_states = {0: param_state_0}
 
@@ -128,11 +104,8 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
 
     # Verify checkpoint was stored
     head_result = await async_store.get_head()
-    match head_result:
-        case Success(head):
-            assert head.counter == version.counter
-        case Failure(_):
-            pytest.fail("Expected HEAD to exist")
+    head = expect_success(head_result)
+    assert head.counter == version.counter
 
     # Load checkpoint back
     new_model = torch.nn.Sequential(
@@ -141,7 +114,7 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
         torch.nn.Linear(10, 5),
     )
 
-    loaded_snapshot = _expect_success(
+    loaded_snapshot = expect_success(
         await load_snapshot_from_checkpoint(async_store, version, new_model, snapshot)
     )
 
@@ -217,12 +190,9 @@ async def test_checkpoint_multiple_commits(
 
     # Verify HEAD
     head_result = await async_store.get_head()
-    match head_result:
-        case Success(head):
-            assert head.counter == 4
-            assert head.commit_message == "Epoch 4"
-        case Failure(_):
-            pytest.fail("Expected HEAD to exist")
+    head = expect_success(head_result)
+    assert head.counter == 4
+    assert head.commit_message == "Epoch 4"
 
 
 @pytest.mark.asyncio

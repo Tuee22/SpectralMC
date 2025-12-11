@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from tools import check_pyproject
+from tools.check_pyproject import TomlValue
 
 
 @pytest.fixture
@@ -41,7 +40,7 @@ def create_minimal_pyproject(
     scripts = scripts or {"test-script": "module:main"}
     dependencies = dependencies or {"python": ">=3.12,<3.13"}
 
-    content = f"""[tool.poetry]
+    content = """[tool.poetry]
 name = "test-package"
 version = "0.1.0"
 description = "Test package"
@@ -152,7 +151,7 @@ def test_detect_mypy_mismatch(temp_dir: Path) -> None:
     # Modify mypy config in binary file
     binary_content = binary_path.read_text()
     binary_content = binary_content.replace(
-        'strict = true', 'strict = true\ndisallow_any_explicit = true'
+        "strict = true", "strict = true\ndisallow_any_explicit = true"
     )
     binary_path.write_text(binary_content)
 
@@ -176,7 +175,7 @@ def test_detect_black_mismatch(temp_dir: Path) -> None:
 
     # Modify black config in source file
     source_content = source_path.read_text()
-    source_content = source_content.replace('line-length = 88', 'line-length = 100')
+    source_content = source_content.replace("line-length = 88", "line-length = 100")
     source_path.write_text(source_content)
 
     binary_data = check_pyproject.load_toml(binary_path)
@@ -300,17 +299,13 @@ def test_verbose_mode_output(temp_dir: Path) -> None:
     binary_path = temp_dir / "pyproject.binary.toml"
     source_path = temp_dir / "pyproject.source.toml"
 
-    create_minimal_pyproject(
-        binary_path, scripts={"test": "module:main", "extra": "module:extra"}
-    )
+    create_minimal_pyproject(binary_path, scripts={"test": "module:main", "extra": "module:extra"})
     create_minimal_pyproject(source_path, scripts={"test": "module:main"})
 
     binary_data = check_pyproject.load_toml(binary_path)
     source_data = check_pyproject.load_toml(source_path)
 
-    all_match, errors = check_pyproject.compare_sections(
-        binary_data, source_data, verbose=True
-    )
+    all_match, errors = check_pyproject.compare_sections(binary_data, source_data, verbose=True)
 
     assert not all_match
     assert len(errors) > 0
@@ -322,7 +317,7 @@ def test_verbose_mode_output(temp_dir: Path) -> None:
 
 def test_extract_section() -> None:
     """Test section extraction from nested TOML data."""
-    data = {
+    data: dict[str, TomlValue] = {
         "tool": {
             "poetry": {
                 "scripts": {"test": "module:main"},
@@ -333,9 +328,7 @@ def test_extract_section() -> None:
     }
 
     # Test valid paths
-    assert check_pyproject.extract_section(data, "tool.poetry.scripts") == {
-        "test": "module:main"
-    }
+    assert check_pyproject.extract_section(data, "tool.poetry.scripts") == {"test": "module:main"}
     assert check_pyproject.extract_section(data, "tool.mypy") == {"strict": True}
 
     # Test missing section
@@ -346,19 +339,19 @@ def test_extract_section() -> None:
 def test_format_toml_value() -> None:
     """Test TOML value formatting for display."""
     # Test dict formatting
-    dict_val = {"key1": "value1", "key2": 42}
+    dict_val: TomlValue = {"key1": "value1", "key2": 42}
     formatted = check_pyproject.format_toml_value(dict_val)
     assert "key1" in formatted
     assert "value1" in formatted
 
     # Test list formatting
-    list_val = ["item1", "item2"]
+    list_val: TomlValue = ["item1", "item2"]
     formatted = check_pyproject.format_toml_value(list_val)
     assert "[" in formatted
     assert "item1" in formatted
 
     # Test nested dict formatting
-    nested = {"outer": {"inner": "value"}}
+    nested: TomlValue = {"outer": {"inner": "value"}}
     formatted = check_pyproject.format_toml_value(nested)
     assert "outer" in formatted
     assert "inner" in formatted

@@ -37,11 +37,12 @@ def run_all_tests() -> None:
     # Get CLI arguments (excluding the script name)
     cli_args = sys.argv[1:]
 
-    if not cli_args:
-        # No arguments: run all tests (override default "-m 'not gpu'" from pyproject.toml)
-        pytest_args = ["tests", "-m", ""]
-    else:
-        # Forward all CLI arguments to pytest
-        pytest_args = cli_args
+    match cli_args:
+        case []:
+            # No arguments: run all tests (override default "-m 'not gpu'" from pyproject.toml)
+            pytest_args = ["tests", "-m", ""]
+        case _:
+            # Forward all CLI arguments to pytest
+            pytest_args = cli_args
 
     sys.exit(pytest.main(pytest_args))

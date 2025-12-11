@@ -47,7 +47,7 @@ import time
 import warnings
 from collections import deque
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, starmap
 from typing import (
     Callable,
     Iterable,
@@ -424,7 +424,7 @@ class TensorBoardLogger:
         Pure: Uses deque to consume generator for side effects without building list.
         """
         deque(
-            (writer.add_histogram(name, param, step) for name, param in param_pairs),
+            starmap(lambda name, param: writer.add_histogram(name, param, step), param_pairs),
             maxlen=0,
         )
 
@@ -439,10 +439,9 @@ class TensorBoardLogger:
         Pure: Uses deque to consume filtered generator for side effects.
         """
         deque(
-            (
-                writer.add_histogram(f"{name}.grad", param.grad, step)
-                for name, param in param_pairs
-                if param.grad is not None
+            starmap(
+                lambda name, grad: writer.add_histogram(f"{name}.grad", grad, step),
+                ((name, param.grad) for name, param in param_pairs if param.grad is not None),
             ),
             maxlen=0,
         )

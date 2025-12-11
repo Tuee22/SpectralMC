@@ -6,7 +6,7 @@ All tests require GPU - missing GPU is a hard failure, not a skip.
 
 from __future__ import annotations
 
-from typing import TypeVar, Union
+from typing import Union
 
 import pytest
 import torch
@@ -20,7 +20,6 @@ from spectralmc.cvnn_factory import (
     build_model,
 )
 from spectralmc.errors.trainer import InvalidTrainerConfig
-from spectralmc.gbm import build_black_scholes_config, build_simulation_params
 from spectralmc.gbm_trainer import (
     ComplexValuedModel,
     GbmCVNNPricer,
@@ -29,21 +28,14 @@ from spectralmc.gbm_trainer import (
 )
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import DType as TorchDTypeEnum
-from spectralmc.result import Failure, Result, Success
 from spectralmc.sobol_sampler import BoundSpec, build_bound_spec
 from spectralmc.storage import AsyncBlockchainModelStore, commit_snapshot
-
-T = TypeVar("T")
-E = TypeVar("E")
-
-
-def _expect_success(result: Result[T, E]) -> T:
-    match result:
-        case Success(value):
-            return value
-        case Failure(error):
-            raise AssertionError(f"Unexpected CVNN factory failure: {error}")
-
+from tests.helpers import (
+    expect_failure,
+    expect_success,
+    make_black_scholes_config,
+    make_simulation_params,
+)
 
 # Module-level GPU requirement - test file fails immediately without GPU
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
@@ -58,7 +50,7 @@ def _make_test_cvnn(
     dtype: torch.dtype,
 ) -> ComplexValuedModel:
     """Create a simple CVNN for testing (matches test_gbm_trainer.py pattern)."""
-    enum_dtype = _expect_success(TorchDTypeEnum.from_torch(dtype))
+    enum_dtype = expect_success(TorchDTypeEnum.from_torch(dtype))
     cfg = CVNNConfig(
         dtype=enum_dtype,
         layers=[
@@ -69,14 +61,14 @@ def _make_test_cvnn(
         ],
         seed=seed,
     )
-    return _expect_success(build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg)).to(
+    return expect_success(build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg)).to(
         device, dtype
     )
 
 
 def make_test_config(model: ComplexValuedModel, global_step: int = 0) -> GbmCVNNPricerConfig:
     """Factory to create test configurations."""
-    match build_simulation_params(
+    sim_params = make_simulation_params(
         timesteps=10,  # Reduced from 100: match test_e2e_storage.py pattern
         network_size=128,  # Reduced from 1024: sufficient for CVNN operation
         batches_per_mc_run=2,  # Reduced from 8: minimum for mean calculation
@@ -85,21 +77,13 @@ def make_test_config(model: ComplexValuedModel, global_step: int = 0) -> GbmCVNN
         buffer_size=256,  # Reduced from 10000: conservative async buffer (was 3.82 GB, now 1.26 MB)
         skip=0,
         dtype=Precision.float32,
-    ):
-        case Failure(sim_err):
-            raise AssertionError(f"SimulationParams creation failed: {sim_err}")
-        case Success(sim_params):
-            pass
+    )
 
-    match build_black_scholes_config(
+    bs_config = make_black_scholes_config(
         sim_params=sim_params,
         simulate_log_return=True,
         normalize_forwards=True,
-    ):
-        case Failure(cfg_err):
-            raise AssertionError(f"BlackScholesConfig creation failed: {cfg_err}")
-        case Success(bs_config):
-            pass
+    )
 
     cpu_rng_state = torch.get_rng_state().numpy().tobytes()
     cuda_rng_states = [state.cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()]
@@ -133,7 +117,7 @@ async def test_training_with_auto_commit(
     """Test training with manual commit after completion (auto_commit skipped in async context)."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
-    pricer = _expect_success(GbmCVNNPricer.create(config))
+    pricer = expect_success(GbmCVNNPricer.create(config))
 
     training_config = TrainingConfig(
         num_batches=5,
@@ -145,7 +129,7 @@ async def test_training_with_auto_commit(
     pricer.train(training_config)
 
     # Manually commit after training
-    snapshot = _expect_success(pricer.snapshot())
+    snapshot = expect_success(pricer.snapshot())
     version = await commit_snapshot(
         async_store, snapshot, f"Final checkpoint: step={snapshot.global_step}"
     )
@@ -162,7 +146,7 @@ async def test_training_with_commit_interval(
     """Test training with manual periodic commits (simulating commit_interval behavior)."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
-    pricer = _expect_success(GbmCVNNPricer.create(config))
+    pricer = expect_success(GbmCVNNPricer.create(config))
 
     training_config = TrainingConfig(
         num_batches=15,
@@ -174,7 +158,7 @@ async def test_training_with_commit_interval(
     pricer.train(training_config)
 
     # Manually commit final state
-    snapshot = _expect_success(pricer.snapshot())
+    snapshot = expect_success(pricer.snapshot())
     version = await commit_snapshot(
         async_store, snapshot, f"Checkpoint at step={snapshot.global_step}"
     )
@@ -191,7 +175,7 @@ async def test_training_without_storage_backward_compat(
     """Test that training without blockchain_store still works (backward compatibility)."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
-    pricer = _expect_success(GbmCVNNPricer.create(config))
+    pricer = expect_success(GbmCVNNPricer.create(config))
 
     training_config = TrainingConfig(
         num_batches=5,
@@ -204,11 +188,7 @@ async def test_training_without_storage_backward_compat(
 
     # Verify no commits were created
     head_result = await async_store.get_head()
-    match head_result:
-        case Failure(_):
-            pass  # Expected - no versions in store
-        case Success(_):
-            pytest.fail("Expected no HEAD since we didn't commit to store")
+    expect_failure(head_result)
 
 
 @pytest.mark.asyncio
@@ -218,7 +198,7 @@ async def test_training_validation_auto_commit_requires_store(
     """Test that auto_commit=True without blockchain_store raises error."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
-    pricer = _expect_success(GbmCVNNPricer.create(config))
+    pricer = expect_success(GbmCVNNPricer.create(config))
 
     training_config = TrainingConfig(
         num_batches=5,
@@ -231,12 +211,9 @@ async def test_training_validation_auto_commit_requires_store(
         training_config,
         auto_commit=True,  # Without blockchain_store
     )
-    match result:
-        case Failure(error):
-            assert isinstance(error, InvalidTrainerConfig)
-            assert "blockchain_store" in error.message
-        case Success(_):
-            pytest.fail("Expected Failure for auto_commit without blockchain_store")
+    error = expect_failure(result)
+    assert isinstance(error, InvalidTrainerConfig)
+    assert "blockchain_store" in error.message
 
 
 @pytest.mark.asyncio
@@ -246,7 +223,7 @@ async def test_training_validation_commit_interval_requires_store(
     """Test that commit_interval without blockchain_store raises error."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
-    pricer = _expect_success(GbmCVNNPricer.create(config))
+    pricer = expect_success(GbmCVNNPricer.create(config))
 
     training_config = TrainingConfig(
         num_batches=5,
@@ -259,12 +236,9 @@ async def test_training_validation_commit_interval_requires_store(
         training_config,
         commit_interval=3,  # Without blockchain_store
     )
-    match result:
-        case Failure(error):
-            assert isinstance(error, InvalidTrainerConfig)
-            assert "blockchain_store" in error.message
-        case Success(_):
-            pytest.fail("Expected Failure for commit_interval without blockchain_store")
+    error = expect_failure(result)
+    assert isinstance(error, InvalidTrainerConfig)
+    assert "blockchain_store" in error.message
 
 
 @pytest.mark.asyncio
@@ -274,7 +248,7 @@ async def test_training_commit_message_template(
     """Test that commit message can be formatted with training details."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
-    pricer = _expect_success(GbmCVNNPricer.create(config))
+    pricer = expect_success(GbmCVNNPricer.create(config))
 
     training_config = TrainingConfig(
         num_batches=5,
@@ -286,7 +260,7 @@ async def test_training_commit_message_template(
     pricer.train(training_config)
 
     # Manually commit with custom message
-    snapshot = _expect_success(pricer.snapshot())
+    snapshot = expect_success(pricer.snapshot())
     message = f"Training: step={snapshot.global_step}, batch={training_config.num_batches}"
     version = await commit_snapshot(async_store, snapshot, message)
 
@@ -302,7 +276,7 @@ async def test_training_commit_preserves_optimizer_state(
     """Test that committing after training preserves optimizer state."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
-    pricer = _expect_success(GbmCVNNPricer.create(config))
+    pricer = expect_success(GbmCVNNPricer.create(config))
 
     training_config = TrainingConfig(
         num_batches=10,
@@ -314,7 +288,7 @@ async def test_training_commit_preserves_optimizer_state(
     pricer.train(training_config)
 
     # Get snapshot and commit
-    snapshot = _expect_success(pricer.snapshot())
+    snapshot = expect_success(pricer.snapshot())
 
     # Verify optimizer state exists before commit
     assert snapshot.optimizer_state is not None, "Optimizer state should be preserved"

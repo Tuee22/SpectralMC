@@ -3,11 +3,12 @@
 
 **Status**: Authoritative source
 **Supersedes**: None (primary testing standards document)
-**Referenced by**: documents/documentation_standards.md, documents/engineering/testing.md
+**Referenced by**: documents/documentation_standards.md, documents/engineering/testing.md, documents/engineering/testing_architecture.md
 
 > **Purpose**: SSoT for SpectralMC testing expectations, determinism, and GPU constraints.
 
 ## Cross-References
+- [Testing Architecture](testing_architecture.md) — DRY patterns, helper consolidation, fixture organization
 - [Purity Doctrine](purity_doctrine.md)
 - [Coding Standards](coding_standards.md)
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)
@@ -35,6 +36,8 @@ Test code should still follow purity for the **code under test** - only test inf
 ## Test Structure
 
 All tests must be **fully typed** and **mypy-strict-clean**:
+
+For test helper consolidation and DRY patterns, see [Testing Architecture](testing_architecture.md).
 
 ```python
 # File: documents/engineering/testing_requirements.md

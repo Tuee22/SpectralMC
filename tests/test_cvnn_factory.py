@@ -27,8 +27,7 @@ from spectralmc.cvnn_factory import (
     build_model,
 )
 from spectralmc.models.torch import DType  # ← project's strongly-typed dtype enum
-from spectralmc.result import Failure, Result, Success
-from typing import TypeVar
+from tests.helpers import expect_success
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -78,20 +77,11 @@ def _assert_state_dict_equal(a: dict[str, Tensor], b: dict[str, Tensor]) -> None
             assert torch.equal(t1, t2), f"Mismatch in {k}"
 
 
-T = TypeVar("T")
-E = TypeVar("E")
-
-
-def _expect_success(result: Result[T, E]) -> T:
-    match result:
-        case Success(value):
-            return value
-        case Failure(error):
-            raise AssertionError(f"Unexpected CVNN factory failure: {error}")
+# Helper functions consolidated to tests/helpers/result_utils.py
 
 
 def _build_test_model(cfg: CVNNConfig, *, dtype: DType) -> nn.Module:
-    return _expect_success(build_model(n_inputs=N_IN, n_outputs=N_OUT, cfg=cfg)).to(
+    return expect_success(build_model(n_inputs=N_IN, n_outputs=N_OUT, cfg=cfg)).to(
         _DEVICE_CUDA, dtype.to_torch()
     )
 

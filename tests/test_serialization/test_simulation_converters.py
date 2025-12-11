@@ -16,7 +16,7 @@ from spectralmc.serialization.simulation import (
 )
 
 
-def _make_base_params_proto() -> simulation_pb2.SimulationParamsProto:  # type: ignore[no-any-unimported]
+def _make_base_params_proto() -> simulation_pb2.SimulationParamsProto:
     proto = simulation_pb2.SimulationParamsProto()
     proto.skip = 0
     proto.timesteps = 4

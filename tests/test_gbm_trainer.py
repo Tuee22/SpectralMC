@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import copy
 import math
-from typing import Sequence, TypeVar, Union
+from typing import Sequence, Union
 
 import pytest
 import torch
@@ -34,7 +34,7 @@ from spectralmc.cvnn_factory import (
     LinearCfg,
     build_model,
 )
-from spectralmc.gbm import BlackScholes, build_black_scholes_config, build_simulation_params
+from spectralmc.gbm import BlackScholes
 from spectralmc.gbm_trainer import (
     ComplexValuedModel,
     GbmCVNNPricer,
@@ -44,8 +44,8 @@ from spectralmc.gbm_trainer import (
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.models.torch import DType as TorchDTypeEnum
-from spectralmc.result import Failure, Result, Success
 from spectralmc.sobol_sampler import BoundSpec, build_bound_spec
+from tests.helpers import expect_success, make_black_scholes_config, make_simulation_params
 
 
 # Module-level GPU requirement - test file fails immediately without GPU
@@ -95,18 +95,6 @@ def _tree_equal(x: object, y: object) -> bool:
     return x == y
 
 
-T = TypeVar("T")
-E = TypeVar("E")
-
-
-def _expect_success(result: Result[T, E]) -> T:
-    match result:
-        case Success(value):
-            return value
-        case Failure(error):
-            raise AssertionError(f"Unexpected failure: {error}")
-
-
 def _make_cvnn(
     n_inputs: int,
     n_outputs: int,
@@ -116,7 +104,7 @@ def _make_cvnn(
     dtype: torch.dtype,
 ) -> ComplexValuedModel:
     """Factory wrapper around :pyfunc:`spectralmc.cvnn_factory.build_model`."""
-    enum_dtype = _expect_success(TorchDTypeEnum.from_torch(dtype))
+    enum_dtype = expect_success(TorchDTypeEnum.from_torch(dtype))
     cfg = CVNNConfig(
         dtype=enum_dtype,
         layers=[
@@ -128,7 +116,7 @@ def _make_cvnn(
         ],
         seed=seed,
     )
-    return _expect_success(build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg)).to(
+    return expect_success(build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg)).to(
         device, dtype
     )
 
@@ -139,7 +127,7 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
     torch_dtype = torch.float32 if precision is Precision.float32 else torch.float64
     torch.manual_seed(seed)
 
-    match build_simulation_params(
+    sim = make_simulation_params(
         skip=0,
         timesteps=1,
         network_size=16,
@@ -148,21 +136,13 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
         mc_seed=seed,
         buffer_size=1,
         dtype=precision,
-    ):
-        case Failure(sim_err):
-            raise AssertionError(f"SimulationParams creation failed: {sim_err}")
-        case Success(sim):
-            pass
+    )
 
-    match build_black_scholes_config(
+    cfg = make_black_scholes_config(
         sim_params=sim,
         simulate_log_return=True,
         normalize_forwards=False,
-    ):
-        case Failure(cfg_err):
-            raise AssertionError(f"BlackScholesConfig creation failed: {cfg_err}")
-        case Success(cfg):
-            pass
+    )
 
     bounds: dict[str, BoundSpec] = {
         "X0": build_bound_spec(50.0, 150.0).unwrap(),
@@ -174,7 +154,7 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
     }
 
     net = _make_cvnn(6, sim.network_size, seed=seed, device=device, dtype=torch_dtype)
-    return _expect_success(
+    return expect_success(
         GbmCVNNPricer.create(GbmCVNNPricerConfig(cfg=cfg, domain_bounds=bounds, cvnn=net))
     )
 
@@ -218,10 +198,10 @@ def test_snapshot_cycle_deterministic(precision: Precision) -> None:
     trainer = _make_gbm_trainer(precision, seed=44)
     trainer.train(TrainingConfig(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE))
 
-    snap = _expect_success(trainer.snapshot()).model_copy(
+    snap = expect_success(trainer.snapshot()).model_copy(
         update={"cvnn": _clone_model(trainer._cvnn)}
     )
-    clone = _expect_success(GbmCVNNPricer.create(snap))
+    clone = expect_success(GbmCVNNPricer.create(snap))
 
     cfg = TrainingConfig(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
     trainer.train(cfg)
@@ -240,10 +220,10 @@ def test_snapshot_restart_without_optimizer(precision: Precision) -> None:
     trainer = _make_gbm_trainer(precision, seed=45)
     trainer.train(TrainingConfig(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE))
 
-    snap = _expect_success(trainer.snapshot()).model_copy(
+    snap = expect_success(trainer.snapshot()).model_copy(
         update={"optimizer_state": None, "cvnn": _clone_model(trainer._cvnn)}
     )
-    restarted = _expect_success(GbmCVNNPricer.create(snap))
+    restarted = expect_success(GbmCVNNPricer.create(snap))
 
     # Create a fresh trainer without optimizer state for comparison
     # (same model state as restarted, but created fresh)
@@ -252,10 +232,10 @@ def test_snapshot_restart_without_optimizer(precision: Precision) -> None:
         TrainingConfig(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE)
     )
     # Create fresh trainer from same snapshot (no optimizer state)
-    snap_for_comparison = _expect_success(trainer_without_opt.snapshot()).model_copy(
+    snap_for_comparison = expect_success(trainer_without_opt.snapshot()).model_copy(
         update={"optimizer_state": None, "cvnn": _clone_model(trainer_without_opt._cvnn)}
     )
-    trainer_without_opt = _expect_success(GbmCVNNPricer.create(snap_for_comparison))
+    trainer_without_opt = expect_success(GbmCVNNPricer.create(snap_for_comparison))
 
     cfg = TrainingConfig(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
     trainer_without_opt.train(cfg)
@@ -273,7 +253,7 @@ def test_snapshot_restart_without_optimizer(precision: Precision) -> None:
 def test_snapshot_optimizer_serialization_roundtrip(precision: Precision) -> None:
     trainer = _make_gbm_trainer(precision, seed=50)
     trainer.train(TrainingConfig(num_batches=4, batch_size=8, learning_rate=LEARNING_RATE))
-    snap = _expect_success(trainer.snapshot())
+    snap = expect_success(trainer.snapshot())
 
     opt_state = snap.optimizer_state
     assert opt_state is not None, "Optimizer state should be preserved in snapshot after training"
@@ -283,8 +263,8 @@ def test_snapshot_optimizer_serialization_roundtrip(precision: Precision) -> Non
     assert len(opt_state.param_groups) > 0, "Optimizer state should have parameter groups"
 
     round_trip = AdamOptimizerState.model_validate(opt_state.model_dump(mode="python"))
-    torch_state = _expect_success(opt_state.to_torch())
-    reloaded_state = _expect_success(round_trip.to_torch())
+    torch_state = expect_success(opt_state.to_torch())
+    reloaded_state = expect_success(round_trip.to_torch())
 
     for key in ("state", "param_groups"):
         assert key in torch_state and key in reloaded_state
@@ -305,7 +285,7 @@ def test_predict_price_smoke(precision: Precision) -> None:
         BlackScholes.Inputs(X0=100.0, K=100.0, T=1.0, r=0.05, d=0.02, v=0.20),
         BlackScholes.Inputs(X0=120.0, K=110.0, T=0.5, r=0.03, d=0.01, v=0.25),
     ]
-    results = _expect_success(trainer.predict_price(contracts))
+    results = expect_success(trainer.predict_price(contracts))
 
     assert len(results) == len(contracts)
     for res in results:

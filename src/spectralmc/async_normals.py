@@ -307,9 +307,8 @@ class ConcurrentNormGenerator:
         base_seed = config.seed
         served = config.skips
         np_rng = np.random.default_rng(base_seed)
-        # Infrastructure boundary: Must mutate RNG state for checkpoint determinism
-        if served:  # Resume from checkpoint
-            np_rng.integers(0, _SEED_LIMIT, size=served)  # fast-forward to saved position
+        # Infrastructure boundary: deterministic RNG advancement (size=0 is a no-op)
+        np_rng.integers(0, _SEED_LIMIT, size=served)  # fast-forward to saved position
 
         def _make() -> (
             Result[_NormGenerator, InvalidShape | InvalidDType | QueueBusy | SeedOutOfRange]

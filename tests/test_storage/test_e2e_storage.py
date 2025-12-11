@@ -8,15 +8,12 @@ Checkpoints are created programmatically for testing purposes.
 from __future__ import annotations
 
 import asyncio
-from typing import TypeVar
 
 import pytest
 import torch
 
-from spectralmc.gbm import build_black_scholes_config, build_simulation_params
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
-from spectralmc.result import Failure, Result, Success
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     InferenceClient,
@@ -30,20 +27,9 @@ from spectralmc.storage.errors import (
     VersionNotFoundError,
 )
 from spectralmc.storage.gc import run_gc
+from tests.helpers import expect_success, make_black_scholes_config, make_simulation_params
 
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
-
-T = TypeVar("T")
-E = TypeVar("E")
-
-
-def _expect_success(result: Result[T, E]) -> T:
-    """Unwrap Success or raise on Failure. For test readability only."""
-    match result:
-        case Success(value):
-            return value
-        case Failure(error):
-            raise AssertionError(f"Expected Success, got Failure: {error}")
 
 
 def make_test_snapshot(
@@ -52,7 +38,7 @@ def make_test_snapshot(
     """Create a test snapshot programmatically (CPU-only)."""
     model = torch.nn.Linear(*model_size)
 
-    match build_simulation_params(
+    sim_params = make_simulation_params(
         timesteps=10,
         network_size=128,
         batches_per_mc_run=2,
@@ -61,21 +47,13 @@ def make_test_snapshot(
         buffer_size=1000,
         skip=0,
         dtype=Precision.float32,
-    ):
-        case Failure(sim_err):
-            pytest.fail(f"SimulationParams creation failed: {sim_err}")
-        case Success(sim_params):
-            pass
+    )
 
-    match build_black_scholes_config(
+    bs_config = make_black_scholes_config(
         sim_params=sim_params,
         simulate_log_return=True,
         normalize_forwards=True,
-    ):
-        case Failure(bs_err):
-            pytest.fail(f"BlackScholesConfig creation failed: {bs_err}")
-        case Success(bs_config):
-            pass
+    )
 
     return GbmCVNNPricerConfig(
         cfg=bs_config,
@@ -105,7 +83,7 @@ async def test_e2e_complete_lifecycle(async_store: AsyncBlockchainModelStore) ->
     model_template = torch.nn.Linear(5, 5)
     config_template = make_test_snapshot(0)
 
-    loaded_snapshot = _expect_success(
+    loaded_snapshot = expect_success(
         await load_snapshot_from_checkpoint(async_store, version1, model_template, config_template)
     )
 
@@ -132,15 +110,11 @@ async def test_e2e_complete_lifecycle(async_store: AsyncBlockchainModelStore) ->
     assert version2.parent_hash == version1.content_hash
 
     # 5. Verify chain integrity
-    result = await verify_chain(async_store)
-    match result:
-        case Success(report):
-            assert report.is_valid, f"Chain corrupted: {report.corruption_type}"
-        case Failure(error):
-            pytest.fail(f"S3 error during verification: {error}")
+    report = expect_success(await verify_chain(async_store))
+    assert report.is_valid, f"Chain corrupted: {report.corruption_type}"
 
     # 6. Load final snapshot and verify state
-    final_snapshot = _expect_success(
+    final_snapshot = expect_success(
         await load_snapshot_from_checkpoint(async_store, version2, model_template, config_template)
     )
 
@@ -169,21 +143,13 @@ async def test_e2e_sequential_commits(async_store: AsyncBlockchainModelStore) ->
     assert len(successful_commits) == 5, "All 5 commits should succeed"
 
     # Verify chain integrity
-    result = await verify_chain(async_store)
-    match result:
-        case Success(report):
-            assert report.is_valid, f"Chain corrupted: {report.corruption_type}"
-        case Failure(error):
-            pytest.fail(f"S3 error during verification: {error}")
+    report = expect_success(await verify_chain(async_store))
+    assert report.is_valid, f"Chain corrupted: {report.corruption_type}"
 
     # Verify HEAD exists and counter matches successful commits
-    head_result = await async_store.get_head()
-    match head_result:
-        case Success(head):
-            # Counter should be 4 (5 commits = counters 0-4)
-            assert head.counter == 4
-        case Failure(_):
-            pytest.fail("Expected HEAD to exist")
+    head = expect_success(await async_store.get_head())
+    # Counter should be 4 (5 commits = counters 0-4)
+    assert head.counter == 4
 
     # Verify all workers' commits are present
     worker_messages = set()
@@ -293,12 +259,8 @@ async def test_e2e_chain_verification_multiple_versions(
         await commit_snapshot(async_store, snapshot, f"Checkpoint {i}")
 
     # Verify chain integrity
-    result = await verify_chain(async_store)
-    match result:
-        case Success(report):
-            assert report.is_valid, f"Chain corrupted: {report.corruption_type}"
-        case Failure(error):
-            pytest.fail(f"S3 error during verification: {error}")
+    report = expect_success(await verify_chain(async_store))
+    assert report.is_valid, f"Chain corrupted: {report.corruption_type}"
 
     # Verify all versions are accessible
     for i in range(20):
@@ -325,11 +287,7 @@ async def test_e2e_garbage_collection_workflow(
         protect_tags=[3, 7],
         dry_run=True,
     )
-    match preview_result:
-        case Success(preview_report):
-            pass
-        case Failure(error):
-            pytest.fail(f"GC preview failed: {error.message}")
+    preview_report = expect_success(preview_result)
 
     # Should delete versions 1,2,4,5,6,8,9
     # Protected: 0 (genesis), 3 (tag), 7 (tag), 10-14 (recent 5)
@@ -346,11 +304,7 @@ async def test_e2e_garbage_collection_workflow(
         protect_tags=[3, 7],
         dry_run=False,
     )
-    match gc_result:
-        case Success(gc_report):
-            pass
-        case Failure(error):
-            pytest.fail(f"GC failed: {error.message}")
+    gc_report = expect_success(gc_result)
 
     assert gc_report.dry_run is False
     assert len(gc_report.deleted_versions) > 0
@@ -389,12 +343,7 @@ async def test_e2e_version_history_traversal(
         versions.append(version.content_hash)
 
     # Traverse backward from HEAD to genesis
-    head_result = await async_store.get_head()
-    match head_result:
-        case Success(current):
-            pass
-        case Failure(_):
-            pytest.fail("Expected HEAD to exist")
+    current = expect_success(await async_store.get_head())
 
     traversed = []
     while current is not None:
@@ -435,7 +384,7 @@ async def test_e2e_rollback_to_previous_version(
     model_template = torch.nn.Linear(5, 5)
     config_template = make_test_snapshot(0)
 
-    snapshot_at_v1 = _expect_success(
+    snapshot_at_v1 = expect_success(
         await load_snapshot_from_checkpoint(async_store, v1, model_template, config_template)
     )
 
@@ -459,7 +408,7 @@ async def test_e2e_rollback_to_previous_version(
     assert v4.parent_hash == (await async_store.get_version("v0000000003")).content_hash
 
     # Load v4 and verify it has v1's modified state
-    snapshot_v4 = _expect_success(
+    snapshot_v4 = expect_success(
         await load_snapshot_from_checkpoint(async_store, v4, model_template, config_template)
     )
     assert snapshot_v4.global_step == 500
@@ -495,12 +444,8 @@ async def test_e2e_concurrent_gc_and_commits(
     # Just verify operations completed without crashes
 
     # Verify we have commits from both workers
-    head_result = await async_store.get_head()
-    match head_result:
-        case Success(head):
-            assert head.counter >= 10  # At least initial 10 + some new commits
-        case Failure(_):
-            pytest.fail("Expected HEAD to exist")
+    head = expect_success(await async_store.get_head())
+    assert head.counter >= 10  # At least initial 10 + some new commits
 
 
 @pytest.mark.asyncio
@@ -517,14 +462,10 @@ async def test_e2e_empty_chain_operations(
     assert head_result.is_failure()
 
     # GC on empty chain
-    result = await run_gc(async_store, keep_versions=10, dry_run=True)
-    match result:
-        case Success(report):
-            assert report.deleted_versions == []
-            assert report.protected_versions == []
-            assert report.bytes_freed == 0
-        case Failure(error):
-            pytest.fail(f"GC on empty chain failed: {error.message}")
+    report = expect_success(await run_gc(async_store, keep_versions=10, dry_run=True))
+    assert report.deleted_versions == []
+    assert report.protected_versions == []
+    assert report.bytes_freed == 0
 
     # Load from empty chain should fail
     _model_template = torch.nn.Linear(5, 5)
@@ -543,7 +484,7 @@ async def test_e2e_large_model_storage(
     # Create larger model (100 x 100 = 10k parameters)
     large_model = torch.nn.Linear(100, 100)
 
-    match build_simulation_params(
+    sim_params = make_simulation_params(
         timesteps=10,
         network_size=128,
         batches_per_mc_run=2,
@@ -552,21 +493,13 @@ async def test_e2e_large_model_storage(
         buffer_size=1000,
         skip=0,
         dtype=Precision.float32,
-    ):
-        case Failure(sim_err):
-            pytest.fail(f"SimulationParams creation failed: {sim_err}")
-        case Success(sim_params):
-            pass
+    )
 
-    match build_black_scholes_config(
+    bs_config = make_black_scholes_config(
         sim_params=sim_params,
         simulate_log_return=True,
         normalize_forwards=True,
-    ):
-        case Failure(bs_err):
-            pytest.fail(f"BlackScholesConfig creation failed: {bs_err}")
-        case Success(bs_config):
-            pass
+    )
 
     large_snapshot = GbmCVNNPricerConfig(
         cfg=bs_config,
@@ -586,7 +519,7 @@ async def test_e2e_large_model_storage(
     model_template = torch.nn.Linear(100, 100)
     config_template = make_test_snapshot(0, model_size=(100, 100))
 
-    loaded = _expect_success(
+    loaded = expect_success(
         await load_snapshot_from_checkpoint(async_store, version, model_template, config_template)
     )
 
@@ -616,12 +549,8 @@ async def test_e2e_audit_log_integrity(async_store: AsyncBlockchainModelStore) -
 
     # Audit log should exist (actual validation would require reading log files)
     # For now, just verify operations completed without error
-    head_result = await async_store.get_head()
-    match head_result:
-        case Success(head):
-            assert head.counter >= 7
-        case Failure(_):
-            pytest.fail("Expected HEAD to exist")
+    head = expect_success(await async_store.get_head())
+    assert head.counter >= 7
 
 
 @pytest.mark.asyncio

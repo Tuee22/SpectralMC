@@ -64,9 +64,7 @@ class MockInterpreter:
         """
         self.recorded_effects.append(effect)
         effect_type = type(effect)
-        if effect_type in self.mock_results:
-            return self.mock_results[effect_type]
-        return Success(None)
+        return self.mock_results.get(effect_type, Success(None))
 
     def assert_effect_sequence(self, expected: list[type[Effect]]) -> None:
         """Assert that recorded effects match expected sequence.
@@ -78,8 +76,11 @@ class MockInterpreter:
             AssertionError: If recorded effects don't match expected.
         """
         actual = [type(e) for e in self.recorded_effects]
-        if actual != expected:
-            raise AssertionError(f"Expected effect sequence {expected}, got {actual}")
+        match actual == expected:
+            case True:
+                return
+            case False:
+                raise AssertionError(f"Expected effect sequence {expected}, got {actual}")
 
     def assert_effect_count(self, count: int) -> None:
         """Assert the number of recorded effects.
@@ -91,8 +92,11 @@ class MockInterpreter:
             AssertionError: If count doesn't match.
         """
         actual = len(self.recorded_effects)
-        if actual != count:
-            raise AssertionError(f"Expected {count} effects, got {actual}")
+        match actual == count:
+            case True:
+                return
+            case False:
+                raise AssertionError(f"Expected {count} effects, got {actual}")
 
     def assert_contains_effect(self, effect_type: type[Effect]) -> None:
         """Assert that at least one effect of given type was recorded.
@@ -103,10 +107,12 @@ class MockInterpreter:
         Raises:
             AssertionError: If no effect of given type was recorded.
         """
-        for effect in self.recorded_effects:
-            if isinstance(effect, effect_type):
+        first_match = next((e for e in self.recorded_effects if isinstance(e, effect_type)), None)
+        match first_match:
+            case None:
+                raise AssertionError(f"No effect of type {effect_type.__name__} recorded")
+            case _:
                 return
-        raise AssertionError(f"No effect of type {effect_type.__name__} recorded")
 
     def get_effects_of_type(self, effect_type: type[Effect]) -> list[Effect]:
         """Get all recorded effects of a specific type.

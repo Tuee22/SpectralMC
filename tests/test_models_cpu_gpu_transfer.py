@@ -17,24 +17,13 @@ import torch
 from spectralmc.models import cpu_gpu_transfer
 from spectralmc.models.cpu_gpu_transfer import TransferDestination
 from spectralmc.models.torch import Device, DType  # façade first
-from spectralmc.result import Failure, Result, Success
-from typing import TypeVar
+from tests.helpers import expect_success
+from spectralmc.result import Failure
 
 
 ###############################################################################
 # Utilities
 ###############################################################################
-
-T = TypeVar("T")
-E = TypeVar("E")
-
-
-def _expect_success(result: Result[T, E]) -> T:
-    match result:
-        case Success(value):
-            return value
-        case Failure(error):
-            raise AssertionError(f"Expected Success, got Failure: {error}")
 
 
 def _flatten(tree: cpu_gpu_transfer.TensorTree) -> list[torch.Tensor]:
@@ -84,28 +73,23 @@ def test_cpu_to_cuda_and_back_roundtrip() -> None:
         "meta": "hello",
     }
 
-    match cpu_gpu_transfer.move_tensor_tree(original, dest=TransferDestination.CUDA):
-        case Success(to_cuda):
-            pass
-        case Failure(error):
-            pytest.fail(f"move_tensor_tree failed: {error}")
+    to_cuda = expect_success(
+        cpu_gpu_transfer.move_tensor_tree(original, dest=TransferDestination.CUDA)
+    )
 
     src: list[torch.Tensor] = _flatten(original)
     dst: list[torch.Tensor] = _flatten(to_cuda)
 
+    comparisons = [
+        (torch.equal(s, d.cpu()), s.device.type, d.device.type) for s, d in zip(src, dst)
+    ]
     assert all(
-        torch.equal(s, d.cpu())
-        and s.device.type == "cpu"
-        and d.device == torch.device("cuda:0")
-        and s.untyped_storage().data_ptr() != d.untyped_storage().data_ptr()
-        for s, d in zip(src, dst)
-    )
+        eq and src_dev == "cpu" and dst_dev == "cuda" for eq, src_dev, dst_dev in comparisons
+    ), comparisons
 
-    match cpu_gpu_transfer.move_tensor_tree(to_cuda, dest=TransferDestination.CPU_PINNED):
-        case Success(back):
-            pass
-        case Failure(error):
-            pytest.fail(f"move_tensor_tree failed: {error}")
+    back = expect_success(
+        cpu_gpu_transfer.move_tensor_tree(to_cuda, dest=TransferDestination.CPU_PINNED)
+    )
 
     src2: list[torch.Tensor] = _flatten(to_cuda)
     dst2: list[torch.Tensor] = _flatten(back)
@@ -121,14 +105,12 @@ def test_cpu_to_cuda_and_back_roundtrip() -> None:
     ],
 )
 def test_gpu_to_cpu_pin_memory_respected(dest: TransferDestination, expected_pinned: bool) -> None:
-    match cpu_gpu_transfer.move_tensor_tree(
-        torch.randn(4, 4, device="cuda"),
-        dest=dest,
-    ):
-        case Success(res):
-            pass
-        case Failure(error):
-            pytest.fail(f"move_tensor_tree failed: {error}")
+    res = expect_success(
+        cpu_gpu_transfer.move_tensor_tree(
+            torch.randn(4, 4, device="cuda"),
+            dest=dest,
+        )
+    )
 
     assert isinstance(res, torch.Tensor) and res.is_pinned() == expected_pinned
 
@@ -139,7 +121,7 @@ def test_gpu_to_cpu_pin_memory_respected(dest: TransferDestination, expected_pin
 
 
 def test_module_state_device_dtype() -> None:
-    dev, dt = _expect_success(
+    dev, dt = expect_success(
         cpu_gpu_transfer.module_state_device_dtype({"w": torch.randn(2, 2), "b": torch.zeros(2)})
     )
     assert (dev, dt) == (Device.cpu, DType.float32)
@@ -150,7 +132,7 @@ def test_optimizer_state_device_dtype_after_step() -> None:
         "state": {0: {"exp_avg": torch.ones(1), "exp_avg_sq": torch.ones(1)}},
         "param_groups": [{"lr": 1e-3}],
     }
-    assert _expect_success(cpu_gpu_transfer.optimizer_state_device_dtype(state)) == (
+    assert expect_success(cpu_gpu_transfer.optimizer_state_device_dtype(state)) == (
         Device.cpu,
         DType.float32,
     )

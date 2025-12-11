@@ -225,3 +225,21 @@ filterwarnings = [
 [tool.black]
 line-length = 100
 target-version = ['py312']
+
+[tool.purity]
+tier1_infrastructure = [
+  "src/spectralmc/models/torch.py",
+  "src/spectralmc/models/cpu_gpu_transfer.py",
+  "src/spectralmc/cvnn.py",
+]
+tier3_effects = [
+  "src/spectralmc/effects/interpreter.py",
+  "src/spectralmc/storage/*.py",
+  "src/spectralmc/__main__.py",
+]
+
+[tool.purity.whitelist."src/spectralmc/serialization/tensors.py"]
+174 = "Protobuf requires_grad mutation (I/O boundary)"
+
+[tool.purity.whitelist."src/spectralmc/async_normals.py"]
+311 = "RNG advance guard (checkpoint resume)"

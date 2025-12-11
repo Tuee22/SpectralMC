@@ -156,11 +156,9 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all 
 
 **IMPORTANT**: Always redirect output to /tmp/ files and read complete output with Read tool.
 
-**For complete testing documentation**, see [Testing Requirements](documents/engineering/testing_requirements.md):
-- Test output handling and workflows
-- Test execution requirements
-- GPU testing requirements
-- 13 testing anti-patterns to avoid
+**For complete testing documentation**, see:
+- [Testing Requirements](documents/engineering/testing_requirements.md) - GPU enforcement, determinism, 13 anti-patterns
+- [Testing Architecture](documents/engineering/testing_architecture.md) - DRY doctrine, helper consolidation, fixture patterns, pytest best practices
 
 ### Test Configuration
 

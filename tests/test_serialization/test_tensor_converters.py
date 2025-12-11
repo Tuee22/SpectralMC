@@ -6,11 +6,8 @@ All tests require GPU - missing GPU is a hard failure, not a skip.
 
 from __future__ import annotations
 
-import pytest
 import torch
-from typing import TypeVar
-
-from spectralmc.result import Failure, Result, Success
+from tests.helpers import expect_success
 
 from spectralmc.models.torch import (
     AdamOptimizerState,
@@ -29,37 +26,16 @@ from spectralmc.serialization.tensors import (
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
-T = TypeVar("T")
-E = TypeVar("E")
-
-
-def _expect_success(result: Result[T, E]) -> T:
-    match result:
-        case Success(value):
-            return value
-        case Failure(error):
-            raise AssertionError(f"Unexpected failure: {error}")
-
-
 def _tensor_from_state(state: TensorState) -> torch.Tensor:
-    return _expect_success(state.to_torch())
+    return expect_success(state.to_torch())
 
 
 def test_tensor_state_round_trip_float32() -> None:
     """Test TensorStateConverter with float32 tensor."""
     original = torch.randn(3, 4, dtype=torch.float32)
 
-    match TensorStateConverter.to_proto(original):
-        case Success(proto):
-            pass
-        case Failure(error):
-            pytest.fail(f"to_proto failed: {error}")
-
-    match TensorStateConverter.from_proto(proto):
-        case Success(recovered):
-            pass
-        case Failure(error):
-            pytest.fail(f"from_proto failed: {error}")
+    proto = expect_success(TensorStateConverter.to_proto(original))
+    recovered = expect_success(TensorStateConverter.from_proto(proto))
 
     assert torch.allclose(original, recovered, rtol=1e-6, atol=1e-9)
     assert recovered.dtype == torch.float32
@@ -70,17 +46,8 @@ def test_tensor_state_round_trip_float64() -> None:
     """Test TensorStateConverter with float64 tensor."""
     original = torch.randn(5, 10, dtype=torch.float64)
 
-    match TensorStateConverter.to_proto(original):
-        case Success(proto):
-            pass
-        case Failure(error):
-            pytest.fail(f"to_proto failed: {error}")
-
-    match TensorStateConverter.from_proto(proto):
-        case Success(recovered):
-            pass
-        case Failure(error):
-            pytest.fail(f"from_proto failed: {error}")
+    proto = expect_success(TensorStateConverter.to_proto(original))
+    recovered = expect_success(TensorStateConverter.from_proto(proto))
 
     assert torch.allclose(original, recovered, rtol=1e-12, atol=1e-15)
     assert recovered.dtype == torch.float64
@@ -92,17 +59,8 @@ def test_tensor_state_round_trip_complex64() -> None:
     imag = torch.randn(4, 4, dtype=torch.float32)
     original = torch.view_as_complex(torch.stack([real, imag], dim=-1))
 
-    match TensorStateConverter.to_proto(original):
-        case Success(proto):
-            pass
-        case Failure(error):
-            pytest.fail(f"to_proto failed: {error}")
-
-    match TensorStateConverter.from_proto(proto):
-        case Success(recovered):
-            pass
-        case Failure(error):
-            pytest.fail(f"from_proto failed: {error}")
+    proto = expect_success(TensorStateConverter.to_proto(original))
+    recovered = expect_success(TensorStateConverter.from_proto(proto))
 
     assert torch.allclose(original, recovered, rtol=1e-6, atol=1e-9)
     assert recovered.dtype == torch.complex64
@@ -114,17 +72,8 @@ def test_tensor_state_round_trip_complex128() -> None:
     imag = torch.randn(3, 5, dtype=torch.float64)
     original = torch.view_as_complex(torch.stack([real, imag], dim=-1))
 
-    match TensorStateConverter.to_proto(original):
-        case Success(proto):
-            pass
-        case Failure(error):
-            pytest.fail(f"to_proto failed: {error}")
-
-    match TensorStateConverter.from_proto(proto):
-        case Success(recovered):
-            pass
-        case Failure(error):
-            pytest.fail(f"from_proto failed: {error}")
+    proto = expect_success(TensorStateConverter.to_proto(original))
+    recovered = expect_success(TensorStateConverter.from_proto(proto))
 
     assert torch.allclose(original, recovered, rtol=1e-12, atol=1e-15)
     assert recovered.dtype == torch.complex128
@@ -134,17 +83,8 @@ def test_tensor_state_requires_grad() -> None:
     """Test TensorStateConverter preserves requires_grad."""
     original = torch.randn(3, 3, dtype=torch.float32, requires_grad=True)
 
-    match TensorStateConverter.to_proto(original):
-        case Success(proto):
-            pass
-        case Failure(error):
-            pytest.fail(f"to_proto failed: {error}")
-
-    match TensorStateConverter.from_proto(proto):
-        case Success(recovered):
-            pass
-        case Failure(error):
-            pytest.fail(f"from_proto failed: {error}")
+    proto = expect_success(TensorStateConverter.to_proto(original))
+    recovered = expect_success(TensorStateConverter.from_proto(proto))
 
     assert recovered.requires_grad is True
 
@@ -153,17 +93,8 @@ def test_tensor_state_no_requires_grad() -> None:
     """Test TensorStateConverter with requires_grad=False."""
     original = torch.randn(3, 3, dtype=torch.float32, requires_grad=False)
 
-    match TensorStateConverter.to_proto(original):
-        case Success(proto):
-            pass
-        case Failure(error):
-            pytest.fail(f"to_proto failed: {error}")
-
-    match TensorStateConverter.from_proto(proto):
-        case Success(recovered):
-            pass
-        case Failure(error):
-            pytest.fail(f"from_proto failed: {error}")
+    proto = expect_success(TensorStateConverter.to_proto(original))
+    recovered = expect_success(TensorStateConverter.from_proto(proto))
 
     assert recovered.requires_grad is False
 
@@ -172,7 +103,7 @@ def test_adam_optimizer_state_round_trip() -> None:
     """Test AdamOptimizerStateConverter round-trip."""
     # Create sample optimizer state
     param_states = {
-        0: _expect_success(
+        0: expect_success(
             AdamParamState.from_torch(
                 {
                     "step": 10,
@@ -181,7 +112,7 @@ def test_adam_optimizer_state_round_trip() -> None:
                 }
             )
         ),
-        1: _expect_success(
+        1: expect_success(
             AdamParamState.from_torch(
                 {
                     "step": 10,
@@ -206,12 +137,8 @@ def test_adam_optimizer_state_round_trip() -> None:
     original = AdamOptimizerState(param_states=param_states, param_groups=param_groups)
 
     # Round trip
-    proto = _expect_success(AdamOptimizerStateConverter.to_proto(original))
-    match AdamOptimizerStateConverter.from_proto(proto):
-        case Success(recovered):
-            pass
-        case Failure(error):
-            pytest.fail(f"from_proto failed: {error}")
+    proto = expect_success(AdamOptimizerStateConverter.to_proto(original))
+    recovered = expect_success(AdamOptimizerStateConverter.from_proto(proto))
 
     # Verify param states
     assert len(recovered.param_states) == len(original.param_states)
@@ -264,17 +191,8 @@ def test_tensor_empty() -> None:
     """Test TensorStateConverter with empty tensor."""
     original = torch.tensor([], dtype=torch.float32)
 
-    match TensorStateConverter.to_proto(original):
-        case Success(proto):
-            pass
-        case Failure(error):
-            pytest.fail(f"to_proto failed: {error}")
-
-    match TensorStateConverter.from_proto(proto):
-        case Success(recovered):
-            pass
-        case Failure(error):
-            pytest.fail(f"from_proto failed: {error}")
+    proto = expect_success(TensorStateConverter.to_proto(original))
+    recovered = expect_success(TensorStateConverter.from_proto(proto))
 
     assert recovered.shape == original.shape
     assert recovered.dtype == original.dtype
@@ -284,17 +202,8 @@ def test_tensor_scalar() -> None:
     """Test TensorStateConverter with scalar tensor."""
     original = torch.tensor(42.0, dtype=torch.float32)
 
-    match TensorStateConverter.to_proto(original):
-        case Success(proto):
-            pass
-        case Failure(error):
-            pytest.fail(f"to_proto failed: {error}")
-
-    match TensorStateConverter.from_proto(proto):
-        case Success(recovered):
-            pass
-        case Failure(error):
-            pytest.fail(f"from_proto failed: {error}")
+    proto = expect_success(TensorStateConverter.to_proto(original))
+    recovered = expect_success(TensorStateConverter.from_proto(proto))
 
     assert torch.allclose(original, recovered)
     assert recovered.shape == original.shape
@@ -304,17 +213,8 @@ def test_tensor_large() -> None:
     """Test TensorStateConverter with large tensor."""
     original = torch.randn(100, 100, 100, dtype=torch.float32)
 
-    match TensorStateConverter.to_proto(original):
-        case Success(proto):
-            pass
-        case Failure(error):
-            pytest.fail(f"to_proto failed: {error}")
-
-    match TensorStateConverter.from_proto(proto):
-        case Success(recovered):
-            pass
-        case Failure(error):
-            pytest.fail(f"from_proto failed: {error}")
+    proto = expect_success(TensorStateConverter.to_proto(original))
+    recovered = expect_success(TensorStateConverter.from_proto(proto))
 
     assert torch.allclose(original, recovered, rtol=1e-6, atol=1e-9)
     assert recovered.shape == original.shape
@@ -332,7 +232,7 @@ def test_model_checkpoint_round_trip() -> None:
 
     # Create optimizer state
     param_states = {
-        0: _expect_success(
+        0: expect_success(
             AdamParamState.from_torch(
                 {
                     "step": 100,
@@ -341,7 +241,7 @@ def test_model_checkpoint_round_trip() -> None:
                 }
             )
         ),
-        1: _expect_success(
+        1: expect_success(
             AdamParamState.from_torch(
                 {
                     "step": 100,
@@ -372,17 +272,15 @@ def test_model_checkpoint_round_trip() -> None:
     global_step = 1000
 
     # Round trip
-    proto = _expect_success(
+    proto = expect_success(
         ModelCheckpointConverter.to_proto(
             model_state_dict, optimizer_state, cpu_rng, cuda_rngs, global_step
         )
     )
 
-    match ModelCheckpointConverter.from_proto(proto):
-        case Success((rec_model, rec_opt, rec_cpu_rng, rec_cuda_rngs, rec_step)):
-            pass
-        case Failure(error):
-            pytest.fail(f"from_proto failed: {error}")
+    rec_model, rec_opt, rec_cpu_rng, rec_cuda_rngs, rec_step = expect_success(
+        ModelCheckpointConverter.from_proto(proto)
+    )
 
     # Verify model state dict
     assert set(rec_model.keys()) == set(model_state_dict.keys())

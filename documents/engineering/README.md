@@ -42,6 +42,7 @@ flowchart TB
 | Understand system/stack design | [Architecture](architecture.md) |
 | Enforce type/purity standards | [Code Quality](code_quality.md) |
 | Run tests correctly (GPU-only) | [Testing](testing.md) |
+| Test organization and DRY patterns | [Testing Architecture](testing_architecture.md) |
 | Run commands in Docker | [Docker Workflow](docker_workflow.md) |
 | Daily development loop | [Development Workflow](development_workflow.md) |
 | Exact command syntax | [Command Reference](command_reference.md) |
@@ -52,9 +53,10 @@ flowchart TB
 
 ## Core Standards
 
-- **[Architecture](architecture.md)** — Layers, effect boundaries, and SpectralMC’s GPU/storage/RNG topology.
+- **[Architecture](architecture.md)** — Layers, effect boundaries, and SpectralMC's GPU/storage/RNG topology.
 - **[Code Quality](code_quality.md)** — Aggregated type safety, purity, immutability, and interpreter doctrines.
 - **[Testing](testing.md)** — GPU-only test requirements, determinism, timeouts, and anti-patterns.
+- **[Testing Architecture](testing_architecture.md)** — Test organization, DRY doctrine, fixture patterns, helper consolidation.
 - **[Docker Workflow](docker_workflow.md)** — Docker-only contract, forbidden host commands, and command patterns.
 - **[Development Workflow](development_workflow.md)** — Daily loop, adding effects/models, and git expectations.
 - **[Command Reference](command_reference.md)** — Canonical command list (check-code, test-all, logs).

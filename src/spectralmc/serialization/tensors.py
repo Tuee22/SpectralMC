@@ -171,8 +171,9 @@ class TensorStateConverter:
         tensor = tensor.to(device)
 
         # Requires grad
-        if proto.requires_grad:
-            tensor.requires_grad_(True)
+        match proto.requires_grad:
+            case True:
+                tensor.requires_grad_(True)
 
         return Success(tensor)
 
@@ -285,13 +286,18 @@ class AdamOptimizerStateConverter:
                 return failure
 
         # All conversions succeeded - populate proto (mutation required by protobuf API)
-        # Use comprehension for iteration (CopyFrom mutation unavoidable with protobuf)
-        _ = [
-            proto.state[param_id].CopyFrom(entry_proto)
+        success_entries = [
+            (param_id, entry_proto)
             for result in param_entries_results
             if isinstance(result, Success)
-            for param_id, entry_proto in [result.value]  # Unpack tuple from Success
+            for param_id, entry_proto in [result.value]
         ]
+        _ = list(
+            map(
+                lambda item: proto.state[item[0]].CopyFrom(item[1]),
+                success_entries,
+            )
+        )
 
         proto.param_groups.extend(
             [
@@ -456,11 +462,17 @@ class ModelCheckpointConverter:
                 return Failure(failure_result.error)
 
         # Populate proto (mutation required by protobuf API)
-        _ = [
-            proto.model_state_dict[name].CopyFrom(result.value)
+        entries = [
+            (name, result.value)
             for name, result in tensor_conversion_results
             if isinstance(result, Success)
         ]
+        _ = list(
+            map(
+                lambda item: proto.model_state_dict[item[0]].CopyFrom(item[1]),
+                entries,
+            )
+        )
 
         opt_result = AdamOptimizerStateConverter.to_proto(optimizer_state)
         match opt_result:

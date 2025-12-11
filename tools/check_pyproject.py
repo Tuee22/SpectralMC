@@ -24,9 +24,12 @@ import difflib
 import sys
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Sequence, TypeAlias
 
 # Shared sections that MUST stay synchronized between both files
+TomlPrimitive: TypeAlias = str | int | float | bool | None
+TomlValue: TypeAlias = TomlPrimitive | dict[str, "TomlValue"] | Sequence["TomlValue"]
+
 SHARED_SECTIONS = [
     "tool.poetry.scripts",
     "tool.mypy",
@@ -52,7 +55,7 @@ def get_project_root() -> Path:
     return Path(__file__).parent.parent
 
 
-def load_toml(filepath: Path) -> dict[str, Any]:
+def load_toml(filepath: Path) -> dict[str, TomlValue]:
     """Load and parse TOML file.
 
     Args:
@@ -72,7 +75,7 @@ def load_toml(filepath: Path) -> dict[str, Any]:
         return tomllib.load(f)
 
 
-def extract_section(data: dict[str, Any], section_path: str) -> Any | None:
+def extract_section(data: dict[str, TomlValue], section_path: str) -> TomlValue | None:
     """Extract nested section from TOML data.
 
     Args:
@@ -88,17 +91,20 @@ def extract_section(data: dict[str, Any], section_path: str) -> Any | None:
         {"test": "module:main"}
     """
     parts = section_path.split(".")
-    current = data
+    current: TomlValue = data
 
     for part in parts:
-        if not isinstance(current, dict) or part not in current:
+        if not isinstance(current, dict):
             return None
-        current = current[part]
+        next_value = current.get(part)
+        if next_value is None:
+            return None
+        current = next_value
 
     return current
 
 
-def format_toml_value(value: Any, indent: int = 0) -> str:
+def format_toml_value(value: TomlValue, indent: int = 0) -> str:
     """Format TOML value for display.
 
     Args:
@@ -124,7 +130,7 @@ def format_toml_value(value: Any, indent: int = 0) -> str:
             else:
                 lines.append(f"{prefix}{key} = {repr(val)}")
         return "\n".join(lines)
-    elif isinstance(value, list):
+    elif isinstance(value, (list, tuple)):
         lines = [f"{prefix}["]
         for item in value:
             lines.append(f"{prefix}  {repr(item)},")
@@ -135,7 +141,7 @@ def format_toml_value(value: Any, indent: int = 0) -> str:
 
 
 def format_diff(
-    section: str, binary_val: Any, source_val: Any, verbose: bool = False
+    section: str, binary_val: TomlValue, source_val: TomlValue, verbose: bool = False
 ) -> str:
     """Format unified diff for mismatched section.
 
@@ -172,16 +178,14 @@ def format_diff(
         lines.append(format_toml_value(source_val, indent=2))
 
     lines.append("")
-    lines.append(
-        "  Fix: Edit both files to match and re-run check-pyproject, or use --fix"
-    )
+    lines.append("  Fix: Edit both files to match and re-run check-pyproject, or use --fix")
 
     return "\n".join(lines)
 
 
 def compare_sections(
-    binary_data: dict[str, Any],
-    source_data: dict[str, Any],
+    binary_data: dict[str, TomlValue],
+    source_data: dict[str, TomlValue],
     verbose: bool = False,
 ) -> tuple[bool, list[str]]:
     """Compare shared sections between binary and source files.
@@ -206,20 +210,14 @@ def compare_sections(
         # Check if section exists in both files
         if binary_val is None and source_val is None:
             # Section missing from both - warning but not error
-            errors.append(
-                f"\n⚠️  Section [{section}] missing from both files (expected?)"
-            )
+            errors.append(f"\n⚠️  Section [{section}] missing from both files (expected?)")
             continue
         elif binary_val is None:
-            errors.append(
-                f"\n❌ Section [{section}] missing from pyproject.binary.toml"
-            )
+            errors.append(f"\n❌ Section [{section}] missing from pyproject.binary.toml")
             all_match = False
             continue
         elif source_val is None:
-            errors.append(
-                f"\n❌ Section [{section}] missing from pyproject.source.toml"
-            )
+            errors.append(f"\n❌ Section [{section}] missing from pyproject.source.toml")
             all_match = False
             continue
 
@@ -231,9 +229,7 @@ def compare_sections(
     return all_match, errors
 
 
-def write_toml_section(
-    filepath: Path, section_path: str, new_value: Any
-) -> None:
+def write_toml_section(filepath: Path, section_path: str, new_value: TomlValue) -> None:
     """Write updated section back to TOML file.
 
     Note: This is a simplified implementation that replaces the entire section.
@@ -245,14 +241,9 @@ def write_toml_section(
         section_path: Dot-separated section path
         new_value: New value for the section
     """
-    # Read current file
-    content = filepath.read_text()
-
     # For now, we'll just warn the user - full implementation would use tomlkit
     # to preserve formatting and comments
-    print(
-        f"\n⚠️  Auto-fix not fully implemented yet. Please manually sync section [{section_path}]"
-    )
+    print(f"\n⚠️  Auto-fix not fully implemented yet. Please manually sync section [{section_path}]")
     print(f"   in file: {filepath}")
     print("\nExpected value:")
     print(format_toml_value(new_value, indent=1))

@@ -38,6 +38,7 @@
 |----------|---------------|
 | [coding_standards.md](engineering/coding_standards.md) | Type safety, ADTs, error handling, deprecation |
 | [testing_requirements.md](engineering/testing_requirements.md) | GPU-only tests, determinism, anti-patterns |
+| [testing_architecture.md](engineering/testing_architecture.md) | Test organization, DRY patterns, fixtures |
 | [immutability_doctrine.md](engineering/immutability_doctrine.md) | Immutability rules |
 | [pytorch_facade.md](engineering/pytorch_facade.md) | Determinism, CVNN patterns |
 | [cpu_gpu_compute_policy.md](engineering/cpu_gpu_compute_policy.md) | Device placement boundaries |
