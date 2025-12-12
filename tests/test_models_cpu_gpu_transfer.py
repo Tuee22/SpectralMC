@@ -4,7 +4,6 @@
 CPU/GPU transfer tests.
 
 These tests intentionally use CPU operations to verify transfer functionality.
-All tests marked with @pytest.mark.cpu decorator.
 """
 
 from __future__ import annotations
@@ -69,7 +68,6 @@ def test_cuda_requested_but_not_available(monkeypatch: pytest.MonkeyPatch) -> No
 ###############################################################################
 
 
-@pytest.mark.cpu  # Intentional CPU/GPU transfer testing
 def test_cpu_to_cuda_and_back_roundtrip(pinned_required: bool) -> None:
     """Test GPU→CPU transfer and roundtrip (intentional CPU usage)."""
     original: cpu_gpu_transfer.TensorTree = {
@@ -106,7 +104,6 @@ def test_cpu_to_cuda_and_back_roundtrip(pinned_required: bool) -> None:
 
 
 
-@pytest.mark.cpu
 def test_unpinned_host_to_cuda_rejected_when_staging_disabled() -> None:
     """Unpinned host → CUDA should be rejected when staging is disabled."""
     original: cpu_gpu_transfer.TensorTree = {

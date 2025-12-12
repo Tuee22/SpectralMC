@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from typing import Mapping
 
-import pytest
 import torch
 
 import spectralmc.models.torch as sm_torch
@@ -44,7 +43,6 @@ def test_dtype_roundtrip() -> None:
         assert dtype is d
 
 
-@pytest.mark.cpu  # Intentional CPU device testing
 def test_device_roundtrip() -> None:
     """Test CPU device conversion (intentional CPU test)."""
     assert expect_success(sm_torch.Device.from_torch(torch.device("cpu"))) is sm_torch.Device.cpu
@@ -65,7 +63,6 @@ def test_default_dtype_nested() -> None:
     assert torch.get_default_dtype() is orig
 
 
-@pytest.mark.cpu  # Intentional CPU context manager testing
 def test_default_device_nested() -> None:
     """Test nested CPU device contexts (intentional CPU test)."""
     orig: torch.device = torch.tensor([]).device

@@ -162,9 +162,13 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-typ
 
 SpectralMC is a GPU-accelerated library. Silent fallbacks from GPU to CPU are strictly forbidden because they mask performance regressions and can hide real bugs in GPU code paths.
 
+- `tests/conftest.py` provides the global CUDA availability assertion; individual tests **must not** add their own `torch.cuda.is_available()` checks or CPU fallbacks.
+- Tests may assume CUDA devices are present; do **not** catch or handle CUDA/driver/device errors (missing devices, context failures, etc.)—let them fail immediately.
+- Any CUDA/driver/device failure must be loud (no retries, skips, or warning-only handling).
+
 ### Required Pattern
 
-Use module-level assertions to fail immediately without GPU:
+Use the global guard (already present in `tests/conftest.py`) to fail immediately without GPU; test modules should not add extra device checks:
 
 ```python
 # File: documents/engineering/testing_requirements.md
@@ -201,6 +205,12 @@ if not torch.cuda.is_available():
 @pytest.fixture
 def device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# ❌ FORBIDDEN - Swallowing CUDA/driver errors
+try:
+    torch.randn(1, device="cuda:0")
+except RuntimeError:
+    pytest.skip("CUDA flaky today")  # This must fail, not skip
 ```
 
 ### Correct Patterns
@@ -374,8 +384,12 @@ Configuration in `pyproject.toml`:
 # File: documents/engineering/testing_requirements.md
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-markers = ["asyncio: async test"]
+markers = [
+    "asyncio: async test",
+]
 ```
+
+**Do not use custom CPU-only markers.** Tests may run on CPU when appropriate but must not introduce a `cpu` marker or any other marker that implies optional GPU execution; GPU is assumed globally and failures must be loud.
 
 ---
 

@@ -559,21 +559,12 @@ SpectralMC uses these markers:
 async def test_async():
     # ...
 
-@pytest.mark.cpu             # Intentional CPU test (exception to GPU-only rule)
-def test_cpu_device():
-    # ...
-
 @pytest.mark.timeout(seconds=120)  # Override 60s default timeout
 def test_long_simulation():
     # ...
 ```
 
-**Define markers in conftest.py**:
-```python
-# File: tests/conftest.py
-def pytest_configure(config):
-    config.addinivalue_line("markers", "cpu: Intentional CPU test")
-```
+**Do not add CPU-only markers.** Tests may run on CPU when needed but must not introduce a `cpu` marker or any marker suggesting GPU is optional; CUDA is assumed globally and failures must be loud.
 
 ### Avoid Class-Based Tests
 

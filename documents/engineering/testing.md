@@ -11,7 +11,7 @@
 ## Quick Summary
 
 **Key Testing Expectations:**
-- Tests are **GPU-only**: module-level `assert torch.cuda.is_available()` and explicit `torch.device("cuda:0")`; no CPU fallbacks or `pytest.skip`.
+- Tests are **GPU-only**: global guard asserts CUDA availability; explicit `torch.device("cuda:0")`; no CPU fallbacks, no per-test `torch.cuda.is_available()` checks, never catch/skip CUDA/driver/device errors, and no CPU-only markers.
 - Runner: `docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all` (arguments allowed); never run `pytest` directly.
 - Determinism: seed PyTorch/NumPy/CuPy where randomness appears; respect per-test 60s timeout; preserve full logs (no shell timeouts).
 - Type safety: tests are fully typed, mypy-strict-clean, and obey purity rules for code under test.
