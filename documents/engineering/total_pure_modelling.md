@@ -9,6 +9,13 @@
 > state machines that track real-world device placement, blockchain storage, and effect
 > boundaries. Impossible states must be unrepresentable; timing toggles are forbidden.
 
+## Cross-References
+- [effect_interpreter.md](effect_interpreter.md) — Interpreter boundaries for effects derived from TPM decisions
+- [pytorch_facade.md](pytorch_facade.md) — TorchRuntime ADT + deterministic configuration effect
+- [cpu_gpu_compute_policy.md](cpu_gpu_compute_policy.md) — Device placement and transfer rules
+- [reproducibility_proofs.md](reproducibility_proofs.md) — Determinism proofs grounded in total models
+- [code_quality.md](code_quality.md) — Enforcement of guard → decision → effect in code
+
 ## Executive Summary
 - Model every GPU/CPU boundary, storage transition, and integration handshake as explicit
   variants. No boolean flags or ad hoc retries.

@@ -34,7 +34,7 @@ flowchart TB
 
 - **Make invalid states unrepresentable**: Effects and domain models are ADTs with exhaustive `match` coverage; Result types replace exceptions for expected flows.
 - **Pure descriptions, isolated execution**: Programs describe work as generators of effect ADTs; interpreters own all I/O (GPU kernels, storage, RNG, logging).
-- **Deterministic GPU-first execution**: CPU-only initialization followed by explicit device transfer; a TorchRuntime ADT + configuration effect enforces deterministic settings and thread affinity without relying on import order.
+- **Deterministic GPU-first execution**: CPU-only initialization followed by explicit device transfer; a TorchRuntime ADT + configuration effect enforces deterministic settings and thread affinity without relying on import order (see [total_pure_modelling.md](total_pure_modelling.md#core-principles-for-spectralmc)).
 - **Immutable state**: Frozen dataclasses for models/effects; functional updates only.
 - **Total pure models drive effects**: Pure ADTs from [total_pure_modelling.md](total_pure_modelling.md)
   choose device placement, retries, and hand-offs before interpreters run any side effects.
@@ -54,6 +54,20 @@ flowchart TB
    - Single boundary for side effects.  
    - Handles GPU operations (kernels, streams), storage (S3/blockchain CAS), logging, RNG capture/restore.  
    - Receives a validated torch handle from the TorchRuntime effect for deterministic device/dtype defaults.
+
+Example (TPM guard → decision → effect):
+```python
+# File: docs example
+from spectralmc.runtime.torch_runtime import decide_torch_runtime, apply_torch_runtime
+runtime = decide_torch_runtime()  # pure
+torch_handle = apply_torch_runtime(runtime)  # effectful, deterministic flags
+interpreter = SpectralMCInterpreter.create(
+    torch_stream=torch_handle.cuda.Stream(),
+    cupy_stream=cp.cuda.Stream(),
+    storage_bucket="models",
+    torch_handle=torch_handle,
+)
+```
 
 4. **Infrastructure (Adapters)**  
    - Concrete integrations (PyTorch, CuPy, S3 client, chain verification tools).  

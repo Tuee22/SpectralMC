@@ -9,6 +9,13 @@
 > effects. Aligned with effectful naming while reflecting SpectralMC’s GPU/storage/RNG
 > focus.
 
+## Cross-References
+- [total_pure_modelling.md](total_pure_modelling.md) — Guard → decision → effect rules for pure programs
+- [effect_interpreter.md](effect_interpreter.md) — Interpreter interfaces and widening rules
+- [pytorch_facade.md](pytorch_facade.md) — TorchRuntime ADT + deterministic configuration effect
+- [cpu_gpu_compute_policy.md](cpu_gpu_compute_policy.md) — Device placement decisions before effects
+- [reproducibility_proofs.md](reproducibility_proofs.md) — Proof obligations for effect sequencing
+
 ## SSoT Link Map
 
 ```mermaid
@@ -112,6 +119,9 @@ flowchart TB
 | Side effects inside generator | Yield effect ADTs and interpret | effect_interpreter.md |
 | Non-exhaustive matches on Results/ADTs | Add `assert_never` branches | purity_doctrine.md |
 | Mutable updates to program state | Use frozen dataclasses + `replace` | immutability_doctrine.md |
+
+All patterns should map to the guard → decision → effect pipeline in
+[total_pure_modelling.md](total_pure_modelling.md#core-principles-for-spectralmc).
 
 ## Testing Guidance
 

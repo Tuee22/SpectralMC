@@ -8,6 +8,8 @@
 > **Purpose**: Document the move away from the import-time PyTorch facade toward a
 > Total Pure Modelling approach: a pure runtime ADT plus an explicit effect that
 > configures deterministic PyTorch execution exactly once.
+> This follows the guard→decision→effect pipeline described in
+> [total_pure_modelling.md](total_pure_modelling.md#core-principles-for-spectralmc).
 
 ## Cross-References
 - [Coding Standards](coding_standards.md)
@@ -24,15 +26,17 @@
   cuDNN/TF32 disables, `CUBLAS_WORKSPACE_CONFIG`) and yields the `torch` handle to downstream code.
 - **Dependency injection**: Interpreters and trainers receive the runtime handle instead of
   importing `torch` implicitly; tests can inject fakes or poisoned runtimes.
+- **TPM alignment**: All torch usage follows the Total Pure Modelling rule: decide first (pure ADT),
+  then run an interpreter to perform effects. See the device/transfer section in
+  [total_pure_modelling.md](total_pure_modelling.md#device-placement-and-transfers).
 
-## Required Workflow
-1) Produce the runtime decision *purely* (probe CUDA, check device count, validate cuDNN) and return
-   a `TorchRuntime` value.
-2) Interpret that decision with an explicit side-effect that sets deterministic flags and returns a
-   validated `torch` module instance.
-3) Pass the validated handle into interpreters (GPU, training, MonteCarlo) and builders; never rely
-   on global import order.
-4) If the runtime is `Rejected`, surface the reason in logs/metrics and short-circuit the pipeline.
+## Required Workflow (guard → decision → effect)
+1) **Guard/pure decision**: Probe CUDA, device count, cuDNN version → return `TorchRuntime`.
+2) **Effect**: Interpret only the `ready` variant; set deterministic flags; return a validated
+   `torch` handle (or fail closed).
+3) **Injection**: Pass the handle into interpreters (GPU, training, MonteCarlo) and builders; never
+   rely on import order or global defaults.
+4) **Rejection path**: If `TorchRuntime` is `rejected`, log/emit metrics and stop the pipeline.
 
 ## Determinism Checklist (applied by the effect)
 - `torch.use_deterministic_algorithms(True, warn_only=False)`
@@ -57,6 +61,62 @@ These settings remain mandatory; they just run under an effect instead of at imp
   validated effects or pure decisions around device/dtype creation. Do not rely on global defaults.
 - Tests should build the runtime ADT in fixtures, apply the configuration effect once, and inject
   the handle into systems under test.
+
+## Examples (concrete TPM-aligned patterns)
+
+### Pure decision + effect application
+
+```python
+# File: src/spectralmc/runtime/torch_runtime.py (conceptual)
+from dataclasses import dataclass
+from typing import Literal
+import os
+
+@dataclass(frozen=True)
+class TorchRuntime:
+    kind: Literal["ready", "rejected"]
+    cuda_version: str | None = None
+    cudnn_version: int | None = None
+    reason: str | None = None
+
+def decide_torch_runtime() -> TorchRuntime:
+    import torch  # local import to keep decision pure from globals
+    if not torch.cuda.is_available():
+        return TorchRuntime(kind="rejected", reason="cuda_unavailable")
+    cudnn_ver = torch.backends.cudnn.version()
+    if cudnn_ver is None:
+        return TorchRuntime(kind="rejected", reason="cudnn_unavailable")
+    return TorchRuntime(kind="ready", cuda_version=torch.version.cuda, cudnn_version=cudnn_ver)
+
+def apply_torch_runtime(runtime: TorchRuntime):
+    if runtime.kind != "ready":
+        raise RuntimeError(runtime.reason or "torch_runtime_rejected")
+    import torch
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
+    torch.use_deterministic_algorithms(True, warn_only=False)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.allow_tf32 = False
+    torch.backends.cuda.matmul.allow_tf32 = False
+    return torch
+```
+
+### Interpreter construction with injected torch (no import-order dependency)
+
+```python
+# File: src/spectralmc/effects/interpreter_factory.py (conceptual)
+from spectralmc.runtime.torch_runtime import decide_torch_runtime, apply_torch_runtime
+from spectralmc.effects.interpreter import SpectralMCInterpreter
+
+runtime = decide_torch_runtime()
+torch_handle = apply_torch_runtime(runtime)
+torch_stream = torch_handle.cuda.Stream()
+cupy_stream = cupy.cuda.Stream()
+interpreter = SpectralMCInterpreter.create(torch_stream, cupy_stream, storage_bucket, torch_handle)
+```
+
+These examples follow the guard→decision→effect guidance in
+[total_pure_modelling.md](total_pure_modelling.md#core-principles-for-spectralmc).
 
 ## FAQ
 - **Why drop the facade?** Import-order guards hid failures and could not be modelled as data. The

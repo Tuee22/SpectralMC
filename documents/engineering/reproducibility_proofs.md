@@ -20,7 +20,7 @@ SpectralMC achieves **provable reproducibility** through pure functional program
 
 1. Identical inputs always produce identical outputs
 2. Training resume is equivalent to continuous training
-3. Reproducibility violations are caught at compile time or import time
+3. Reproducibility violations are caught at compile time or at runtime effect gates
 
 **Key Insight**: Reproducibility is not just "tested" behavior - it is a **type property** enforced by the architecture.
 

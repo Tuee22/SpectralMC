@@ -22,7 +22,8 @@ All tests in SpectralMC must be fully typed, deterministic, and pass mypy strict
 Tests are executed via `poetry run test-all`. All tests require GPU - silent CPU fallbacks
 are strictly forbidden. Fixtures should mirror the total models from
 [total_pure_modelling.md](total_pure_modelling.md) so test inputs span every allowed
-variant (including rejection cases).
+variant (including rejection cases). Torch usage must come from a TorchRuntime fixture
+that applies the deterministic configuration effect once per test session.
 
 ### Test Code Purity Exception
 

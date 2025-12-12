@@ -59,6 +59,7 @@ flowchart TB
 - **Effects as data**: Programs yield effect ADTs; interpreters execute. No direct infrastructure calls inside programs or models.
 - **GPU determinism**: CPU-only initialization + explicit device transfer; TorchRuntime ADT + configuration effect applies deterministic settings and thread affinity before GPU work.
 - **Reproducibility**: RNG state is explicit; checkpoint/restore semantics prove equivalence. See reproducibility proofs for invariants.
+- **Guard → decision → effect**: Follow [total_pure_modelling.md](total_pure_modelling.md#core-principles-for-spectralmc) for torch runtime, device moves, and storage transitions. Make impossible states unrepresentable, then interpret effects.
 
 ## Anti-Pattern Routing
 
