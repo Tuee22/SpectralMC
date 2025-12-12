@@ -70,6 +70,7 @@ def check_code() -> CheckCodeCallable:
             filepath=Path("test.py"),
             tier=FileTier.TIER2_BUSINESS_LOGIC,
             source=source,
+            parent_map=tracker.parent_map,
             whitelist=whitelist or {},
         )
         # Check for violations

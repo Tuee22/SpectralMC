@@ -9,10 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TypedDict
 
-try:
-    import tomllib  # Python 3.11+
-except ImportError:
-    import tomli as tomllib  # type: ignore[import-not-found,no-redef]
+import tomllib
 
 
 class PurityConfig(TypedDict, total=False):
@@ -27,6 +24,39 @@ class PurityConfig(TypedDict, total=False):
     tier1_infrastructure: list[str]
     tier3_effects: list[str]
     whitelist: dict[str, dict[int, str]]
+
+
+def _expect_str_list(value: object, key: str) -> list[str]:
+    """Return value as list[str] or raise if type does not match."""
+    if not isinstance(value, list):
+        raise TypeError(f"[tool.purity.{key}] must be a list of strings")
+    if not all(isinstance(item, str) for item in value):
+        raise TypeError(f"[tool.purity.{key}] must contain only strings")
+    return value
+
+
+def _parse_whitelist(value: object) -> dict[str, dict[int, str]]:
+    """Convert TOML whitelist value to dict with int keys."""
+    if not isinstance(value, dict):
+        raise TypeError("[tool.purity.whitelist] must be a table")
+
+    result: dict[str, dict[int, str]] = {}
+    for filepath, line_dict in value.items():
+        if not isinstance(filepath, str):
+            raise TypeError("Whitelist file paths must be strings")
+        if not isinstance(line_dict, dict):
+            raise TypeError(f"Whitelist entry for {filepath} must be a table")
+
+        converted: dict[int, str] = {}
+        for line_num, reason in line_dict.items():
+            if not isinstance(line_num, str):
+                raise TypeError("Whitelist line numbers must be strings in TOML")
+            if not isinstance(reason, str):
+                raise TypeError("Whitelist reasons must be strings")
+            converted[int(line_num)] = reason
+        result[filepath] = converted
+
+    return result
 
 
 def load_purity_config() -> PurityConfig:
@@ -82,21 +112,21 @@ def load_purity_config() -> PurityConfig:
         }
         return default_config
 
-    raw_config: dict[str, list[str] | dict[str, dict[str, str]]] = data["tool"]["purity"]
+    raw_config: object = data["tool"]["purity"]
+    if not isinstance(raw_config, dict):
+        raise KeyError("[tool.purity] must be a table")
 
-    # Convert whitelist string keys to integers
-    # TOML requires string keys, but we need integer line numbers
+    tier1_value = raw_config.get("tier1_infrastructure", [])
+    tier3_value = raw_config.get("tier3_effects", [])
+    whitelist_value = raw_config.get("whitelist")
+
     result: PurityConfig = {
-        "tier1_infrastructure": raw_config.get("tier1_infrastructure", []),  # type: ignore[typeddict-item]
-        "tier3_effects": raw_config.get("tier3_effects", []),  # type: ignore[typeddict-item]
+        "tier1_infrastructure": _expect_str_list(tier1_value, "tier1_infrastructure"),
+        "tier3_effects": _expect_str_list(tier3_value, "tier3_effects"),
     }
 
-    if "whitelist" in raw_config:
-        whitelist: dict[str, dict[int, str]] = {}
-        raw_whitelist: dict[str, dict[str, str]] = raw_config["whitelist"]  # type: ignore[assignment]
-        for filepath, line_dict in raw_whitelist.items():
-            whitelist[filepath] = {int(line_num): reason for line_num, reason in line_dict.items()}
-        result["whitelist"] = whitelist
+    if whitelist_value is not None:
+        result["whitelist"] = _parse_whitelist(whitelist_value)
 
     return result
 

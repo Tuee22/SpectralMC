@@ -19,30 +19,22 @@ from tools.purity.classifier import FileTier
 
 
 class ParentTracker(ast.NodeVisitor):
-    """Add _parent attribute to all AST nodes for pattern detection.
-
-    This enables walking up the AST tree to detect patterns like:
-    - CUDA kernels (checking for @cuda.jit decorator on parent function)
-    - Boundary unwrap functions (checking if parent function is named 'unwrap')
-    """
+    """Track parent relationships for AST nodes."""
 
     def __init__(self) -> None:
         """Initialize parent tracker with empty stack."""
         self.parent_stack: list[ast.AST] = []
+        self.parent_map: dict[ast.AST, ast.AST | None] = {}
 
     def visit(self, node: ast.AST) -> None:
-        """Visit node and add _parent attribute.
+        """Record parent relationship while visiting children.
 
         Args:
             node: AST node to visit
         """
-        # Set parent reference
-        if self.parent_stack:
-            node._parent = self.parent_stack[-1]  # type: ignore[attr-defined]
-        else:
-            node._parent = None  # type: ignore[attr-defined]
+        parent = self.parent_stack[-1] if self.parent_stack else None
+        self.parent_map[node] = parent
 
-        # Push to stack, visit children, then pop
         self.parent_stack.append(node)
         self.generic_visit(node)
         self.parent_stack.pop()
@@ -73,6 +65,7 @@ class PurityChecker(ast.NodeVisitor):
         filepath: Path,
         tier: FileTier,
         source: str,
+        parent_map: dict[ast.AST, ast.AST | None],
         whitelist: dict[int, str] | None = None,
     ) -> None:
         """Initialize purity checker.
@@ -81,12 +74,14 @@ class PurityChecker(ast.NodeVisitor):
             filepath: Path to file being checked
             tier: File tier classification
             source: Source code content
+            parent_map: Mapping of AST node -> parent for traversal helpers
             whitelist: Dict of line_number -> justification for whitelisted violations
         """
         self.filepath = filepath
         self.tier = tier
         self.source = source
         self.source_lines = source.splitlines()
+        self.parent_map = parent_map
         self.whitelist = whitelist or {}
         self.violations: list[PurityViolation] = []
 
@@ -105,6 +100,10 @@ class PurityChecker(ast.NodeVisitor):
 
         self.visit(tree)
         return self.violations
+
+    def _parent_of(self, node: ast.AST) -> ast.AST | None:
+        """Return parent of node recorded by ParentTracker."""
+        return self.parent_map.get(node)
 
     def _get_code_context(self, node: ast.AST, max_length: int = 50) -> str:
         """Extract code context from AST node.
@@ -246,7 +245,7 @@ class PurityChecker(ast.NodeVisitor):
             True if node is inside CUDA kernel, False otherwise
         """
         # Walk up AST tree to find containing function
-        parent: ast.AST | None = getattr(node, "_parent", None)
+        parent = self._parent_of(node)
         while parent:
             if isinstance(parent, ast.FunctionDef):
                 # Check decorators for @cuda.jit
@@ -254,7 +253,7 @@ class PurityChecker(ast.NodeVisitor):
                     if self._is_cuda_jit_decorator(decorator):
                         return True
                 break
-            parent = getattr(parent, "_parent", None)
+            parent = self._parent_of(parent)
 
         return False
 
@@ -295,7 +294,7 @@ class PurityChecker(ast.NodeVisitor):
                 raise RuntimeError(f"Called unwrap() on Failure")
         """
         # Walk up AST tree to find containing function
-        parent: ast.AST | None = getattr(node, "_parent", None)
+        parent = self._parent_of(node)
         while parent:
             if isinstance(parent, ast.FunctionDef):
                 # Check if function is named 'unwrap'
@@ -304,7 +303,7 @@ class PurityChecker(ast.NodeVisitor):
                     if parent.returns:
                         return self._has_noreturn_annotation(parent.returns)
                 break
-            parent = getattr(parent, "_parent", None)
+            parent = self._parent_of(parent)
 
         return False
 
@@ -488,6 +487,7 @@ def check_file_purity(
         filepath=filepath,
         tier=tier,
         source=source,
+        parent_map=tracker.parent_map,
         whitelist=whitelist,
     )
     return checker.check(tree)

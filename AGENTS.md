@@ -22,6 +22,7 @@
 - Type-only pass: `docker compose -f docker/docker-compose.yml exec spectralmc mypy`.
 - Test runner (GPU required): `docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all > /tmp/test-output.txt 2>&1`.
 - Avoid `pytest` directly; always use `poetry run test-all` (arguments allowed).
+- Run all `poetry` commands **only** inside the Docker container (`docker compose ... exec spectralmc`); never from the host.
 
 ## Coding Style & Naming Conventions
 - Black with 100-char lines; Python 3.12; double quotes by default.

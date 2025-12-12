@@ -114,6 +114,7 @@ _CUDA_STREAM: torch.cuda.Stream | None = (
 
 # ───────────────────────── functional helpers ───────────────────────────────
 
+
 def _plan_copy_tensor(
     src: torch.Tensor,
     *,
@@ -159,8 +160,6 @@ def _plan_copy_tensor(
             return Failure(UnsupportedTorchDevice(device=str(target_dev)))
 
 
-
-
 def plan_tensor_transfer(
     tensor: torch.Tensor,
     *,
@@ -169,6 +168,7 @@ def plan_tensor_transfer(
 ) -> Result[TransferDecision, TorchFacadeError]:
     """Public helper to plan a single-tensor transfer without executing it."""
     return _plan_copy_tensor(tensor, dest=dest, allow_stage=allow_stage)
+
 
 def _execute_plan(
     src: torch.Tensor,
