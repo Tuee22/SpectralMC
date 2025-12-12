@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from spectralmc.models.torch import Device
-from spectralmc.result import Result, Success, Failure
+from spectralmc.result import Failure, Result, Success
 
 
 @dataclass(frozen=True)
@@ -52,6 +52,8 @@ class TensorTransfer:
         source_device: Device to transfer from.
         target_device: Device to transfer to.
         tensor_id: Opaque identifier for the tensor or TensorTree.
+        pinned_required: Whether host memory must be pinned (e.g., for non-blocking CUDA).
+        allow_stage: Whether staging through pinned host memory is allowed.
 
     Example:
         >>> match tensor_transfer(Device.cuda, Device.cpu, "weights"):
@@ -65,12 +67,17 @@ class TensorTransfer:
     source_device: Device = Device.cuda
     target_device: Device = Device.cpu
     tensor_id: str = ""
+    pinned_required: bool = False
+    allow_stage: bool = True
 
 
 def tensor_transfer(
     source_device: Device,
     target_device: Device,
     tensor_id: str = "",
+    *,
+    pinned_required: bool = False,
+    allow_stage: bool = True,
 ) -> Result[TensorTransfer, InvalidTransferError]:
     """Create TensorTransfer, returning Failure if devices are identical.
 
@@ -101,6 +108,8 @@ def tensor_transfer(
                 source_device=source_device,
                 target_device=target_device,
                 tensor_id=tensor_id,
+                pinned_required=pinned_required,
+                allow_stage=allow_stage,
             )
         )
     )

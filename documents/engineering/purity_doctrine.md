@@ -561,6 +561,7 @@ SpectralMC uses **AST-based linting** to enforce purity in Tier 2 files. See [Pu
 
 **Command**:
 ```bash
+# File: documents/engineering/purity_doctrine.md
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-purity
 ```
 
@@ -580,6 +581,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-pur
 
 **Whitelist Configuration** (4 acceptable patterns):
 ```python
+# File: documents/engineering/purity_doctrine.md
 ACCEPTABLE_IF_STATEMENTS = {
     ("src/spectralmc/async_normals.py", 311): "RNG advance guard (checkpoint resume)",
     ("src/spectralmc/serialization/tensors.py", 174): "Protobuf API boundary",
@@ -642,6 +644,7 @@ Protobuf's generated code requires mutation via methods like `CopyFrom()`. This 
 acceptable at serialization boundaries where protobuf's imperative API is unavoidable:
 
 ```python
+# File: documents/engineering/purity_doctrine.md
 # Acceptable: protobuf mutation in serialization layer
 _ = [
     proto.state[param_id].CopyFrom(entry_proto)
@@ -679,6 +682,7 @@ The following patterns are acceptable and do not violate purity:
 
 **1. Boundary Functions** - Result → exception conversion at system boundaries:
 ```python
+# File: documents/engineering/purity_doctrine.md
 def unwrap(self) -> T:
     """Extract value or raise. Use at boundaries only."""
     match self:
@@ -690,6 +694,7 @@ def unwrap(self) -> T:
 
 **2. Programming Error Assertions** - Defensive checks for invariants:
 ```python
+# File: documents/engineering/purity_doctrine.md
 # Thread-safety
 if threading.get_ident() != main_thread_id:
     raise RuntimeError("Not thread-safe; call from main thread only")
@@ -706,6 +711,7 @@ def _expect_serialization(result: Result[T, E]) -> T:
 
 **3. Constructor Validation** - Fail-fast in `__init__` methods:
 ```python
+# File: documents/engineering/purity_doctrine.md
 def __init__(self, device: Device):
     if device != Device.cuda:
         raise RuntimeError("CUDA required for this operation")
@@ -713,6 +719,7 @@ def __init__(self, device: Device):
 
 **4. Test Infrastructure** - In test helpers, fixtures, and mocks:
 ```python
+# File: documents/engineering/purity_doctrine.md
 def assert_effect_count(self, count: int) -> None:
     if len(self.recorded_effects) != count:
         raise AssertionError(f"Expected {count} effects")

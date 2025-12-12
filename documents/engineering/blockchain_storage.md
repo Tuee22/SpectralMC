@@ -72,11 +72,11 @@ my-model-bucket/
 
 ```mermaid
 flowchart TB
-  Start[Read chain.json + ETag]
+  Start[Read chain head ETag]
   BuildMeta[Build version metadata + content hash]
-  UploadCheckpoint[Upload checkpoint.pb]
-  UploadMeta[Upload metadata.json]
-  UploadHash[Upload content_hash.txt]
+  UploadCheckpoint[Upload checkpoint file]
+  UploadMeta[Upload metadata file]
+  UploadHash[Upload content hash file]
   UpdateHead[CAS update chain json If Match ETag]
   CommitSuccess[Commit succeeds]
   Conflict[412 Precondition Failed]
@@ -88,8 +88,8 @@ flowchart TB
   UploadCheckpoint -->|upload checkpoint| UploadMeta
   UploadMeta -->|upload metadata| UploadHash
   UploadHash -->|upload hash| UpdateHead
-  UpdateHead -->|200 OK| CommitSuccess
-  UpdateHead -->|412| Conflict
+  UpdateHead -->|success| CommitSuccess
+  UpdateHead -->|precondition failed| Conflict
   Conflict -->|cleanup| Rollback
   Rollback -->|retry strategy| Retry
   Retry -->|restart sequence| Start

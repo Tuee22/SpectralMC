@@ -360,7 +360,7 @@ flowchart TB
     Image[Docker Image]
     Runtime[Container Runtime]
     VolumeMount[Volume Mount]
-    HostCode[Host pyproject.*.toml]
+    HostCode[Host pyproject files]
 
     Build --> Install
     Install --> Scripts
@@ -369,8 +369,8 @@ flowchart TB
     HostCode --> VolumeMount
     VolumeMount --> Runtime
 
-    Scripts -.baked into.-> Image
-    VolumeMount -.overlays.-> Runtime
+    Scripts --> Image
+    VolumeMount --> Runtime
 ```
 
 **Key insight**:
@@ -439,7 +439,8 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry install
 5. **Simplicity**: One clear contract - rebuild when scripts change
 
 **If you see this warning**:
-```
+```text
+# File: documents/engineering/docker_build_philosophy.md
 Warning: 'script-name' is an entry point defined in pyproject.toml, but it's not installed as a script.
 ```
 
@@ -648,7 +649,8 @@ BUILD_FROM_SOURCE=true docker compose up --build -d
 ### Entry point script warning
 
 **Symptom**:
-```
+```text
+# File: documents/engineering/docker_build_philosophy.md
 Warning: 'script-name' is an entry point defined in pyproject.toml, but it's not installed as a script.
 ```
 

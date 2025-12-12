@@ -92,6 +92,7 @@ system and keeps pure ADT flows aligned with [total_pure_modelling.md](total_pur
 
 **Anti-pattern**:
 ```python
+# File: documents/engineering/purity_enforcement.md
 result = []
 for item in items:
     result.append(item * 2)
@@ -100,6 +101,7 @@ return result
 
 **Fix** (comprehension):
 ```python
+# File: documents/engineering/purity_enforcement.md
 return [item * 2 for item in items]
 ```
 
@@ -115,6 +117,7 @@ return [item * 2 for item in items]
 
 **Anti-pattern**:
 ```python
+# File: documents/engineering/purity_enforcement.md
 i = 0
 while i < len(items):
     if predicate(items[i]):
@@ -125,6 +128,7 @@ return None
 
 **Fix** (generator + next):
 ```python
+# File: documents/engineering/purity_enforcement.md
 return next((item for item in items if predicate(item)), None)
 ```
 
@@ -140,6 +144,7 @@ return next((item for item in items if predicate(item)), None)
 
 **Whitelisted Exceptions** (2 total):
 ```python
+# File: documents/engineering/purity_enforcement.md
 ACCEPTABLE_IF_STATEMENTS = {
     ("src/spectralmc/async_normals.py", 311): "RNG advance guard (checkpoint resume)",
     ("src/spectralmc/serialization/tensors.py", 174): "Protobuf API boundary",
@@ -148,6 +153,7 @@ ACCEPTABLE_IF_STATEMENTS = {
 
 **Anti-pattern** (simple if/else):
 ```python
+# File: documents/engineering/purity_enforcement.md
 if isinstance(value, str):
     return int(value)
 return value
@@ -155,11 +161,13 @@ return value
 
 **Fix** (conditional expression):
 ```python
+# File: documents/engineering/purity_enforcement.md
 return int(value) if isinstance(value, str) else value
 ```
 
 **Anti-pattern** (complex branching):
 ```python
+# File: documents/engineering/purity_enforcement.md
 if isinstance(error, NetworkError):
     return "Network failure"
 elif isinstance(error, AuthError):
@@ -170,6 +178,7 @@ else:
 
 **Fix** (match/case):
 ```python
+# File: documents/engineering/purity_enforcement.md
 match error:
     case NetworkError():
         return "Network failure"
@@ -184,6 +193,7 @@ match error:
 **Exception Pattern** (guard clauses):
 Guard clauses that return `Failure(...)` are acceptable:
 ```python
+# File: documents/engineering/purity_enforcement.md
 if error_condition:
     return Failure(SomeError(...))
 # Continue processing...
@@ -205,6 +215,7 @@ if error_condition:
 
 **Anti-pattern**:
 ```python
+# File: documents/engineering/purity_enforcement.md
 def __post_init__(self) -> None:
     if self.lower >= self.upper:
         raise ValueError("Invalid bounds")
@@ -212,6 +223,7 @@ def __post_init__(self) -> None:
 
 **Fix** (factory function):
 ```python
+# File: documents/engineering/purity_enforcement.md
 def bound_spec(lower: float, upper: float) -> Result[BoundSpec, InvalidBoundsError]:
     return (
         Failure(InvalidBoundsError(lower=lower, upper=upper))
@@ -224,6 +236,7 @@ def bound_spec(lower: float, upper: float) -> Result[BoundSpec, InvalidBoundsErr
 
 **Acceptable Raise** (programming errors):
 ```python
+# File: documents/engineering/purity_enforcement.md
 # Thread safety violation
 if threading.get_ident() != main_thread_id:
     raise RuntimeError("Wrong thread - programming error")
@@ -245,6 +258,7 @@ raise AssertionError("Unreachable: all variants handled")
 
 **Anti-pattern**:
 ```python
+# File: documents/engineering/purity_enforcement.md
 def compute_price(model: Model, params: Params) -> float:
     logger.info(f"Computing price with {params}")
     print(f"Model: {model.name}")
@@ -253,6 +267,7 @@ def compute_price(model: Model, params: Params) -> float:
 
 **Fix** (pure computation):
 ```python
+# File: documents/engineering/purity_enforcement.md
 def compute_price(model: Model, params: Params) -> float:
     """Pure computation - no logging, no I/O."""
     return model.forward(params)
@@ -260,6 +275,7 @@ def compute_price(model: Model, params: Params) -> float:
 
 **For debugging/logging**, use Effect ADT (see [Effect Interpreter](effect_interpreter.md)):
 ```python
+# File: documents/engineering/purity_enforcement.md
 def compute_with_logging(model: Model, params: Params) -> tuple[float, list[LoggingEffect]]:
     """Pure computation returning effects."""
     price = model.forward(params)
@@ -302,7 +318,7 @@ Instead of manually whitelisting every guard clause or CUDA kernel, the AST chec
 
 **Example (automatically exempted)**:
 ```python
-# File: src/spectralmc/async_normals.py
+   # File: src/spectralmc/async_normals.py
 def create(cls, rows: int, cols: int, *, dtype: cp.dtype) -> Result[...]:
     # ✅ CORRECT - Guard clause (automatically exempted)
     if min(rows, cols) <= 0:
@@ -421,6 +437,7 @@ def process(x: int) -> int:
 
 **Usage**:
 ```bash
+# File: documents/engineering/purity_enforcement.md
 # Check all Tier 2 files
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-purity
 
@@ -446,6 +463,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-pur
 The purity checker runs as **Step 3** in the code quality pipeline:
 
 ```bash
+# File: documents/engineering/purity_enforcement.md
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-code
 ```
 
@@ -496,6 +514,7 @@ These patterns exist in current code and are documented for migration:
 
 1. **async_normals.py:311** - RNG advance guard (checkpoint resume)
    ```python
+   # File: src/spectralmc/async_normals.py
    if rerun_step <= checkpoint_step:  # WHITELISTED
        return Failure(RNGAdvanceError(...))
    ```
@@ -503,11 +522,13 @@ These patterns exist in current code and are documented for migration:
 
 2. **serialization/tensors.py:174** - Protobuf requires_grad mutation
    ```python
+   # File: src/spectralmc/serialization/tensors.py
    if proto.requires_grad:  # WHITELISTED
        tensor.requires_grad_(True)
    ```
    **Migration**: Conditional expression:
    ```python
+   # File: src/spectralmc/serialization/tensors.py
    tensor = (
        tensor.requires_grad_(True)
        if proto.requires_grad
@@ -520,6 +541,7 @@ These patterns exist in current code and are documented for migration:
 **Location**: `tools/purity/rules.py`
 
 ```python
+# File: documents/engineering/purity_enforcement.md
 ACCEPTABLE_IF_STATEMENTS: dict[tuple[str, int], str] = {
     ("src/spectralmc/async_normals.py", 311): "RNG advance guard (checkpoint resume)",
     ("src/spectralmc/serialization/tensors.py", 174): "Protobuf API boundary",
@@ -538,6 +560,7 @@ ACCEPTABLE_IF_STATEMENTS: dict[tuple[str, int], str] = {
 
 **Before**:
 ```python
+# File: documents/engineering/purity_enforcement.md
 if condition:
     return value_a
 else:
@@ -546,6 +569,7 @@ else:
 
 **After** (`--fix` applies automatically):
 ```python
+# File: documents/engineering/purity_enforcement.md
 return value_a if condition else value_b
 ```
 
@@ -558,6 +582,7 @@ return value_a if condition else value_b
 
 **Before**:
 ```python
+# File: documents/engineering/purity_enforcement.md
 if condition:
     x = value_a
 else:
@@ -566,6 +591,7 @@ else:
 
 **After** (`--fix` applies automatically):
 ```python
+# File: documents/engineering/purity_enforcement.md
 x = value_a if condition else value_b
 ```
 
@@ -575,6 +601,7 @@ x = value_a if condition else value_b
 
 **Before**:
 ```python
+# File: documents/engineering/purity_enforcement.md
 result = []
 for item in items:
     result.append(transform(item))
@@ -583,6 +610,7 @@ return result
 
 **After** (manual):
 ```python
+# File: documents/engineering/purity_enforcement.md
 return [transform(item) for item in items]
 ```
 
@@ -592,6 +620,7 @@ return [transform(item) for item in items]
 
 **Before**:
 ```python
+# File: documents/engineering/purity_enforcement.md
 if isinstance(x, TypeA):
     return handle_a(x)
 elif isinstance(x, TypeB):
@@ -602,6 +631,7 @@ else:
 
 **After** (manual):
 ```python
+# File: documents/engineering/purity_enforcement.md
 match x:
     case TypeA():
         return handle_a(x)
@@ -621,6 +651,7 @@ match x:
 
 **Command**:
 ```bash
+# File: documents/engineering/purity_enforcement.md
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-purity --verbose
 ```
 
@@ -645,6 +676,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-pur
 
 **Generate report**:
 ```bash
+# File: documents/engineering/purity_enforcement.md
 docker compose -f docker/docker-compose.yml exec spectralmc python tools/generate_purity_report.py
 ```
 
@@ -664,11 +696,13 @@ docker compose -f docker/docker-compose.yml exec spectralmc python tools/generat
 
 **Solution**: Verify file is correctly classified
 ```bash
+# File: documents/engineering/purity_enforcement.md
 poetry run check-purity --verbose src/spectralmc/your_file.py
 ```
 
 **Check tier classification** in `pyproject.toml`:
 ```toml
+# File: documents/engineering/purity_enforcement.md
 [tool.purity]
 tier1_infrastructure = [...]
 tier3_effects = [...]
@@ -682,6 +716,7 @@ tier3_effects = [...]
 
 **Solution**: Manually refactor using suggested fix from error message:
 ```bash
+# File: documents/engineering/purity_enforcement.md
 poetry run check-purity --explain PUR003
 ```
 

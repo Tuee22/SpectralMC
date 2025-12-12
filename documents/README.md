@@ -51,7 +51,7 @@ Scientific background, quantitative finance theory, and research papers.
 - [Training Integration](product/training_integration.md)
 - [Testing Requirements](engineering/testing_requirements.md)
 - [Total Pure Modelling](engineering/total_pure_modelling.md)
-- [SpectralMC Whitepaper](domain/whitepapers/spectralmc_whitepaper.md)
+- [SpectralMC Whitepaper](whitepapers/spectralmc_whitepaper.md)
 
 ## Contributing
 

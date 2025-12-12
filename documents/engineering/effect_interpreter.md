@@ -154,6 +154,8 @@ class TensorTransfer:
         source_device: Device to transfer from.
         target_device: Device to transfer to.
         tensor_id: Opaque identifier for the tensor or TensorTree.
+        pinned_required: Host memory must be pinned for non-blocking transfers.
+        allow_stage: Whether staging through pinned host memory is allowed.
 
     Example:
         >>> match tensor_transfer(Device.cuda, Device.cpu, "model_weights"):
@@ -166,6 +168,8 @@ class TensorTransfer:
     source_device: Device = Device.cuda
     target_device: Device = Device.cpu
     tensor_id: str = ""
+    pinned_required: bool = False
+    allow_stage: bool = True
 
 
 @dataclass(frozen=True)
@@ -175,7 +179,12 @@ class InvalidTransferError:
 
 
 def tensor_transfer(
-    source: Device, target: Device, tensor_id: str = ""
+    source: Device,
+    target: Device,
+    tensor_id: str = "",
+    *,
+    pinned_required: bool = False,
+    allow_stage: bool = True,
 ) -> Result[TensorTransfer, InvalidTransferError]:
     """Create TensorTransfer, returning Failure if devices are identical.
 
@@ -194,7 +203,15 @@ def tensor_transfer(
     return (
         Failure(InvalidTransferError(device=source))
         if source == target
-        else Success(TensorTransfer(source_device=source, target_device=target, tensor_id=tensor_id))
+        else Success(
+            TensorTransfer(
+                source_device=source,
+                target_device=target,
+                tensor_id=tensor_id,
+                pinned_required=pinned_required,
+                allow_stage=allow_stage,
+            )
+        )
     )
 
 
@@ -486,14 +503,14 @@ flowchart TB
     Runtime[CUDARuntime]
     Result[Result]
 
-    State --> Guard
-    Guard --> Decision
-    Decision -->|Move| EffectNode
-    Decision -->|Stay| Result
-    Decision -->|Reject| Result
-    EffectNode --> Interpreter
-    Interpreter --> Runtime
-    Runtime --> Result
+    State -->|state| Guard
+    Guard -->|guard| Decision
+    Decision -->|move| EffectNode
+    Decision -->|stay| Result
+    Decision -->|reject| Result
+    EffectNode -->|effect| Interpreter
+    Interpreter -->|runtime| Runtime
+    Runtime -->|result| Result
 ```
 
 **Device transfer walkthrough**
@@ -1241,3 +1258,11 @@ See [Purity Doctrine](purity_doctrine.md) for complete purity requirements.
 - [Blockchain Storage](blockchain_storage.md) - Storage effects implementation
 - [Total Pure Modelling](total_pure_modelling.md) - Source of the pure state machines that
   feed effect builders
+
+
+## GPUInterpreter Transfer Delegation
+
+- GPUInterpreter delegates device moves to the torch façade via `spectralmc.models.cpu_gpu_transfer.move_tensor_tree()`, which plans transfers (`TransferDecision`) purely and executes them with stream ownership.
+- Unpinned host → CUDA transfers are staged through pinned buffers; non-blocking is only used when safe. Invalid plans surface as `TransferRejected`/`InvalidTransferError`; no timing retries or silent fallbacks.
+- Registry updates occur only after successful execution; errors remain pure `Result` values.
+

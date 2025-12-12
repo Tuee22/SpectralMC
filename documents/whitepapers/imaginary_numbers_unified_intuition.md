@@ -1,4 +1,4 @@
-# File: documents/domain/whitepapers/imaginary_numbers_unified_intuition.md
+# File: documents/whitepapers/imaginary_numbers_unified_intuition.md
 # Unified Summary: Imaginary Numbers, Roots, Fourier Analysis, Dynamics & Probability
 
 **Status**: Reference only  
@@ -6,7 +6,7 @@
 **Referenced by**: documents/domain/index.md
 
 > **Purpose**: Provide an integrated intuition for complex numbers across algebra, signals, dynamics, and probability.
-> **📖 Authoritative Reference**: [../../documentation_standards.md](../../documentation_standards.md)
+> **📖 Authoritative Reference**: [../documentation_standards.md](../documentation_standards.md)
 
 ## 1. Guiding Thread  
 Imaginary numbers (the complex plane) supply a *rotary* dimension that closes otherwise incomplete structures:  

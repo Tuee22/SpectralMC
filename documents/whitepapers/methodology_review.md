@@ -1,4 +1,4 @@
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 # SpectralMC Methodology Review
 
 **Status**: Reference only  
@@ -6,7 +6,7 @@
 **Referenced by**: documents/domain/index.md
 
 > **Purpose**: Provide a critical review of SpectralMC methodology across theory, efficiency, and stability dimensions.
-> **📖 Authoritative Reference**: [../../documentation_standards.md](../../documentation_standards.md)
+> **📖 Authoritative Reference**: [../documentation_standards.md](../documentation_standards.md)
 
 ---
 
@@ -83,7 +83,7 @@ SpectralMC represents a **theoretically sound and computationally innovative** a
 The most critical gap: there is **NO test** that validates the complete workflow:
 
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 # THIS TEST DOES NOT EXIST
 def test_cvnn_pricing_accuracy():
     # 1. Train CVNN on Black-Scholes data
@@ -146,7 +146,7 @@ def test_cvnn_pricing_accuracy():
 
 **Pure CUDA Pipeline**
 ```text
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 Monte Carlo (Numba) → FFT (CuPy) → Training (PyTorch) → All on GPU
 ```
 
@@ -206,7 +206,7 @@ Monte Carlo (Numba) → FFT (CuPy) → Training (PyTorch) → All on GPU
 **No quantitative evidence for efficiency claims**:
 
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
     # THIS BENCHMARK DOES NOT EXIST
     def benchmark_computational_advantage():
         test_contracts = sample_test_set(1000)
@@ -256,7 +256,7 @@ The engineering is **excellent for a research prototype**. The GPU pipeline is w
 
 **1. Deterministic Algorithms Enforced**
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 torch.use_deterministic_algorithms(True, warn_only=False)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
@@ -273,7 +273,7 @@ torch.backends.cudnn.allow_tf32 = False
 
 **3. Precision Framework** (`models/numerical.py`)
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 class Precision(Enum):
     float32 = "float32"
     float64 = "float64"
@@ -286,7 +286,7 @@ class Precision(Enum):
 
 **4. Reproducibility Guarantees**
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 # All RNG seeding explicit
 np.random.seed(seed)
 torch.manual_seed(seed)
@@ -312,7 +312,7 @@ def test_snapshot_restore_determinism():
 
 **6. Lock-Step Training Tests**
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 def test_identical_trainers_stay_synchronized():
     trainer1 = GBMTrainer(seed=42)
     trainer2 = GBMTrainer(seed=42)
@@ -331,7 +331,7 @@ def test_identical_trainers_stay_synchronized():
 **1. No Stress Tests for Edge Cases**
 
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 # THESE TESTS DO NOT EXIST
 def test_near_zero_volatility():
     """What happens when σ → 0?"""
@@ -361,7 +361,7 @@ def test_deep_itm_option():
 
 **3. No Numerical Gradient Verification**
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 # THIS TEST DOES NOT EXIST
 def test_gradient_correctness():
     """Verify analytical gradients match numerical gradients."""
@@ -382,7 +382,7 @@ def test_gradient_correctness():
 - **No aliasing analysis**: What if signal has frequencies > Nyquist?
 - **No FFT roundtrip test**:
   ```python
-  # File: documents/domain/whitepapers/methodology_review.md
+  # File: documents/whitepapers/methodology_review.md
   def test_fft_roundtrip():
       signal = simulate_payoffs(1000)
       fft = cp.fft.fft(signal)
@@ -435,7 +435,7 @@ Numerical stability practices are **excellent for a research codebase**. The det
 
 **3. 15% RMSPE Tolerance**
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 # From test_gbm.py
 assert rmspe <= 0.15  # 15% root mean squared percentage error
 ```
@@ -498,7 +498,7 @@ assert rmspe <= 0.15  # 15% root mean squared percentage error
 
 **Priority 1: Implement End-to-End Accuracy Test**
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 def test_e2e_pricing_accuracy():
     """
     Train CVNN on Black-Scholes data and validate pricing accuracy
@@ -560,7 +560,7 @@ def test_e2e_pricing_accuracy():
 
 **Priority 2: Tighten MC Validation Tolerance**
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 # Current (too permissive)
 assert rmspe <= 0.15  # 15%
 
@@ -572,7 +572,7 @@ assert rmspe <= 0.01  # 1%
 
 **Priority 3: Implement Convergence Monitoring**
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 def train_with_validation(trainer, train_contracts, val_contracts):
     """Train with early stopping based on validation loss."""
     best_loss = float('inf')
@@ -604,7 +604,7 @@ def train_with_validation(trainer, train_contracts, val_contracts):
 
 **Priority 4: Implement Moment Extraction**
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 def extract_moments_from_cf(cvnn, contract):
     """
     Extract distribution moments from learned characteristic function.
@@ -637,7 +637,7 @@ def extract_moments_from_cf(cvnn, contract):
 
 **Priority 5: Benchmark Computational Speedup**
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 def benchmark_computational_advantage():
     """
     Quantify the "significantly reduced computational requirements" claim.
@@ -691,7 +691,7 @@ def benchmark_computational_advantage():
 
 **Priority 6: Implement Greeks via Autodiff**
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 def compute_greeks(cvnn, contract):
     """
     Compute option Greeks using automatic differentiation.
@@ -728,7 +728,7 @@ def compute_greeks(cvnn, contract):
 
 **Priority 7: Stress Testing**
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 @pytest.mark.parametrize("edge_case", [
     # Near-zero volatility
     dict(S0=100, K=100, T=1.0, r=0.05, sigma=1e-8),
@@ -767,7 +767,7 @@ def test_edge_cases(trained_cvnn, edge_case):
 
 **Priority 8: Compare to COS Method**
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 def benchmark_vs_cos_method():
     """
     Compare CVNN accuracy and speed to Fang-Oosterlee COS method.
@@ -809,7 +809,7 @@ def benchmark_vs_cos_method():
 
 **Priority 10: Hyperparameter Optimization**
 ```python
-# File: documents/domain/whitepapers/methodology_review.md
+# File: documents/whitepapers/methodology_review.md
 def optimize_hyperparameters():
     """Grid search for optimal network architecture and FFT size."""
     param_grid = {

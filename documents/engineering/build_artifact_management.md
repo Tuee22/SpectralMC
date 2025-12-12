@@ -47,9 +47,11 @@ SpectralMC uses two pyproject files that are copied to `pyproject.toml` at build
 
 **Build-time generation**:
 ```dockerfile
+# File: docker/Dockerfile (binary build)
 # docker/Dockerfile line 88
 RUN cp pyproject.binary.toml pyproject.toml
 
+# File: docker/Dockerfile.source (source build)
 # docker/Dockerfile.source line 137
 RUN cp pyproject.source.toml pyproject.toml
 ```

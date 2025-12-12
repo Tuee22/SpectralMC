@@ -67,7 +67,11 @@ from spectralmc.effects.training import (
 )
 from spectralmc.effects.types import Effect
 from spectralmc.gbm import SimulateBlackScholes
-from spectralmc.models.cpu_gpu_transfer import TransferDestination, move_tensor_tree
+from spectralmc.models.cpu_gpu_transfer import (
+    TransferDestination,
+    move_tensor_tree,
+    plan_tensor_transfer,
+)
 from spectralmc.models.torch import Device
 from spectralmc.result import Failure, Result, Success
 from spectralmc.storage.s3_operations import S3Operations
@@ -167,6 +171,19 @@ class GPUInterpreter:
             dest = TransferDestination.CPU
         else:
             dest = TransferDestination.CUDA
+
+        if isinstance(tensor, torch.Tensor):
+            plan_result = plan_tensor_transfer(tensor, dest=dest, allow_stage=True)
+            if isinstance(plan_result, Success):
+                plan = plan_result.value
+                self._registry.register_metadata(
+                    f"transfer_plan:{tensor_id}",
+                    f"{plan.kind}|dest={plan.dest.value}|nb={plan.non_blocking}|pin={plan.pin_output}|reason={plan.reason}",
+                )
+            else:
+                self._registry.register_metadata(
+                    f"transfer_plan:{tensor_id}", f"error:{plan_result.error}"
+                )
 
         match move_tensor_tree(tensor, dest=dest):
             case Failure(error):

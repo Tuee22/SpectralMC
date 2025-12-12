@@ -69,6 +69,14 @@ class CudaUnavailable:
     kind: Literal["CudaUnavailable"] = "CudaUnavailable"
 
 
+@dataclass(frozen=True)
+class TransferRejected:
+    """Transfer planner rejected the request (e.g., unsupported path)."""
+
+    reason: str
+    kind: Literal["TransferRejected"] = "TransferRejected"
+
+
 TorchFacadeError = (
     UnsupportedTorchDType
     | UnsupportedTorchDevice
@@ -78,6 +86,7 @@ TorchFacadeError = (
     | HeterogeneousTensorTree
     | NoOpTransfer
     | CudaUnavailable
+    | TransferRejected
 )
 
 T = TypeVar("T")
@@ -92,6 +101,7 @@ __all__ = [
     "TensorStateConversionFailed",
     "TorchFacadeError",
     "TorchFacadeResult",
+    "TransferRejected",
     "UnsupportedTorchDevice",
     "UnsupportedTorchDType",
 ]

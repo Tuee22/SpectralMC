@@ -1,4 +1,4 @@
-# File: documents/domain/whitepapers/spectralmc_whitepaper.md
+# File: documents/whitepapers/spectralmc_whitepaper.md
 # Complex-Valued Neural Networks for Monte Carlo Pricing: A Summary
 
 **Status**: Reference only  
@@ -6,7 +6,7 @@
 **Referenced by**: documents/domain/index.md
 
 > **Purpose**: Summarize the CVNN-based approach to accelerating Monte Carlo pricing within SpectralMC.
-> **📖 Authoritative Reference**: [../../documentation_standards.md](../../documentation_standards.md)
+> **📖 Authoritative Reference**: [../documentation_standards.md](../documentation_standards.md)
 
 This document outlines a method for accelerating Monte Carlo (MC) pricing using Complex-Valued Neural Networks (CVNNs). Instead of directly learning payoffs, the CVNN learns the Discrete Fourier Transform (DFT) of a sample of MC outputs, which encodes the distribution of outcomes via its characteristic function.
 

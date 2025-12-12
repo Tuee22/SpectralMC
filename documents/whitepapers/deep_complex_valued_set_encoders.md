@@ -1,4 +1,4 @@
-# File: documents/domain/whitepapers/deep_complex_valued_set_encoders.md
+# File: documents/whitepapers/deep_complex_valued_set_encoders.md
 # Deep Complex-Valued Set Encoders for Dupire Local Volatility Option Pricing
 
 **Status**: Reference only  
@@ -6,7 +6,7 @@
 **Referenced by**: documents/domain/index.md
 
 > **Purpose**: Survey complex-valued set encoder approaches for variable-length local volatility surfaces.
-> **📖 Authoritative Reference**: [../../documentation_standards.md](../../documentation_standards.md)
+> **📖 Authoritative Reference**: [../documentation_standards.md](../documentation_standards.md)
 
 ---
 

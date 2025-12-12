@@ -1315,6 +1315,7 @@ match result:
 SpectralMC's mypy strict configuration (`pyproject.toml`) already provides exhaustiveness checking:
 
 ```toml
+# File: pyproject.toml
 strict = true                # Enables all strict checks
 warn_unreachable = true      # Detects unreachable code paths
 warn_no_return = true        # Detects missing return statements (in strict)
@@ -1573,6 +1574,7 @@ except botocore.exceptions.ClientError:
 
 **Forbidden Patterns in Tier 2**:
 ```python
+# File: documents/engineering/coding_standards.md
 # ❌ FORBIDDEN - Raising for expected errors
 def load_checkpoint(path: str) -> Checkpoint:
     if not path.exists():
@@ -1595,6 +1597,7 @@ except Exception:
 
 **Required Patterns in Tier 2**:
 ```python
+# File: documents/engineering/coding_standards.md
 # ✅ CORRECT - Result type for file not found
 def load_checkpoint(path: Path) -> Result[Checkpoint, LoadError]:
     return (
@@ -2121,6 +2124,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc \
   poetry run test-all -W error::DeprecationWarning
 ```text
 # File: documents/engineering/coding_standards.md
+```
 
 ### Status: Deprecation-Free Codebase
 
@@ -2153,13 +2157,12 @@ SpectralMC's coding standards ensure:
 
 Before committing code:
 
-```
+```bash
 # File: documents/engineering/coding_standards.md
 # Inside Docker container
 docker compose -f docker/docker-compose.yml exec spectralmc black .
 docker compose -f docker/docker-compose.yml exec spectralmc mypy
-```text
-# File: documents/engineering/coding_standards.md
+```
 
 Both must pass with zero errors.
 
@@ -2169,4 +2172,3 @@ See also:
 - [Documentation Standards](../documentation_standards.md) - Docstring requirements
 - [Testing Requirements](./testing_requirements.md) - Testing anti-patterns and best practices
 - [CPU/GPU Compute Policy](./cpu_gpu_compute_policy.md) - Device placement and transfers
-```

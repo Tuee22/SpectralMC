@@ -293,18 +293,18 @@ allowed transitions; interpreters only execute them.
 flowchart TB
   Placement[Placement State]
   Guard[Device Guard]
-  Decision[CPU/GPU Decision]
-  Effects[Transfer/Compute Effects]
+  Decision[CPU GPU Decision]
+  Effects[Transfer Compute Effects]
   Interpreter[GPU Interpreter]
   Runtime[CUDA Runtime]
 
-  Placement --> Guard
-  Guard --> Decision
-  Decision -->|CPU Init| Effects
-  Decision -->|GPU Compute| Effects
-  Decision -->|Reject Transfer| Runtime
-  Effects --> Interpreter
-  Interpreter --> Runtime
+  Placement -->|state| Guard
+  Guard -->|guard| Decision
+  Decision -->|cpu init| Effects
+  Decision -->|gpu compute| Effects
+  Decision -->|reject| Runtime
+  Effects -->|effects| Interpreter
+  Interpreter -->|runtime| Runtime
 ```
 
 - Initialization and checkpoint I/O remain CPU-bound for determinism and format
@@ -312,6 +312,13 @@ flowchart TB
 - Compute stays on GPU; guards reject silent CPU fallbacks or oversized host transfers.
 
 ---
+
+## Transfer Planner (Pinned & Staged)
+
+- Host→CUDA copies require pinned host memory for non-blocking transfers; unpinned host tensors are staged through a pinned buffer first.
+- Transfer planning is pure (`TransferDecision` in `models/cpu_gpu_transfer.py`); interpreters own execution and stream synchronization.
+- Reject transfers explicitly (no timing toggles or best-effort fallbacks); surfaced as `TransferRejected` errors.
+- Tests rely on the planner to avoid races: no non-blocking copy on unpinned CPU tensors, no silent CPU fallback when CUDA is requested.
 
 ## Debugging Silent CPU Fallback
 

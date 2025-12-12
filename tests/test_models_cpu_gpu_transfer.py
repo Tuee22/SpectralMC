@@ -41,6 +41,11 @@ def _flatten(tree: cpu_gpu_transfer.TensorTree) -> list[torch.Tensor]:
 # Fail fast if no CUDA - satisfies user requirement
 assert torch.cuda.is_available(), "CUDA device required but none detected."
 
+@pytest.fixture(params=[True, False], ids=["pinned_required", "staged_allowed"])
+def pinned_required(request: pytest.FixtureRequest) -> bool:
+    """Toggle pinned requirement to exercise planner variants."""
+    return bool(request.param)
+
 ###############################################################################
 # CPU-only tests                                                              #
 ###############################################################################
@@ -65,7 +70,7 @@ def test_cuda_requested_but_not_available(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.mark.cpu  # Intentional CPU/GPU transfer testing
-def test_cpu_to_cuda_and_back_roundtrip() -> None:
+def test_cpu_to_cuda_and_back_roundtrip(pinned_required: bool) -> None:
     """Test GPU→CPU transfer and roundtrip (intentional CPU usage)."""
     original: cpu_gpu_transfer.TensorTree = {
         "a": torch.randn(2, 3),
@@ -74,7 +79,10 @@ def test_cpu_to_cuda_and_back_roundtrip() -> None:
     }
 
     to_cuda = expect_success(
-        cpu_gpu_transfer.move_tensor_tree(original, dest=TransferDestination.CUDA)
+        cpu_gpu_transfer.move_tensor_tree(
+            original,
+            dest=TransferDestination.CUDA,
+        )
     )
 
     src: list[torch.Tensor] = _flatten(original)
@@ -95,6 +103,21 @@ def test_cpu_to_cuda_and_back_roundtrip() -> None:
     dst2: list[torch.Tensor] = _flatten(back)
 
     assert all(torch.equal(s.cpu(), d) and d.is_pinned() for s, d in zip(src2, dst2))
+
+
+
+@pytest.mark.cpu
+def test_unpinned_host_to_cuda_rejected_when_staging_disabled() -> None:
+    """Unpinned host → CUDA should be rejected when staging is disabled."""
+    original: cpu_gpu_transfer.TensorTree = {
+        "a": torch.randn(2, 2),
+    }
+
+    result = cpu_gpu_transfer.move_tensor_tree(
+        original, dest=TransferDestination.CUDA, allow_stage=False
+    )
+
+    assert isinstance(result, Failure)
 
 
 @pytest.mark.parametrize(

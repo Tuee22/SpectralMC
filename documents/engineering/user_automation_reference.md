@@ -1,7 +1,7 @@
 # File: documents/engineering/user_automation_reference.md
 # User Automation Reference
 
-**Status**: Reference only - User responsibility
+**Status**: Reference only
 **Supersedes**: None
 **Referenced by**: purity_enforcement.md, CLAUDE.md
 
@@ -39,6 +39,7 @@
 ### 1.1 Installation
 
 ```bash
+# File: documents/engineering/user_automation_reference.md
 # Inside Docker container
 docker compose -f docker/docker-compose.yml exec spectralmc poetry add --group dev pre-commit
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run pre-commit install
@@ -49,6 +50,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run pre-commi
 **File**: `.pre-commit-config.yaml` (create in project root)
 
 ```yaml
+# File: .pre-commit-config.yaml
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.8
@@ -85,11 +87,13 @@ repos:
 
 Hooks run automatically on `git commit`. To bypass (NOT RECOMMENDED):
 ```bash
+# File: documents/engineering/user_automation_reference.md
 git commit --no-verify
 ```
 
 To run manually on all files:
 ```bash
+# File: documents/engineering/user_automation_reference.md
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run pre-commit run --all-files
 ```
 
@@ -106,6 +110,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run pre-commi
 **File**: `.github/workflows/purity-check.yml`
 
 ```yaml
+# File: .github/workflows/purity-check.yml
 name: Purity Compliance Check
 
 on:
@@ -184,6 +189,7 @@ jobs:
 
 **Solution**:
 ```bash
+# File: documents/engineering/user_automation_reference.md
 # Ensure Poetry environment is activated
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run pre-commit run --all-files
 
@@ -193,7 +199,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-pur
 
 **Alternative**: If hooks need to run inside Docker:
 ```yaml
-# .pre-commit-config.yaml
+# File: .pre-commit-config.yaml
 - repo: local
   hooks:
     - id: purity-check

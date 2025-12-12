@@ -371,15 +371,15 @@ flowchart TB
   CheckNvidiaDocker -->|rebuild| RebuildAfterDocker[Rebuild after nvidia docker2 install]
 
   OOM -->|check RAM| CheckRAM{System RAM}
-  CheckRAM -->|less than 16GB| ReduceJobs[Edit Dockerfile source set MAX_JOBS=2]
-  CheckRAM -->|16GB or more| AddSwap[Add 16GB swap file]
+  CheckRAM -->|low ram| ReduceJobs[Edit Dockerfile source set MAX_JOBS=2]
+  CheckRAM -->|high ram| AddSwap[Add 16GB swap file]
   ReduceJobs -->|rebuild| RebuildAfterRAM[Rebuild with no cache]
   AddSwap -->|rebuild| RebuildAfterSwap[Rebuild with no cache]
 
   TestOOM -->|check VRAM| CheckVRAM{GPU VRAM}
-  CheckVRAM -->|2GB| ReduceBatch2GB[Edit test_gbm.py set BATCHES=2^16]
-  CheckVRAM -->|4GB| KeepDefault[Keep default 2^17 should work]
-  CheckVRAM -->|8GB or more| IncreaseBatch[Optional: Increase to 2^18]
+  CheckVRAM -->|low vram| ReduceBatch2GB[Lower batches to sixty five thousand]
+  CheckVRAM -->|mid vram| KeepDefault[Keep default batch size]
+  CheckVRAM -->|high vram| IncreaseBatch[Increase batches to two hundred sixty two thousand]
   ReduceBatch2GB -->|rerun| RerunTests[Rerun tests]
   KeepDefault -->|investigate| CheckOtherIssues[Check for other GPU memory issues]
   IncreaseBatch -->|rerun| RerunTestsFaster[Rerun tests faster convergence]
@@ -389,7 +389,7 @@ flowchart TB
   CheckBuild -->|yes| CheckArch[Verify TORCH_CUDA_ARCH_LIST matches GPU capability]
   CheckArch -->|manual build| ManualSourceBuild[Manual source build if mismatch]
 
-  CPUOnly -->|force source build| ForceBuild[Use Dockerfile.source]
+  CPUOnly -->|force source build| ForceBuild[Use source Dockerfile]
   ForceBuild -->|disable buildkit| UseNoBuildKit[Use DOCKER_BUILDKIT=0]
   UseNoBuildKit -->|rebuild| RebuildFromSource[Rebuild 2 to 4 hours for source build]
 ```

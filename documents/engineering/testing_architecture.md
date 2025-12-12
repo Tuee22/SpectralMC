@@ -77,7 +77,8 @@ SpectralMC tests adhere to four core principles:
 
 ### Directory Structure
 
-```
+```text
+# File: documents/engineering/testing_architecture.md
 tests/
 ├── conftest.py                     # Global fixtures, GPU cleanup
 ├── helpers/                        # Shared test utilities (NEW)
@@ -338,13 +339,13 @@ flowchart TB
     Expensive{Expensive setup?}
     Isolation{Need isolation?}
 
-    Start --> State
-    State -->|Yes| FunctionScope[Scope: function]
-    State -->|No| Expensive
-    Expensive -->|Yes| Isolation
-    Expensive -->|No| FunctionScope
-    Isolation -->|Required| FunctionScope
-    Isolation -->|Can share| SessionScope[Scope: session or module]
+    Start -->|start| State
+    State -->|yes| FunctionScope[Function scope]
+    State -->|no| Expensive
+    Expensive -->|yes| Isolation
+    Expensive -->|no| FunctionScope
+    Isolation -->|required| FunctionScope
+    Isolation -->|share| SessionScope[Session or module scope]
 ```
 
 **Function scope** (default):
@@ -761,6 +762,7 @@ def test_gbm_1() -> None:
 
 **Step 1**: Identify duplication
 ```bash
+# File: documents/engineering/testing_architecture.md
 # Find _expect_success duplicates
 grep -r "_expect_success" tests/
 
@@ -778,12 +780,14 @@ from tests.helpers import expect_success
 
 **Step 3**: Update call sites
 ```python
+# File: tests/test_models_torch.py
 # Old: _expect_success(result)
 # New: expect_success(result)
 ```
 
 **Step 4**: Validate
 ```bash
+# File: documents/engineering/testing_architecture.md
 docker compose -f docker/docker-compose.yml exec spectralmc \
   poetry run test-all tests/test_models_torch.py > /tmp/test-output.txt 2>&1
 ```

@@ -169,14 +169,14 @@ if cfg.torch_cuda_rng_states is not None and torch.cuda.is_available():
 ```mermaid
 flowchart TB
     Start[Create pricer config with RNG state]
-    RestoreCPU[torch.set_rng_state(cpu_state)]
-    RestoreCUDA[torch.cuda.set_rng_state_all(cuda_states)]
-    InitSobol[Create Sobol sampler with seed/skip]
+    RestoreCPU[Restore CPU RNG state]
+    RestoreCUDA[Restore CUDA RNG states]
+    InitSobol[Create Sobol sampler with seed skip]
     TrainingLoop{{Training batches}}
     SampleSobol[Sample Sobol batch]
-    StepModel[_torch_step() executes]
+    StepModel[Run torch step]
     Snapshot[Capture snapshot + RNG state]
-    Commit[commit_snapshot to blockchain store]
+    Commit[Commit snapshot to blockchain store]
 
     Start --> RestoreCPU --> RestoreCUDA --> InitSobol --> TrainingLoop
     TrainingLoop --> SampleSobol --> StepModel --> TrainingLoop
@@ -238,17 +238,17 @@ Let:
 
 ```mermaid
 flowchart TB
-    S0_C["S_0 continuous"]
-    S1_C["S_1 continuous"]
-    S2_C["S_2 continuous"]
-    Sn_C["S_n continuous"]
+    S0_C["S0 continuous"]
+    S1_C["S1 continuous"]
+    S2_C["S2 continuous"]
+    Sn_C["Sn continuous"]
 
-    S0_R["S_0 resume"]
-    S1_R["S_1 snapshot"]
-    CP["checkpoint.pb"]
-    S1_Restore["S_1 restored"]
-    S2_R["S_2 resume"]
-    Sn_R["S_n resume"]
+    S0_R["S0 resume"]
+    S1_R["S1 snapshot"]
+    CP[Checkpoint file]
+    S1_Restore["S1 restored"]
+    S2_R["S2 resume"]
+    Sn_R["Sn resume"]
 
     S0_C -->|step| S1_C
     S1_C -->|step| S2_C
@@ -349,7 +349,7 @@ flowchart TB
     RuntimeGuards[Runtime guarantees]
     FrozenCheck[Frozen dataclass errors on mutation]
     ResultCheck[Result types require handling]
-    AnyCheck[No Any / cast / ignore]
+    AnyCheck[No Any Cast Ignore]
     TorchOrder[Torch import order guard]
     ThreadCheck[Main thread required]
     ImmutableConfig[GbmCVNNPricerConfig frozen]
@@ -431,15 +431,15 @@ SpectralMC's mypy configuration catches:
 
 ```mermaid
 flowchart TB
-    TypeLayer[Type system: frozen configs, result types, no Any]
-    EffectLayer[Effect interpreter: facade + deterministic CUDA + thread guard]
-    StateLayer[Explicit state: RNG bytes, Sobol skip, model state, optimizer state]
-    StorageLayer[Storage: protobuf checkpoints, SHA256, blockchain history]
-    G1[G1: pure functions guarantee]
-    G2[G2: effect sequencing guarantee]
-    G3[G3: state threading guarantee]
-    G4[G4: checkpoint correctness guarantee]
-    G5[G5: integrity verification guarantee]
+    TypeLayer[Type system layer]
+    EffectLayer[Effect interpreter layer]
+    StateLayer[Explicit state layer]
+    StorageLayer[Storage layer]
+    G1[G1 pure functions guarantee]
+    G2[G2 effect sequencing guarantee]
+    G3[G3 state threading guarantee]
+    G4[G4 checkpoint correctness guarantee]
+    G5[G5 integrity verification guarantee]
 
     TypeLayer -->|enables| EffectLayer
     EffectLayer -->|propagates| StateLayer

@@ -200,14 +200,14 @@ flowchart TB
   Resume -->|resume needed| Periodic
   Resume -->|custom logic| Manual
 
-  NoStore -->|configure| ConfigNoStore[Use pricer.train with training_config]
+  NoStore -->|configure| ConfigNoStore[Use pricer train with training config]
   FinalOnly -->|configure| ConfigFinal[Enable auto_commit]
   Periodic -->|pick interval| ChooseInterval{Batch Count}
   Manual -->|manual commits| ConfigManual[Call commit_snapshot manually]
 
-  ChooseInterval -->|under 1000| Interval100[commit_interval=100]
-  ChooseInterval -->|1000 to 10000| Interval500[commit_interval=500]
-  ChooseInterval -->|over 10000| Interval1000[commit_interval=1000]
+  ChooseInterval -->|short interval| Interval100[commit_interval=100]
+  ChooseInterval -->|medium interval| Interval500[commit_interval=500]
+  ChooseInterval -->|long interval| Interval1000[commit_interval=1000]
 ```
 
 **See detailed mode descriptions below.**

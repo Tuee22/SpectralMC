@@ -129,7 +129,7 @@ flowchart TB
   Training[Training Node]
   Inference[Inference Node]
   GC[Garbage Collection Job]
-  Admin[Admin or CI/CD]
+  Admin[Admin or CICD]
 
   TrainingPolicy[Training Policy RW]
   InferencePolicy[Inference Policy RO]

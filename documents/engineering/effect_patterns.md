@@ -86,15 +86,15 @@ flowchart TB
   Runtime[CUDARuntime]
   Done[Result]
 
-  Placement --> Guard
-  Guard --> Decision
-  Decision -->|MoveToCpu| BuildEffect
-  Decision -->|StayOnGpu| Done
-  Decision -->|RejectTransfer| Reject
-  BuildEffect --> YieldEffect
-  YieldEffect --> Interpreter
-  Interpreter --> Runtime
-  Runtime --> Done
+  Placement -->|state| Guard
+  Guard -->|guard| Decision
+  Decision -->|move| BuildEffect
+  Decision -->|stay| Done
+  Decision -->|reject| Reject
+  BuildEffect -->|build| YieldEffect
+  YieldEffect -->|yield| Interpreter
+  Interpreter -->|execute| Runtime
+  Runtime -->|result| Done
 ```
 
 - `Placement` encodes explicit device, pinned status, and size caps (per

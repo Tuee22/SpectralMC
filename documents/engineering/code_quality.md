@@ -16,7 +16,7 @@ flowchart TB
   Immutability[Immutability Doctrine]
   Interpreter[Effect Interpreter]
   Facade[PyTorch Facade]
-  CPUvsGPU[CPU/GPU Compute]
+  CPUvsGPU[CPU GPU Compute]
   Testing[Testing]
   Docs[Documentation Standards]
 
@@ -38,7 +38,7 @@ flowchart TB
 | Frozen data + safe updates | [Immutability Doctrine](immutability_doctrine.md) |
 | Effect ADTs + interpreter boundary | [Effect Interpreter Doctrine](effect_interpreter.md) |
 | Deterministic PyTorch import/device | [PyTorch Facade Pattern](pytorch_facade.md) |
-| CPU init → GPU compute rules | [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) |
+| CPU init → GPU compute rules | [CPU GPU Compute Policy](cpu_gpu_compute_policy.md) |
 | Determinism proofs | [Reproducibility Proofs](reproducibility_proofs.md) |
 | Testing gates | [Testing](testing.md) |
 

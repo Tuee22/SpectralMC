@@ -15,7 +15,7 @@ flowchart TB
   CQ[Code Quality]
   Purity[Purity Doctrine]
   Interpreter[Effect Interpreter]
-  CPUvsGPU[CPU/GPU Compute]
+  CPUvsGPU[CPU GPU Compute]
   Facade[PyTorch Facade]
   Repro[Reproducibility Proofs]
   Docker[Docker Workflow]
@@ -74,7 +74,7 @@ flowchart TB
   Decision[Pure Decision ADT]
   Effects[Effect ADTs]
   Interpreter[Interpreters]
-  Infra[GPU/Storage/RNG Infra]
+  Infra[GPU Storage RNG Infra]
 
   Reality --> Model
   Model --> Decision
@@ -105,7 +105,7 @@ flowchart TB
 
 - [Effect Interpreter Doctrine](effect_interpreter.md)
 - [Purity Doctrine](purity_doctrine.md)
-- [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)
+- [CPU GPU Compute Policy](cpu_gpu_compute_policy.md)
 - [PyTorch Facade Pattern](pytorch_facade.md)
 - [Reproducibility Proofs](reproducibility_proofs.md)
 - [Docker Workflow](docker_workflow.md)
