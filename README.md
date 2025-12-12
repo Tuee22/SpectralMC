@@ -94,7 +94,7 @@ flowchart TB
 - **CVNN Training**: Updates the parameters of a complex-valued neural network to approximate the characteristic function.
 - **CVNN Inference**: Produces an estimated distribution (via the characteristic function), enabling computation of means, moments, quantiles, and other metrics.
 - **Blockchain Model Versioning**: Production-ready S3-based version control for trained models with:
-  - Automatic commits during training (auto_commit, periodic checkpoints)
+  - Automatic commits during training (explicit commit plans for final/periodic checkpoints)
   - Immutable version history with SHA256 content addressing
   - Atomic commits with CAS (Compare-And-Swap) using ETag
   - InferenceClient for production model serving (pinned/tracking modes)
@@ -152,7 +152,12 @@ Train models with automatic blockchain commits:
 
 ```python
 # File: README.md
-from spectralmc.gbm_trainer import GbmCVNNPricer, TrainingConfig
+from spectralmc.gbm_trainer import (
+    FinalAndIntervalCommit,
+    FinalCommit,
+    GbmCVNNPricer,
+    TrainingConfig,
+)
 from spectralmc.storage import AsyncBlockchainModelStore
 
 async with AsyncBlockchainModelStore("my-model-bucket") as store:
@@ -168,16 +173,18 @@ async with AsyncBlockchainModelStore("my-model-bucket") as store:
     pricer.train(
         training_config,
         blockchain_store=store,
-        auto_commit=True,
-        commit_message_template="Final: step={step}, loss={loss:.4f}"
+        commit_plan=FinalCommit(
+            commit_message_template="Final: step={step}, loss={loss:.4f}"
+        ),
     )
 
     # Or commit every 100 batches during training
     pricer.train(
         training_config,
         blockchain_store=store,
-        auto_commit=True,
-        commit_interval=100
+        commit_plan=FinalAndIntervalCommit(
+            interval=100, commit_message_template="Checkpoint step={step}"
+        ),
     )
 ```
 

@@ -22,6 +22,8 @@ from spectralmc.cvnn_factory import (
 from spectralmc.errors.trainer import InvalidTrainerConfig
 from spectralmc.gbm_trainer import (
     ComplexValuedModel,
+    FinalCommit,
+    IntervalCommit,
     GbmCVNNPricer,
     GbmCVNNPricerConfig,
     TrainingConfig,
@@ -79,11 +81,7 @@ def make_test_config(model: ComplexValuedModel, global_step: int = 0) -> GbmCVNN
         dtype=Precision.float32,
     )
 
-    bs_config = make_black_scholes_config(
-        sim_params=sim_params,
-        simulate_log_return=True,
-        normalize_forwards=True,
-    )
+    bs_config = make_black_scholes_config(sim_params=sim_params)
 
     cpu_rng_state = torch.get_rng_state().numpy().tobytes()
     cuda_rng_states = [state.cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()]
@@ -111,10 +109,10 @@ def make_test_config(model: ComplexValuedModel, global_step: int = 0) -> GbmCVNN
 
 
 @pytest.mark.asyncio
-async def test_training_with_auto_commit(
+async def test_training_manual_commit_after_training(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
-    """Test training with manual commit after completion (auto_commit skipped in async context)."""
+    """Train without commit plan and manually commit afterwards."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
     pricer = expect_success(GbmCVNNPricer.create(config))
@@ -125,7 +123,7 @@ async def test_training_with_auto_commit(
         learning_rate=0.001,
     )
 
-    # Train (auto_commit will be skipped due to async context)
+    # Train with no blockchain integration
     pricer.train(training_config)
 
     # Manually commit after training
@@ -192,10 +190,10 @@ async def test_training_without_storage_backward_compat(
 
 
 @pytest.mark.asyncio
-async def test_training_validation_auto_commit_requires_store(
+async def test_training_validation_commit_plan_requires_store(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
-    """Test that auto_commit=True without blockchain_store raises error."""
+    """Test that commit plan requiring storage fails without blockchain_store."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
     pricer = expect_success(GbmCVNNPricer.create(config))
@@ -207,20 +205,17 @@ async def test_training_validation_auto_commit_requires_store(
     )
 
     # Should return Failure with InvalidTrainerConfig
-    result = pricer.train(
-        training_config,
-        auto_commit=True,  # Without blockchain_store
-    )
+    result = pricer.train(training_config, commit_plan=FinalCommit())
     error = expect_failure(result)
     assert isinstance(error, InvalidTrainerConfig)
-    assert "blockchain_store" in error.message
+    assert "commit_plan requires blockchain_store" in error.message
 
 
 @pytest.mark.asyncio
-async def test_training_validation_commit_interval_requires_store(
+async def test_training_validation_interval_commit_requires_store(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
-    """Test that commit_interval without blockchain_store raises error."""
+    """Test that interval commit plan without blockchain_store raises error."""
     model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
     config = make_test_config(model)
     pricer = expect_success(GbmCVNNPricer.create(config))
@@ -232,13 +227,10 @@ async def test_training_validation_commit_interval_requires_store(
     )
 
     # Should return Failure with InvalidTrainerConfig
-    result = pricer.train(
-        training_config,
-        commit_interval=3,  # Without blockchain_store
-    )
+    result = pricer.train(training_config, commit_plan=IntervalCommit(interval=3))
     error = expect_failure(result)
     assert isinstance(error, InvalidTrainerConfig)
-    assert "blockchain_store" in error.message
+    assert "commit_plan requires blockchain_store" in error.message
 
 
 @pytest.mark.asyncio

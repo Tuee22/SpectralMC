@@ -44,7 +44,9 @@ from spectralmc.async_normals import (
 )
 from spectralmc.effects import (
     EffectSequence,
+    ForwardNormalization,
     GenerateNormals,
+    PathScheme,
     SimulatePaths,
     StreamSync,
     sequence_effects,
@@ -146,16 +148,15 @@ class BlackScholesConfig(BaseModel):
     ----------
     sim_params
         Numerical parameters & precision.
-    simulate_log_return
-        Use a log-Euler scheme (variance reduction).
-    normalize_forwards
-        Normalise each time-slice to the analytic forward (bias
-        reduction).
+    path_scheme
+        Explicit path scheme (log-Euler vs simple Euler).
+    normalization
+        Forward normalization intent (normalize vs raw paths).
     """
 
     sim_params: SimulationParams
-    simulate_log_return: bool = True
-    normalize_forwards: bool = True
+    path_scheme: PathScheme = PathScheme.LOG_EULER
+    normalization: ForwardNormalization = ForwardNormalization.NORMALIZE
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -199,15 +200,15 @@ def build_simulation_params(
 def build_black_scholes_config(
     *,
     sim_params: SimulationParams,
-    simulate_log_return: bool = True,
-    normalize_forwards: bool = True,
+    path_scheme: PathScheme = PathScheme.LOG_EULER,
+    normalization: ForwardNormalization = ForwardNormalization.NORMALIZE,
 ) -> Result[BlackScholesConfig, InvalidBlackScholesConfig]:
     """Construct a validated BlackScholesConfig."""
     config_result = validate_model(
         BlackScholesConfig,
         sim_params=sim_params,
-        simulate_log_return=simulate_log_return,
-        normalize_forwards=normalize_forwards,
+        path_scheme=path_scheme,
+        normalization=normalization,
     )
     match config_result:
         case Failure(error):
@@ -333,8 +334,8 @@ class BlackScholes:
                 return Success(
                     BlackScholesConfig(
                         sim_params=sp,
-                        simulate_log_return=self._cfg.simulate_log_return,
-                        normalize_forwards=self._cfg.normalize_forwards,
+                        path_scheme=self._cfg.path_scheme,
+                        normalization=self._cfg.normalization,
                     )
                 )
 
@@ -387,8 +388,8 @@ class BlackScholes:
                             expiry=inputs.T,
                             timesteps=self._sp.timesteps,
                             batches=self._sp.total_paths(),
-                            simulate_log_return=self._cfg.simulate_log_return,
-                            normalize_forwards=self._cfg.normalize_forwards,
+                            path_scheme=self._cfg.path_scheme,
+                            normalization=self._cfg.normalization,
                             input_normals_id="generated_normals",
                         ),
                         StreamSync(stream_type="numba"),
@@ -422,7 +423,7 @@ class BlackScholes:
             inputs.r,
             inputs.d,
             inputs.v,
-            self._cfg.simulate_log_return,
+            self._cfg.path_scheme is PathScheme.LOG_EULER,
         )
 
         with self._cp_stream:
@@ -432,11 +433,11 @@ class BlackScholes:
 
         # optional forward normalisation
         self._numba_stream.synchronize()
-        match self._cfg.normalize_forwards:
-            case True:
+        match self._cfg.normalization:
+            case ForwardNormalization.NORMALIZE:
                 row_means = cp.mean(sims, axis=1, keepdims=True).squeeze()
                 sims *= cp.expand_dims(forwards / row_means, 1)
-            case False:
+            case ForwardNormalization.RAW:
                 pass
 
         self._cp_stream.synchronize()

@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 import torch
 
+from spectralmc.effects import ForwardNormalization, PathScheme
 from spectralmc.gbm import (
     BlackScholes,
     build_black_scholes_config,
@@ -89,8 +90,8 @@ def _make_engine(precision: Precision, *, skip: int = 0) -> BlackScholes:
 
     match build_black_scholes_config(
         sim_params=sim_params,
-        simulate_log_return=True,
-        normalize_forwards=False,
+        path_scheme=PathScheme.LOG_EULER,
+        normalization=ForwardNormalization.RAW,
     ):
         case Failure(cfg_err):
             pytest.fail(f"BlackScholesConfig creation failed: {cfg_err}")

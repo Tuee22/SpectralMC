@@ -41,12 +41,6 @@ def _flatten(tree: cpu_gpu_transfer.TensorTree) -> list[torch.Tensor]:
 assert torch.cuda.is_available(), "CUDA device required but none detected."
 
 
-@pytest.fixture(params=[True, False], ids=["pinned_required", "staged_allowed"])
-def pinned_required(request: pytest.FixtureRequest) -> bool:
-    """Toggle pinned requirement to exercise planner variants."""
-    return bool(request.param)
-
-
 ###############################################################################
 # CPU-only tests                                                              #
 ###############################################################################
@@ -70,7 +64,7 @@ def test_cuda_requested_but_not_available(monkeypatch: pytest.MonkeyPatch) -> No
 ###############################################################################
 
 
-def test_cpu_to_cuda_and_back_roundtrip(pinned_required: bool) -> None:
+def test_cpu_to_cuda_and_back_roundtrip() -> None:
     """Test GPU→CPU transfer and roundtrip (intentional CPU usage)."""
     original: cpu_gpu_transfer.TensorTree = {
         "a": torch.randn(2, 3),
@@ -112,7 +106,7 @@ def test_unpinned_host_to_cuda_rejected_when_staging_disabled() -> None:
     }
 
     result = cpu_gpu_transfer.move_tensor_tree(
-        original, dest=TransferDestination.CUDA, allow_stage=False
+        original, dest=TransferDestination.CUDA, stage_policy=cpu_gpu_transfer.StagePolicy.FORBID
     )
 
     assert isinstance(result, Failure)

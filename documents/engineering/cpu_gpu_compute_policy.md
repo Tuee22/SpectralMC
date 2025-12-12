@@ -8,7 +8,7 @@
 > **Purpose**: Define device placement rules for deterministic CPU setup followed by GPU execution.
 
 ## Cross-References
-- [PyTorch Facade](pytorch_facade.md)
+- [Torch Runtime (facade removed)](pytorch_facade.md)
 - [Coding Standards](coding_standards.md)
 - [Testing Requirements](testing_requirements.md)
 - [Reproducibility Proofs](reproducibility_proofs.md)
@@ -24,15 +24,18 @@ SpectralMC uses a **two-phase architecture**: deterministic CPU initialization â
 
 ### Phase 1: CPU Initialization
 
-Models are built on CPU with deterministic Sobol-based weight initialization:
+Models are built on CPU with deterministic Sobol-based weight initialization using the injected torch
+handle from the TorchRuntime effect:
 
 ```python
 # File: documents/engineering/cpu_gpu_compute_policy.md
 from spectralmc.cvnn_factory import build_model
-from spectralmc.models.torch import Device, default_device, default_dtype
+from spectralmc.models.torch import Device
 from spectralmc.result import Failure, Result, Success
 from spectralmc.errors.cvnn_factory import CVNNFactoryError
-import torch
+
+# torch_handle is provided by the TorchRuntime configuration effect
+torch = torch_handle
 
 def _unwrap_model(result: Result[torch.nn.Module, CVNNFactoryError]) -> torch.nn.Module:
     match result:
@@ -41,11 +44,11 @@ def _unwrap_model(result: Result[torch.nn.Module, CVNNFactoryError]) -> torch.nn
         case Failure(error):
             raise RuntimeError(f"Failed to build CVNN deterministically: {error}")
 
-# CORRECT PATTERN: Initialize on CPU
+# CORRECT PATTERN: Initialize on CPU with explicit device/dtype args, not global defaults
 cpu_dev = Device.cpu.to_torch()
-with default_device(cpu_dev), default_dtype(torch.float32):
-    # All parameters created on CPU with deterministic Sobol init
-    model = _unwrap_model(build_model(config))
+torch_dtype = torch.float32
+model = _unwrap_model(build_model(config))
+model = model.to(device=cpu_dev, dtype=torch_dtype)
 
 # Verify CPU initialization
 assert next(model.parameters()).device.type == "cpu"
@@ -389,4 +392,4 @@ grep -r 'else.*cpu' src/ tests/
 - **Debug validation**: `__debug__` guards for zero-overhead production
 - **Decision tree**: CPU for determinism/I/O, GPU for compute
 
-See also: [PyTorch Facade](pytorch_facade.md), [Coding Standards](coding_standards.md), [Testing Requirements](testing_requirements.md)
+See also: [Torch Runtime](pytorch_facade.md), [Coding Standards](coding_standards.md), [Testing Requirements](testing_requirements.md)

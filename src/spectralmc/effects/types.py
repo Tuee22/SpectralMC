@@ -37,8 +37,10 @@ from spectralmc.effects.metadata import (
 )
 from spectralmc.effects.montecarlo import (
     ComputeFFT,
+    ForwardNormalization,
     GenerateNormals,
     MonteCarloEffect,
+    PathScheme,
     SimulatePaths,
 )
 from spectralmc.effects.rng import (
@@ -100,6 +102,8 @@ __all__ = [
     "GenerateNormals",
     "SimulatePaths",
     "ComputeFFT",
+    "PathScheme",
+    "ForwardNormalization",
     # Storage effects
     "StorageEffect",
     "ReadObject",

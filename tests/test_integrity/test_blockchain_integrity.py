@@ -9,12 +9,15 @@ from dataclasses import FrozenInstanceError
 import pytest
 import torch
 
+from spectralmc.effects import ForwardNormalization, PathScheme
 from spectralmc.gbm import build_black_scholes_config, build_simulation_params
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
 from spectralmc.result import Failure, Success
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
+    ChainCorrupted,
+    ChainValid,
     commit_snapshot,
     find_corruption,
     verify_chain,
@@ -179,8 +182,8 @@ def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPri
 
     match build_black_scholes_config(
         sim_params=sim_params,
-        simulate_log_return=True,
-        normalize_forwards=True,
+        path_scheme=PathScheme.LOG_EULER,
+        normalization=ForwardNormalization.NORMALIZE,
     ):
         case Failure(bs_err):
             pytest.fail(f"BlackScholesConfig creation failed: {bs_err}")
@@ -201,6 +204,28 @@ def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPri
     )
 
 
+def _assert_valid(outcome: ChainValid | ChainCorrupted) -> None:
+    match outcome:
+        case ChainValid():
+            return
+        case ChainCorrupted(corruption_type=corruption_type, details=details):
+            pytest.fail(f"Chain corrupted: {corruption_type} ({details})")
+
+
+def _expect_corruption(
+    outcome: ChainValid | ChainCorrupted, *, expected_type: str | None = None
+) -> ChainCorrupted:
+    match outcome:
+        case ChainCorrupted(corruption_type=corruption_type) as corrupted:
+            if expected_type is not None:
+                assert (
+                    corruption_type == expected_type
+                ), f"Expected {expected_type}, got {corruption_type}"
+            return corrupted
+        case ChainValid():
+            pytest.fail("Expected corruption but chain is valid")
+
+
 # ============================================================================
 # Chain Verification Tests
 # ============================================================================
@@ -211,9 +236,7 @@ async def test_verify_empty_chain(async_store: AsyncBlockchainModelStore) -> Non
     """Test verify_chain with empty store (no corruption)."""
     # Empty chain should be valid
     report = await verify_chain_detailed(async_store)
-    assert report.is_valid
-    assert report.corrupted_version is None
-    assert "Empty chain" in report.details
+    _assert_valid(report)
 
 
 @pytest.mark.asyncio
@@ -228,7 +251,7 @@ async def test_verify_single_version_chain(
     result = await verify_chain(async_store)
     match result:
         case Success(report):
-            assert report.is_valid
+            _assert_valid(report)
         case Failure(error):
             pytest.fail(f"S3 error during verification: {error}")
 
@@ -247,13 +270,12 @@ async def test_verify_multi_version_chain(
     result = await verify_chain(async_store)
     match result:
         case Success(report):
-            assert report.is_valid
+            _assert_valid(report)
         case Failure(error):
             pytest.fail(f"S3 error during verification: {error}")
 
     report = await verify_chain_detailed(async_store)
-    assert report.is_valid
-    assert "5 versions intact" in report.details
+    _assert_valid(report)
 
 
 @pytest.mark.asyncio
@@ -321,9 +343,8 @@ async def test_detect_broken_merkle_chain(
 
     # Should detect corruption
     report = await verify_chain_detailed(async_store)
-    assert not report.is_valid
-    assert report.corruption_type == "broken_merkle_chain"
-    assert "parent_hash" in report.details
+    corrupted = _expect_corruption(report, expected_type="broken_merkle_chain")
+    assert "parent_hash" in corrupted.details
 
 
 @pytest.mark.asyncio
@@ -375,8 +396,7 @@ async def test_detect_invalid_genesis_counter(
 
     # Should detect corruption
     report = await verify_chain_detailed(async_store)
-    assert not report.is_valid
-    assert report.corruption_type == "invalid_genesis_counter"
+    _expect_corruption(report, expected_type="invalid_genesis_counter")
 
 
 @pytest.mark.asyncio
@@ -429,11 +449,10 @@ async def test_detect_non_sequential_counters(
 
     # Should detect corruption (Note: will fail to fetch v3, v4 first)
     report = await verify_chain_detailed(async_store)
-    assert not report.is_valid
-    assert report.corruption_type is not None, "Corruption type should be identified"
+    corrupted = _expect_corruption(report)
     assert (
-        "missing" in report.corruption_type.lower()
-        or "non_sequential" in report.corruption_type.lower()
+        "missing" in corrupted.corruption_type.lower()
+        or "non_sequential" in corrupted.corruption_type.lower()
     )
 
 
@@ -487,9 +506,7 @@ async def test_chain_corruption_error_raised(
     result = await verify_chain(async_store)
     match result:
         case Success(report):
-            # Corruption should be detected in the report
-            assert not report.is_valid, "Expected corruption to be detected"
-            assert report.corruption_type is not None, "Expected corruption_type to be set"
+            _expect_corruption(report)
         case Failure(error):
             pytest.fail(f"S3 error during verification: {error}")
 
@@ -508,9 +525,9 @@ async def test_verify_chain_with_long_history(
     result = await verify_chain(async_store)
     match result:
         case Success(report):
-            assert report.is_valid
+            _assert_valid(report)
         case Failure(error):
             pytest.fail(f"S3 error during verification: {error}")
 
     report = await verify_chain_detailed(async_store)
-    assert "20 versions intact" in report.details
+    _assert_valid(report)

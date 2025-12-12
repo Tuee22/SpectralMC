@@ -54,7 +54,7 @@ from .errors import (
     StorageError,
     VersionNotFoundError,
 )
-from .gc import run_gc
+from .gc import ExecuteGC, PreviewGC, run_gc
 from .s3_errors import (
     S3AccessDenied,
     S3BucketNotFound,
@@ -64,7 +64,7 @@ from .s3_errors import (
 )
 from .store import AsyncBlockchainModelStore
 from .tensorboard_writer import log_blockchain_to_tensorboard
-from .verification import find_corruption, verify_chain
+from .verification import ChainCorrupted, ChainValid, find_corruption, verify_chain
 
 
 def assert_never(value: Never) -> Never:
@@ -104,7 +104,7 @@ async def cmd_verify(bucket_name: str, detailed: bool = False) -> int:
         result = await verify_chain(store)
 
         match result:
-            case Success(report) if report.is_valid and detailed:
+            case Success(ChainValid(details=details)) if detailed:
                 # Detailed output for valid chain
                 print(
                     json.dumps(
@@ -112,19 +112,27 @@ async def cmd_verify(bucket_name: str, detailed: bool = False) -> int:
                             "is_valid": True,
                             "corrupted_version": None,
                             "corruption_type": None,
-                            "details": report.details,
+                            "details": details,
                         },
                         indent=2,
                     )
                 )
                 return 0
 
-            case Success(report) if report.is_valid:
+            case Success(ChainValid(details=details)):
                 # Simple output for valid chain
                 print(f"✓ Chain integrity verified for bucket: {bucket_name}")
+                if details:
+                    print(f"  {details}")
                 return 0
 
-            case Success(report):
+            case Success(
+                ChainCorrupted(
+                    corrupted_version=corrupted_version,
+                    corruption_type=corruption_type,
+                    details=details,
+                )
+            ):
                 # Chain is corrupted (is_valid = False)
                 if detailed:
                     print(
@@ -132,12 +140,10 @@ async def cmd_verify(bucket_name: str, detailed: bool = False) -> int:
                             {
                                 "is_valid": False,
                                 "corrupted_version": (
-                                    report.corrupted_version.counter
-                                    if report.corrupted_version
-                                    else None
+                                    corrupted_version.counter if corrupted_version else None
                                 ),
-                                "corruption_type": report.corruption_type,
-                                "details": report.details,
+                                "corruption_type": corruption_type,
+                                "details": details,
                             },
                             indent=2,
                         ),
@@ -145,8 +151,8 @@ async def cmd_verify(bucket_name: str, detailed: bool = False) -> int:
                     )
                 else:
                     print("✗ Chain corruption detected:", file=sys.stderr)
-                    print(f"  Type: {report.corruption_type}", file=sys.stderr)
-                    print(f"  Details: {report.details}", file=sys.stderr)
+                    print(f"  Type: {corruption_type}", file=sys.stderr)
+                    print(f"  Details: {details}", file=sys.stderr)
                 return 1
 
             case Failure(S3BucketNotFound(bucket, msg)):
@@ -312,7 +318,7 @@ async def cmd_inspect(bucket_name: str, version_id: str) -> int:
 
 async def cmd_gc_preview(bucket_name: str, keep_versions: int, protect_tags: str = "") -> int:
     """
-    Preview garbage collection (dry run).
+    Preview garbage collection (no deletions).
 
     Args:
         bucket_name: S3 bucket name
@@ -331,7 +337,10 @@ async def cmd_gc_preview(bucket_name: str, keep_versions: int, protect_tags: str
 
             # Run GC in dry-run mode
             result = await run_gc(
-                store, keep_versions=keep_versions, protect_tags=tags, dry_run=True
+                store,
+                keep_versions=keep_versions,
+                protect_tags=tags,
+                mode=PreviewGC(),
             )
 
             match result:
@@ -383,7 +392,7 @@ async def cmd_gc_run(
             # First, preview what will be deleted
             if not confirm:
                 preview_result = await run_gc(
-                    store, keep_versions=keep_versions, protect_tags=tags, dry_run=True
+                    store, keep_versions=keep_versions, protect_tags=tags, mode=PreviewGC()
                 )
                 match preview_result:
                     case Success(preview_report):
@@ -405,7 +414,7 @@ async def cmd_gc_run(
 
             # Actually run GC
             result = await run_gc(
-                store, keep_versions=keep_versions, protect_tags=tags, dry_run=False
+                store, keep_versions=keep_versions, protect_tags=tags, mode=ExecuteGC()
             )
             match result:
                 case Success(report):

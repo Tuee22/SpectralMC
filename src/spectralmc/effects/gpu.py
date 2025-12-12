@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from spectralmc.models.cpu_gpu_transfer import OutputPinning, StagePolicy
 from spectralmc.models.torch import Device
 from spectralmc.result import Failure, Result, Success
 
@@ -52,8 +53,8 @@ class TensorTransfer:
         source_device: Device to transfer from.
         target_device: Device to transfer to.
         tensor_id: Opaque identifier for the tensor or TensorTree.
-        pinned_required: Whether host memory must be pinned (e.g., for non-blocking CUDA).
-        allow_stage: Whether staging through pinned host memory is allowed.
+        output_pinning: Desired host pinning state when targeting CPU.
+        stage_policy: Whether staging through pinned host memory is allowed.
 
     Example:
         >>> match tensor_transfer(Device.cuda, Device.cpu, "weights"):
@@ -67,8 +68,8 @@ class TensorTransfer:
     source_device: Device = Device.cuda
     target_device: Device = Device.cpu
     tensor_id: str = ""
-    pinned_required: bool = False
-    allow_stage: bool = True
+    output_pinning: OutputPinning = OutputPinning.UNPINNED
+    stage_policy: StagePolicy = StagePolicy.ALLOW
 
 
 def tensor_transfer(
@@ -76,8 +77,8 @@ def tensor_transfer(
     target_device: Device,
     tensor_id: str = "",
     *,
-    pinned_required: bool = False,
-    allow_stage: bool = True,
+    output_pinning: OutputPinning = OutputPinning.UNPINNED,
+    stage_policy: StagePolicy = StagePolicy.ALLOW,
 ) -> Result[TensorTransfer, InvalidTransferError]:
     """Create TensorTransfer, returning Failure if devices are identical.
 
@@ -108,8 +109,8 @@ def tensor_transfer(
                 source_device=source_device,
                 target_device=target_device,
                 tensor_id=tensor_id,
-                pinned_required=pinned_required,
-                allow_stage=allow_stage,
+                output_pinning=output_pinning,
+                stage_policy=stage_policy,
             )
         )
     )

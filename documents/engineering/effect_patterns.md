@@ -107,7 +107,7 @@ flowchart TB
 
 | Mistake | Fix | SSoT |
 |---------|-----|------|
-| Direct `torch` import in program | Import facade first; keep program pure | pytorch_facade.md |
+| Direct `torch` import in program | Inject torch handle from TorchRuntime effect; keep program pure | pytorch_facade.md |
 | Conditional GPU fallback (`if cuda else cpu`) | Enforce `cuda:0` and fail fast | cpu_gpu_compute_policy.md |
 | Side effects inside generator | Yield effect ADTs and interpret | effect_interpreter.md |
 | Non-exhaustive matches on Results/ADTs | Add `assert_never` branches | purity_doctrine.md |

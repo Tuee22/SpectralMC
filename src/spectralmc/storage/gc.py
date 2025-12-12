@@ -50,6 +50,23 @@ class GCReport:
     dry_run: bool
 
 
+@dataclass(frozen=True)
+class PreviewGC:
+    """Preview mode for garbage collection (no deletions)."""
+
+    kind: str = "PreviewGC"
+
+
+@dataclass(frozen=True)
+class ExecuteGC:
+    """Execution mode for garbage collection (perform deletions)."""
+
+    kind: str = "ExecuteGC"
+
+
+GCMode = PreviewGC | ExecuteGC
+
+
 class GarbageCollector:
     """
     Garbage collector for blockchain model storage.
@@ -60,7 +77,7 @@ class GarbageCollector:
     - Tagged/protected versions (e.g., production releases)
     - Chain integrity (never orphans versions)
 
-    Supports dry-run mode for safe preview of deletions.
+    Supports explicit preview/execute modes instead of boolean toggles.
 
     Usage:
         ```python
@@ -68,13 +85,13 @@ class GarbageCollector:
         policy = RetentionPolicy(keep_versions=10)
         gc = GarbageCollector(store, policy)
 
-        # Dry run first
-        report = await gc.collect(dry_run=True)
+        # Preview first
+        report = await gc.collect(mode=PreviewGC())
         print(f"Would delete: {report.deleted_versions}")
         print(f"Would free: {report.bytes_freed} bytes")
 
         # Actually delete
-        report = await gc.collect(dry_run=False)
+        report = await gc.collect(mode=ExecuteGC())
         ```
     """
 
@@ -89,17 +106,19 @@ class GarbageCollector:
         self.store = store
         self.policy = policy
 
-    async def collect(self, dry_run: bool = True) -> Result[GCReport, GCError]:
+    async def collect(self, mode: GCMode = PreviewGC()) -> Result[GCReport, GCError]:
         """
         Run garbage collection.
 
         Args:
-            dry_run: If True, only report what would be deleted without deleting
+            mode: Explicit GC mode (PreviewGC or ExecuteGC)
 
         Returns:
             Success(GCReport) with deletion summary
             Failure(GCError) if policy would violate minimum version requirement
         """
+        dry_run = isinstance(mode, PreviewGC)
+
         # Fetch all versions
         head_result = await self.store.get_head()
 
@@ -138,6 +157,7 @@ class GarbageCollector:
             )
 
         # Calculate bytes to free
+        dry_run = isinstance(mode, PreviewGC)
         bytes_freed = 0
         if not dry_run:
             # Actually delete versions
@@ -292,7 +312,7 @@ async def run_gc(
     keep_versions: int | None = None,
     keep_min_versions: int = 3,
     protect_tags: list[int] | None = None,
-    dry_run: bool = True,
+    mode: GCMode = PreviewGC(),
 ) -> Result[GCReport, GCError]:
     """
     Convenience function to run garbage collection.
@@ -302,7 +322,7 @@ async def run_gc(
         keep_versions: Number of recent versions to keep (None = keep all)
         keep_min_versions: Minimum versions to always keep
         protect_tags: Version counters to always protect
-        dry_run: If True, only report what would be deleted
+        mode: Explicit GC mode (PreviewGC or ExecuteGC)
 
     Returns:
         Success(GCReport) with deletion summary
@@ -312,14 +332,14 @@ async def run_gc(
         ```python
         async with AsyncBlockchainModelStore("bucket") as store:
             # Dry run: preview deletions
-            match await run_gc(store, keep_versions=10, dry_run=True):
+            match await run_gc(store, keep_versions=10, mode=PreviewGC()):
                 case Success(report):
                     print(f"Would delete: {len(report.deleted_versions)} versions")
                 case Failure(error):
                     print(f"GC error: {error.message}")
 
             # Actually delete
-            match await run_gc(store, keep_versions=10, dry_run=False):
+            match await run_gc(store, keep_versions=10, mode=ExecuteGC()):
                 case Success(report):
                     print(f"Deleted {len(report.deleted_versions)} versions")
                 case Failure(error):
@@ -333,4 +353,4 @@ async def run_gc(
     )
 
     gc = GarbageCollector(store, policy)
-    return await gc.collect(dry_run=dry_run)
+    return await gc.collect(mode=mode)

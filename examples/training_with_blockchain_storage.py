@@ -22,9 +22,11 @@ from spectralmc.gbm import BlackScholes, build_black_scholes_config, build_simul
 from spectralmc.gbm_trainer import (
     GbmCVNNPricerConfig,
     GbmCVNNPricer,
+    FinalAndIntervalCommit,
     TrainingConfig,
 )
 from spectralmc.models.numerical import Precision
+from spectralmc.models.torch import Device
 from spectralmc.result import Success, Failure
 from spectralmc.sobol_sampler import BoundSpec, build_bound_spec
 from spectralmc.storage import (
@@ -33,6 +35,8 @@ from spectralmc.storage import (
     TrackingMode,
     load_snapshot_from_checkpoint,
 )
+
+assert torch.cuda.is_available(), "CUDA required for SpectralMC blockchain training example"
 
 
 def create_simple_cvnn(
@@ -78,11 +82,7 @@ def create_training_config() -> GbmCVNNPricerConfig:
             pass
 
     # Create model
-    model = create_simple_cvnn()
-
-    # Move to CUDA if available
-    if torch.cuda.is_available():
-        model = model.cuda()
+    model = create_simple_cvnn().to(device=Device.cuda.to_torch())
 
     # Domain bounds for option parameters
     domain_bounds = {
@@ -96,11 +96,7 @@ def create_training_config() -> GbmCVNNPricerConfig:
 
     # Get RNG state for reproducibility
     cpu_rng_state = torch.get_rng_state().numpy().tobytes()
-    cuda_rng_states = []
-    if torch.cuda.is_available():
-        cuda_rng_states = [
-            state.cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()
-        ]
+    cuda_rng_states = [state.cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()]
 
     return GbmCVNNPricerConfig(
         cfg=bs_config,
@@ -151,9 +147,10 @@ async def train_with_blockchain() -> None:
         pricer.train(
             training_config,
             blockchain_store=store,
-            auto_commit=True,  # Commit after training
-            commit_interval=10,  # Commit every 10 batches
-            commit_message_template="Training checkpoint: step={step}, loss={loss:.6f}",
+            commit_plan=FinalAndIntervalCommit(
+                interval=10,
+                commit_message_template="Training checkpoint: step={step}, loss={loss:.6f}",
+            ),
         )
 
         print("\n5. Training complete!")
@@ -170,10 +167,7 @@ async def train_with_blockchain() -> None:
 
                 # Load model back from blockchain
                 print("\n7. Loading model from blockchain storage...")
-                model_template = create_simple_cvnn()
-                if torch.cuda.is_available():
-                    model_template = model_template.cuda()
-
+                model_template = create_simple_cvnn().to(device=Device.cuda.to_torch())
                 config_template = create_training_config()
 
                 loaded_snapshot = await load_snapshot_from_checkpoint(
@@ -228,9 +222,7 @@ async def demonstrate_inference_client() -> None:
 
     async with AsyncBlockchainModelStore(bucket_name) as store:
         # Create template
-        model_template = create_simple_cvnn()
-        if torch.cuda.is_available():
-            model_template = model_template.cuda()
+        model_template = create_simple_cvnn().to(device=Device.cuda.to_torch())
         config_template = create_training_config()
 
         # Use InferenceClient in tracking mode
@@ -277,11 +269,6 @@ async def demonstrate_inference_client() -> None:
 
 async def main() -> None:
     """Run all examples."""
-    # Check CUDA availability
-    if not torch.cuda.is_available():
-        print("WARNING: CUDA not available. This example requires a CUDA-capable GPU.")
-        print("The code will attempt to run but may fail.\n")
-
     # Run training example
     await train_with_blockchain()
 

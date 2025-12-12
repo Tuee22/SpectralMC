@@ -10,7 +10,9 @@ from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
+    ExecuteGC,
     GarbageCollector,
+    PreviewGC,
     RetentionPolicy,
     VersionNotFoundError,
     commit_snapshot,
@@ -39,11 +41,7 @@ def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPri
         dtype=Precision.float32,
     )
 
-    bs_config = make_black_scholes_config(
-        sim_params=sim_params,
-        simulate_log_return=True,
-        normalize_forwards=True,
-    )
+    bs_config = make_black_scholes_config(sim_params=sim_params)
 
     cpu_rng_state = torch.get_rng_state().numpy().tobytes()
 
@@ -65,7 +63,7 @@ async def test_gc_empty_chain(async_store: AsyncBlockchainModelStore) -> None:
     policy = RetentionPolicy(keep_versions=5)
     gc = GarbageCollector(async_store, policy)
 
-    report = expect_success(await gc.collect(dry_run=True))
+    report = expect_success(await gc.collect(mode=PreviewGC()))
 
     assert len(report.deleted_versions) == 0
     assert len(report.protected_versions) == 0
@@ -84,7 +82,7 @@ async def test_gc_keep_all_versions(async_store: AsyncBlockchainModelStore) -> N
     policy = RetentionPolicy(keep_versions=None)  # Keep all
     gc = GarbageCollector(async_store, policy)
 
-    report = expect_success(await gc.collect(dry_run=True))
+    report = expect_success(await gc.collect(mode=PreviewGC()))
 
     assert len(report.deleted_versions) == 0
     assert len(report.protected_versions) == 5
@@ -103,7 +101,7 @@ async def test_gc_keep_recent_versions(async_store: AsyncBlockchainModelStore) -
     policy = RetentionPolicy(keep_versions=5)
     gc = GarbageCollector(async_store, policy)
 
-    report = expect_success(await gc.collect(dry_run=True))
+    report = expect_success(await gc.collect(mode=PreviewGC()))
 
     # Should delete v0-v4, keep v5-v9
     # But v0 (genesis) is always protected, so actually:
@@ -130,7 +128,7 @@ async def test_gc_genesis_always_protected(
     policy = RetentionPolicy(keep_versions=1, keep_min_versions=1)
     gc = GarbageCollector(async_store, policy)
 
-    report = expect_success(await gc.collect(dry_run=True))
+    report = expect_success(await gc.collect(mode=PreviewGC()))
 
     # Protected: v0 (genesis), v2 (most recent)
     # Deleted: v1
@@ -151,7 +149,7 @@ async def test_gc_protected_tags(async_store: AsyncBlockchainModelStore) -> None
     policy = RetentionPolicy(keep_versions=3, protect_tags=[3, 5])
     gc = GarbageCollector(async_store, policy)
 
-    report = expect_success(await gc.collect(dry_run=True))
+    report = expect_success(await gc.collect(mode=PreviewGC()))
 
     # Protected: v0 (genesis), v3 (tag), v5 (tag), v7-v9 (recent 3)
     # Deleted: v1, v2, v4, v6
@@ -178,7 +176,7 @@ async def test_gc_minimum_versions_enforced(
 
     # Should keep: v0 (genesis), v4 (recent), = 2 versions
     # This is < keep_min_versions=3, so should return Failure
-    result = await gc.collect(dry_run=True)
+    result = await gc.collect(mode=PreviewGC())
     error = expect_failure(result)
     assert error.protected_count == 2
     assert error.minimum_required == 3
@@ -197,7 +195,7 @@ async def test_gc_dry_run_vs_actual(async_store: AsyncBlockchainModelStore) -> N
     gc = GarbageCollector(async_store, policy)
 
     # Dry run
-    report_dry = expect_success(await gc.collect(dry_run=True))
+    report_dry = expect_success(await gc.collect(mode=PreviewGC()))
     assert report_dry.dry_run is True
     assert len(report_dry.deleted_versions) == 1  # v1 (v0 protected, v2-v4 recent)
 
@@ -213,7 +211,7 @@ async def test_gc_dry_run_vs_actual(async_store: AsyncBlockchainModelStore) -> N
         assert version.counter == i
 
     # Now actually delete
-    report_actual = expect_success(await gc.collect(dry_run=False))
+    report_actual = expect_success(await gc.collect(mode=ExecuteGC()))
     assert report_actual.dry_run is False
     assert report_actual.deleted_versions == report_dry.deleted_versions
     assert report_actual.bytes_freed > 0
@@ -242,11 +240,11 @@ async def test_gc_bytes_freed_nonzero(async_store: AsyncBlockchainModelStore) ->
     gc = GarbageCollector(async_store, policy)
 
     # Dry run should estimate size
-    report_dry = expect_success(await gc.collect(dry_run=True))
+    report_dry = expect_success(await gc.collect(mode=PreviewGC()))
     assert report_dry.bytes_freed > 0  # Should be nonzero (checkpoint + metadata)
 
     # Actual deletion should also report size
-    report_actual = expect_success(await gc.collect(dry_run=False))
+    report_actual = expect_success(await gc.collect(mode=ExecuteGC()))
     assert report_actual.bytes_freed > 0
     # Should be similar to dry run estimate
     assert abs(report_dry.bytes_freed - report_actual.bytes_freed) < 100  # Allow small diff
@@ -264,7 +262,7 @@ async def test_run_gc_convenience_function(
 
     # Use convenience function
     report = expect_success(
-        await run_gc(async_store, keep_versions=4, protect_tags=[2], dry_run=True)
+        await run_gc(async_store, keep_versions=4, protect_tags=[2], mode=PreviewGC())
     )
 
     # Protected: v0 (genesis), v2 (tag), v4-v7 (recent 4)
@@ -285,7 +283,7 @@ async def test_gc_single_version_chain(async_store: AsyncBlockchainModelStore) -
     policy = RetentionPolicy(keep_versions=10, keep_min_versions=1)
     gc = GarbageCollector(async_store, policy)
 
-    report = expect_success(await gc.collect(dry_run=True))
+    report = expect_success(await gc.collect(mode=PreviewGC()))
 
     # Nothing to delete, only v0 (genesis)
     assert len(report.deleted_versions) == 0
@@ -305,7 +303,7 @@ async def test_gc_keeps_chain_integrity(async_store: AsyncBlockchainModelStore) 
     gc = GarbageCollector(async_store, policy)
 
     # Delete old versions
-    report = expect_success(await gc.collect(dry_run=False))
+    report = expect_success(await gc.collect(mode=ExecuteGC()))
 
     # Protected: v0 (genesis), v3-v5 (recent 3)
     # Deleted: v1, v2
@@ -334,7 +332,7 @@ async def test_gc_large_batch_deletion(async_store: AsyncBlockchainModelStore) -
     policy = RetentionPolicy(keep_versions=5)
     gc = GarbageCollector(async_store, policy)
 
-    report = expect_success(await gc.collect(dry_run=False))
+    report = expect_success(await gc.collect(mode=ExecuteGC()))
 
     # Protected: v0 (genesis), v15-v19 (recent 5)
     # Deleted: v1-v14 (14 versions)
@@ -357,7 +355,7 @@ async def test_gc_all_versions_protected_by_tags(
     policy = RetentionPolicy(keep_versions=1, protect_tags=[0, 1, 2, 3, 4])
     gc = GarbageCollector(async_store, policy)
 
-    report = expect_success(await gc.collect(dry_run=True))
+    report = expect_success(await gc.collect(mode=PreviewGC()))
 
     # Nothing deleted, everything protected
     assert len(report.deleted_versions) == 0
@@ -378,7 +376,7 @@ async def test_gc_policy_validation(async_store: AsyncBlockchainModelStore) -> N
     gc = GarbageCollector(async_store, policy)
 
     # Should return Failure during collection
-    result = await gc.collect(dry_run=True)
+    result = await gc.collect(mode=PreviewGC())
     error = expect_failure(result)
     assert error.protected_count == 2
     assert error.minimum_required == 5
@@ -397,7 +395,7 @@ async def test_gc_custom_min_versions(async_store: AsyncBlockchainModelStore) ->
     policy = RetentionPolicy(keep_versions=7, keep_min_versions=5)
     gc = GarbageCollector(async_store, policy)
 
-    report = expect_success(await gc.collect(dry_run=True))
+    report = expect_success(await gc.collect(mode=PreviewGC()))
 
     # Protected: v0 (genesis), v3-v9 (recent 7) = 8 versions total
     # Deleted: v1, v2

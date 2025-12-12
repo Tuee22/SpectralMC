@@ -17,7 +17,6 @@ from __future__ import annotations
 from collections.abc import Hashable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
 
 import torch
 
@@ -44,6 +43,9 @@ from spectralmc.result import Failure, Result, Success
 
 __all__ = [
     "TransferDestination",
+    "StagePolicy",
+    "OutputPinning",
+    "CopyMode",
     "TransferDecision",
     "plan_tensor_transfer",
     "Scalar",
@@ -55,14 +57,9 @@ __all__ = [
 ]
 
 
-# ────────────────────────────── enums ──────────────────────────────────────
+# ────────────────────────────── enums / ADTs ───────────────────────────────
 class TransferDestination(Enum):
-    """Transfer destination eliminating illegal (device, pin_memory) combinations.
-
-    CPU: Transfer to CPU without pinned memory.
-    CPU_PINNED: Transfer to CPU with pinned memory (faster GPU↔CPU transfers).
-    CUDA: Transfer to CUDA device (pin_memory is meaningless here).
-    """
+    """Explicit target placement."""
 
     CPU = "cpu"
     CPU_PINNED = "cpu_pinned"
@@ -76,20 +73,92 @@ class TransferDestination(Enum):
             case TransferDestination.CUDA:
                 return Device.cuda.to_torch()
 
-    def should_pin_memory(self) -> bool:
-        """Return True if memory should be pinned (only for CPU_PINNED)."""
-        return self == TransferDestination.CPU_PINNED
+
+class StagePolicy(str, Enum):
+    """Stage-on-host policy expressed as an ADT (avoid boolean flags)."""
+
+    ALLOW = "allow"
+    FORBID = "forbid"
+
+    def permits_staging(self) -> bool:
+        return self is StagePolicy.ALLOW
+
+
+class CopyMode(str, Enum):
+    """Copy scheduling mode for the interpreter."""
+
+    BLOCKING = "blocking"
+    NON_BLOCKING = "non_blocking"
+
+
+class OutputPinning(str, Enum):
+    """Output pinning intent for host targets."""
+
+    PINNED = "pinned"
+    UNPINNED = "unpinned"
 
 
 @dataclass(frozen=True)
-class TransferDecision:
-    """Pure transfer plan describing how to move a tensor."""
+class HostPlacement:
+    """Explicit host placement with pinning state."""
 
-    kind: Literal["direct", "stage_and_copy", "reject"]
-    dest: TransferDestination
-    non_blocking: bool
-    pin_output: bool
-    reason: str | None = None
+    pinned: bool
+
+    def to_destination(self) -> TransferDestination:
+        return TransferDestination.CPU_PINNED if self.pinned else TransferDestination.CPU
+
+
+@dataclass(frozen=True)
+class CudaPlacement:
+    """Explicit CUDA placement with device identifier."""
+
+    device: Device
+
+    def to_destination(self) -> TransferDestination:
+        return TransferDestination.CUDA
+
+
+Placement = HostPlacement | CudaPlacement
+
+
+@dataclass(frozen=True)
+class StayOnPlacement:
+    placement: Placement
+
+
+@dataclass(frozen=True)
+class DirectTransfer:
+    destination: TransferDestination
+    copy_mode: CopyMode
+    output_pinning: OutputPinning
+
+
+@dataclass(frozen=True)
+class StageThenCopy:
+    destination: TransferDestination
+    copy_mode: CopyMode
+    stage_reason: str
+
+
+@dataclass(frozen=True)
+class RejectTransfer:
+    reason: str
+
+
+TransferDecision = StayOnPlacement | DirectTransfer | StageThenCopy | RejectTransfer
+
+
+@dataclass(frozen=True)
+class CudaStreamPresent:
+    stream: torch.cuda.Stream
+
+
+@dataclass(frozen=True)
+class CudaStreamAbsent:
+    reason: str
+
+
+CudaStreamState = CudaStreamPresent | CudaStreamAbsent
 
 
 # ────────────────────────────── type aliases ────────────────────────────────
@@ -103,71 +172,138 @@ TensorTree = (
 )
 
 # ──────────────────────────── global resources ──────────────────────────────
+_MAX_CPU_BYTES = 64 * 1024 * 1024
+
 # NOTE: Conditional stream creation is intentional. torch.cuda.Stream() fails
 # without CUDA. All CUDA operations fail-fast via the explicit check in
 # move_tensor_tree(). This pattern is acceptable per CPU/GPU policy as
 # infrastructure code that enables the TensorTree API.
-_CUDA_STREAM: torch.cuda.Stream | None = (
-    torch.cuda.Stream(Device.cuda.to_torch()) if torch.cuda.is_available() else None
+_CUDA_STREAM_STATE: CudaStreamState = (
+    CudaStreamPresent(torch.cuda.Stream(Device.cuda.to_torch()))
+    if torch.cuda.is_available()
+    else CudaStreamAbsent(reason="cuda_unavailable")
 )
 
 
 # ───────────────────────── functional helpers ───────────────────────────────
 
 
+def _placement_of(tensor: torch.Tensor) -> Result[Placement, TorchFacadeError]:
+    """Infer explicit placement for a tensor without using truthy shortcuts."""
+    device_result = Device.from_torch(tensor.device)
+    match device_result:
+        case Failure(error):
+            return Failure(error)
+        case Success(Device.cpu):
+            return Success(HostPlacement(pinned=tensor.is_pinned()))
+        case Success(Device.cuda):
+            return Success(CudaPlacement(device=Device.cuda))
+    return Failure(UnsupportedTorchDevice(device=str(tensor.device)))
+
+
+def _target_placement(dest: TransferDestination) -> Placement:
+    """Map destination intent to explicit placement."""
+    match dest:
+        case TransferDestination.CPU:
+            return HostPlacement(pinned=False)
+        case TransferDestination.CPU_PINNED:
+            return HostPlacement(pinned=True)
+        case TransferDestination.CUDA:
+            return CudaPlacement(device=Device.cuda)
+
+
+def _placements_match(source: Placement, target: Placement) -> bool:
+    """Return True when no move is required (device + pinning already aligned)."""
+    match (source, target):
+        case (HostPlacement(pinned=sp), HostPlacement(pinned=tp)):
+            return sp == tp
+        case (CudaPlacement(device=sd), CudaPlacement(device=td)):
+            return sd == td
+        case _:
+            return False
+
+
 def _plan_copy_tensor(
     src: torch.Tensor,
     *,
     dest: TransferDestination,
-    allow_stage: bool,
+    stage_policy: StagePolicy,
 ) -> Result[TransferDecision, TorchFacadeError]:
     """Plan a transfer without performing any side effects."""
     target_dev = dest.to_torch_device()
 
-    if target_dev.type == "cuda" and not torch.cuda.is_available():
+    if dest is TransferDestination.CUDA and not torch.cuda.is_available():
         return Failure(CudaUnavailable())
 
-    if src.device == target_dev:
+    source_placement_result = _placement_of(src)
+    if isinstance(source_placement_result, Failure):
+        return source_placement_result
+    source_placement = source_placement_result.value
+    target_placement = _target_placement(dest)
+
+    if _placements_match(source_placement, target_placement):
         return Failure(NoOpTransfer(device=str(src.device)))
 
-    match target_dev.type:
-        case "cuda":
-            is_pinned = src.is_pinned()
-            if not is_pinned and not allow_stage:
-                return Failure(TransferRejected(reason="staging_disabled"))
+    match target_placement:
+        case CudaPlacement():
+            match source_placement:
+                case HostPlacement(pinned=False):
+                    if not stage_policy.permits_staging():
+                        return Failure(TransferRejected(reason="staging_disabled"))
+                    return Success(
+                        StageThenCopy(
+                            destination=dest,
+                            copy_mode=CopyMode.BLOCKING,
+                            stage_reason="unpinned_host_to_cuda",
+                        )
+                    )
+                case HostPlacement(pinned=True):
+                    return Success(
+                        DirectTransfer(
+                            destination=dest,
+                            copy_mode=CopyMode.BLOCKING,
+                            output_pinning=OutputPinning.UNPINNED,
+                        )
+                    )
+                case CudaPlacement():
+                    # Same CUDA device is handled by _placements_match earlier
+                    return Success(
+                        DirectTransfer(
+                            destination=dest,
+                            copy_mode=CopyMode.BLOCKING,
+                            output_pinning=OutputPinning.UNPINNED,
+                        )
+                    )
+        case HostPlacement(pinned=target_pinned):
+            transfer_bytes = src.element_size() * src.numel()
+            if transfer_bytes > _MAX_CPU_BYTES:
+                return Failure(TransferRejected(reason="oversized_host_transfer"))
+
+            copy_mode = (
+                CopyMode.NON_BLOCKING
+                if isinstance(source_placement, CudaPlacement) and target_pinned
+                else CopyMode.BLOCKING
+            )
+            output_pinning = OutputPinning.PINNED if target_pinned else OutputPinning.UNPINNED
             return Success(
-                TransferDecision(
-                    kind="direct" if is_pinned else "stage_and_copy",
-                    dest=dest,
-                    non_blocking=False,
-                    pin_output=False,
-                    reason=None if is_pinned else "unpinned_host_to_cuda",
+                DirectTransfer(
+                    destination=dest,
+                    copy_mode=copy_mode,
+                    output_pinning=output_pinning,
                 )
             )
-        case "cpu":
-            pin_output = dest.should_pin_memory()
-            non_blocking = pin_output and src.device.type == "cuda"
-            return Success(
-                TransferDecision(
-                    kind="direct",
-                    dest=dest,
-                    non_blocking=non_blocking,
-                    pin_output=pin_output,
-                    reason=None,
-                )
-            )
-        case _:
-            return Failure(UnsupportedTorchDevice(device=str(target_dev)))
+
+    return Failure(UnsupportedTorchDevice(device=str(target_dev)))
 
 
 def plan_tensor_transfer(
     tensor: torch.Tensor,
     *,
     dest: TransferDestination,
-    allow_stage: bool = True,
+    stage_policy: StagePolicy = StagePolicy.ALLOW,
 ) -> Result[TransferDecision, TorchFacadeError]:
     """Public helper to plan a single-tensor transfer without executing it."""
-    return _plan_copy_tensor(tensor, dest=dest, allow_stage=allow_stage)
+    return _plan_copy_tensor(tensor, dest=dest, stage_policy=stage_policy)
 
 
 def _execute_plan(
@@ -176,66 +312,73 @@ def _execute_plan(
     plan: TransferDecision,
 ) -> Result[torch.Tensor, TorchFacadeError]:
     """Execute a planned transfer using the configured CUDA stream."""
-    target_dev = plan.dest.to_torch_device()
+    stream_state = _CUDA_STREAM_STATE
 
-    if plan.kind == "reject":
-        return Failure(TransferRejected(reason=plan.reason or "transfer_rejected"))
-
-    if plan.kind == "stage_and_copy":
-        staging = torch.empty(
-            *src.shape,
-            dtype=src.dtype,
-            device=Device.cpu.to_torch(),
-            pin_memory=True,
-        )
-        staging.copy_(src.detach(), non_blocking=False)
-        dst = torch.empty(*src.shape, dtype=src.dtype, device=target_dev)
-        if plan.non_blocking and _CUDA_STREAM is not None:
-            with torch.cuda.stream(_CUDA_STREAM):
-                dst.copy_(staging, non_blocking=True)
-        else:
-            dst.copy_(staging, non_blocking=False)
-        return Success(dst)
-
-    if plan.kind == "direct":
-        match target_dev.type:
-            case "cuda":
-                dst = torch.empty(*src.shape, dtype=src.dtype, device=target_dev)
-                if plan.non_blocking and _CUDA_STREAM is not None:
-                    with torch.cuda.stream(_CUDA_STREAM):
-                        dst.copy_(src.detach(), non_blocking=True)
-                else:
-                    dst.copy_(src.detach(), non_blocking=False)
-                return Success(dst)
-            case "cpu":
-                dst = torch.empty(
-                    *src.shape,
-                    dtype=src.dtype,
-                    device=target_dev,
-                    pin_memory=plan.pin_output,
-                )
-                if src.device.type == "cuda":
-                    if plan.non_blocking:
-                        assert _CUDA_STREAM
-                        with torch.cuda.stream(_CUDA_STREAM):
+    match plan:
+        case RejectTransfer(reason=reason):
+            return Failure(TransferRejected(reason=reason))
+        case StayOnPlacement(placement=p):
+            return Failure(
+                TransferRejected(reason=f"noop_transfer_for_{p.__class__.__name__.lower()}")
+            )
+        case StageThenCopy(destination=dest, copy_mode=copy_mode, stage_reason=_):
+            target_dev = dest.to_torch_device()
+            staging = torch.empty(
+                *src.shape,
+                dtype=src.dtype,
+                device=Device.cpu.to_torch(),
+                pin_memory=True,
+            )
+            staging.copy_(src.detach(), non_blocking=False)
+            dst = torch.empty(*src.shape, dtype=src.dtype, device=target_dev)
+            if copy_mode is CopyMode.NON_BLOCKING and isinstance(stream_state, CudaStreamPresent):
+                with torch.cuda.stream(stream_state.stream):
+                    dst.copy_(staging, non_blocking=True)
+            else:
+                dst.copy_(staging, non_blocking=False)
+            return Success(dst)
+        case DirectTransfer(
+            destination=dest,
+            copy_mode=copy_mode,
+            output_pinning=output_pinning,
+        ):
+            target_dev = dest.to_torch_device()
+            match dest:
+                case TransferDestination.CUDA:
+                    dst = torch.empty(*src.shape, dtype=src.dtype, device=target_dev)
+                    if copy_mode is CopyMode.NON_BLOCKING and isinstance(
+                        stream_state, CudaStreamPresent
+                    ):
+                        with torch.cuda.stream(stream_state.stream):
                             dst.copy_(src.detach(), non_blocking=True)
                     else:
                         dst.copy_(src.detach(), non_blocking=False)
-                else:
-                    dst.copy_(src.detach(), non_blocking=False)
-                return Success(dst)
-
-    return Failure(TransferRejected(reason="unrecognized_transfer_plan"))
+                    return Success(dst)
+                case TransferDestination.CPU | TransferDestination.CPU_PINNED:
+                    dst = torch.empty(
+                        *src.shape,
+                        dtype=src.dtype,
+                        device=target_dev,
+                        pin_memory=output_pinning is OutputPinning.PINNED,
+                    )
+                    if copy_mode is CopyMode.NON_BLOCKING:
+                        assert isinstance(stream_state, CudaStreamPresent)
+                        with torch.cuda.stream(stream_state.stream):
+                            dst.copy_(src.detach(), non_blocking=True)
+                    else:
+                        dst.copy_(src.detach(), non_blocking=False)
+                    return Success(dst)
+    raise AssertionError(f"Unhandled transfer plan: {plan!r}")
 
 
 def _copy_tensor(
     src: torch.Tensor,
     *,
     dest: TransferDestination,
-    allow_stage: bool,
+    stage_policy: StagePolicy,
 ) -> Result[torch.Tensor, TorchFacadeError]:
     """Clone *src* to *dest* using a pure plan + interpreter."""
-    match _plan_copy_tensor(src, dest=dest, allow_stage=allow_stage):
+    match _plan_copy_tensor(src, dest=dest, stage_policy=stage_policy):
         case Success(plan):
             return _execute_plan(src, plan=plan)
         case Failure(error):
@@ -246,20 +389,20 @@ def _move(
     obj: TensorTree,
     *,
     dest: TransferDestination,
-    allow_stage: bool,
+    stage_policy: StagePolicy,
 ) -> Result[TensorTree, TorchFacadeError]:
     """Pure-functional recursion via pattern matching."""
     match obj:
         case torch.Tensor():
             # torch.Tensor is a TensorTree - pattern match to widen type for mypy
-            match _copy_tensor(obj, dest=dest, allow_stage=allow_stage):
+            match _copy_tensor(obj, dest=dest, stage_policy=stage_policy):
                 case Success(tensor):
                     return Success(tensor)  # Type widened: torch.Tensor -> TensorTree
                 case Failure(error):
                     return Failure(error)
         case list() as seq:
             # Recursively move all elements, collecting Results
-            moved_results = [_move(v, dest=dest, allow_stage=allow_stage) for v in seq]
+            moved_results = [_move(v, dest=dest, stage_policy=stage_policy) for v in seq]
             # Check for first failure
             first_failure = next((r for r in moved_results if isinstance(r, Failure)), None)
             if first_failure is not None:
@@ -268,7 +411,7 @@ def _move(
             return Success([r.value for r in moved_results if isinstance(r, Success)])
         case tuple() as seq:
             # Recursively move all elements, collecting Results
-            moved_results = [_move(v, dest=dest, allow_stage=allow_stage) for v in seq]
+            moved_results = [_move(v, dest=dest, stage_policy=stage_policy) for v in seq]
             # Check for first failure
             first_failure = next((r for r in moved_results if isinstance(r, Failure)), None)
             if first_failure is not None:
@@ -278,7 +421,7 @@ def _move(
         case Mapping() as mp:
             # Recursively move all values, collecting Results
             moved_items: list[tuple[Hashable, Result[TensorTree, TorchFacadeError]]] = [
-                (k, _move(v, dest=dest, allow_stage=allow_stage)) for k, v in mp.items()
+                (k, _move(v, dest=dest, stage_policy=stage_policy)) for k, v in mp.items()
             ]
             # Check for first failure
             first_failure = next((r for _, r in moved_items if isinstance(r, Failure)), None)
@@ -295,7 +438,7 @@ def move_tensor_tree(
     tree: TensorTree,
     *,
     dest: TransferDestination,
-    allow_stage: bool = True,
+    stage_policy: StagePolicy = StagePolicy.ALLOW,
 ) -> Result[TensorTree, TorchFacadeError]:
     """Copy *tree* so every tensor lives on *dest* (CPU, CPU_PINNED, or CUDA)."""
     tgt = dest.to_torch_device()
@@ -303,8 +446,12 @@ def move_tensor_tree(
     if tgt.type == "cuda" and not torch.cuda.is_available():
         return Failure(CudaUnavailable())
 
-    result = _move(tree, dest=dest, allow_stage=allow_stage)
-    (None if _CUDA_STREAM is None else _CUDA_STREAM.synchronize())
+    result = _move(tree, dest=dest, stage_policy=stage_policy)
+    match _CUDA_STREAM_STATE:
+        case CudaStreamPresent(stream):
+            stream.synchronize()
+        case CudaStreamAbsent():
+            pass
     return result
 
 

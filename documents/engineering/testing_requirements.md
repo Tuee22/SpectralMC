@@ -12,7 +12,7 @@
 - [Purity Doctrine](purity_doctrine.md)
 - [Coding Standards](coding_standards.md)
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)
-- [PyTorch Facade](pytorch_facade.md)
+- [Torch Runtime (facade removed)](pytorch_facade.md)
 - [Documentation Standards](../documentation_standards.md)
 - [Total Pure Modelling](total_pure_modelling.md)
 
@@ -56,10 +56,8 @@ from __future__ import annotations
 
 from typing import List, Tuple
 import pytest
-import torch
-
-# Import facade before PyTorch
-import spectralmc.models.torch as sm_torch
+from tests.fixtures import torch_handle  # Fixture applies TorchRuntime configuration effect
+torch = torch_handle
 
 def test_complex_linear_forward() -> None:
     """Test complex linear layer forward pass."""
@@ -762,4 +760,4 @@ See also: [Blockchain Storage](blockchain_storage.md) for complete storage docum
 - **Output handling**: Always redirect to files, read complete output
 - **Avoid anti-patterns**: See 13 testing anti-patterns above
 
-See also: [Coding Standards](coding_standards.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [PyTorch Facade](pytorch_facade.md), [Blockchain Storage](blockchain_storage.md)
+See also: [Coding Standards](coding_standards.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [Torch Runtime](pytorch_facade.md), [Blockchain Storage](blockchain_storage.md)

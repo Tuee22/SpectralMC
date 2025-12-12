@@ -42,7 +42,7 @@ system and keeps pure ADT flows aligned with [total_pure_modelling.md](total_pur
 ### Tier 1: Infrastructure (EXEMPT from purity rules)
 
 **Files**:
-- `src/spectralmc/models/torch.py` - PyTorch facade for reproducibility
+- `src/spectralmc/models/torch.py` - Torch runtime configuration for reproducibility
 - `src/spectralmc/models/cpu_gpu_transfer.py` - Device transfer utilities
 - `src/spectralmc/cvnn.py` - PyTorch nn.Module layer library
 

@@ -31,12 +31,21 @@ from .checkpoint import (
     create_checkpoint_from_snapshot,
     load_snapshot_from_checkpoint,
 )
-from .gc import GarbageCollector, GCReport, RetentionPolicy, run_gc
+from .gc import (
+    ExecuteGC,
+    GarbageCollector,
+    GCReport,
+    PreviewGC,
+    RetentionPolicy,
+    run_gc,
+)
 from .inference import InferenceClient, InferenceMode, PinnedMode, TrackingMode
 from .store import AsyncBlockchainModelStore, retry_on_throttle
 from .tensorboard_writer import TensorBoardWriter, log_blockchain_to_tensorboard
 from .verification import (
-    CorruptionReport,
+    ChainCorrupted,
+    ChainValid,
+    VerificationOutcome,
     find_corruption,
     verify_chain,
     verify_chain_detailed,
@@ -73,8 +82,12 @@ __all__ = [
     "verify_chain",
     "verify_chain_detailed",
     "find_corruption",
-    "CorruptionReport",
+    "ChainValid",
+    "ChainCorrupted",
+    "VerificationOutcome",
     # Garbage Collection
+    "PreviewGC",
+    "ExecuteGC",
     "GarbageCollector",
     "RetentionPolicy",
     "GCReport",

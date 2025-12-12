@@ -71,7 +71,7 @@ flowchart TB
 ## Domain-Specific Standards
 
 - **[CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)** — Deterministic CPU init → GPU compute contract.
-- **[PyTorch Facade Pattern](pytorch_facade.md)** — Deterministic import order and device/dtype safety.
+- **[Torch Runtime (facade removed)](pytorch_facade.md)** — Pure runtime ADT plus deterministic configuration effect for torch.
 - **[Effect Interpreter Doctrine](effect_interpreter.md)** — Effect ADTs and interpreter isolation.
 - **[Reproducibility Proofs](reproducibility_proofs.md)** — Formal guarantees for determinism and checkpointing.
 - **[Total Pure Modelling](total_pure_modelling.md)** — Total ADTs for device placement, retries, and storage ownership.

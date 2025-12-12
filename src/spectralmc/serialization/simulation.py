@@ -5,10 +5,8 @@ from __future__ import annotations
 
 from typing import Literal
 
-from spectralmc.errors.serialization import (
-    SerializationResult,
-    UnknownThreadsPerBlock,
-)
+from spectralmc.effects import ForwardNormalization, PathScheme
+from spectralmc.errors.serialization import SerializationResult, UnknownThreadsPerBlock
 from spectralmc.gbm import (
     BlackScholesConfig,
     SimulationParams,
@@ -93,8 +91,8 @@ class BlackScholesConfigConverter:
         """Convert to proto."""
         proto = simulation_pb2.BlackScholesConfigProto()
         proto.sim_params.CopyFrom(SimulationParamsConverter.to_proto(config.sim_params))
-        proto.simulate_log_return = config.simulate_log_return
-        proto.normalize_forwards = config.normalize_forwards
+        proto.simulate_log_return = config.path_scheme is PathScheme.LOG_EULER
+        proto.normalize_forwards = config.normalization is ForwardNormalization.NORMALIZE
         return proto
 
     @staticmethod
@@ -111,8 +109,14 @@ class BlackScholesConfigConverter:
 
         config_result = build_black_scholes_config(
             sim_params=sim_params,
-            simulate_log_return=proto.simulate_log_return,
-            normalize_forwards=proto.normalize_forwards,
+            path_scheme=(
+                PathScheme.LOG_EULER if proto.simulate_log_return else PathScheme.SIMPLE_EULER
+            ),
+            normalization=(
+                ForwardNormalization.NORMALIZE
+                if proto.normalize_forwards
+                else ForwardNormalization.RAW
+            ),
         )
         match config_result:
             case Failure(config_err):

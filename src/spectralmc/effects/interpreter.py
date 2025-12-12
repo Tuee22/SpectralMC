@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import pickle
+from dataclasses import dataclass
 from typing import Literal, Never, Protocol, TypeVar
 
 import cupy as cp
@@ -50,8 +51,10 @@ from spectralmc.effects.logging import LogMessage, LoggingEffect
 from spectralmc.effects.metadata import MetadataEffect, ReadMetadata, UpdateMetadata
 from spectralmc.effects.montecarlo import (
     ComputeFFT,
+    ForwardNormalization,
     GenerateNormals,
     MonteCarloEffect,
+    PathScheme,
     SimulatePaths,
 )
 from spectralmc.effects.registry import SharedRegistry
@@ -68,6 +71,7 @@ from spectralmc.effects.training import (
 from spectralmc.effects.types import Effect
 from spectralmc.gbm import SimulateBlackScholes
 from spectralmc.models.cpu_gpu_transfer import (
+    OutputPinning,
     TransferDestination,
     move_tensor_tree,
     plan_tensor_transfer,
@@ -78,6 +82,19 @@ from spectralmc.storage.s3_operations import S3Operations
 from spectralmc.storage.store import AsyncBlockchainModelStore
 
 T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class CudaRngEnvAvailable:
+    device_count: int
+
+
+@dataclass(frozen=True)
+class CudaRngEnvMissing:
+    reason: str
+
+
+CudaRngEnv = CudaRngEnvAvailable | CudaRngEnvMissing
 
 
 def assert_never(value: Never) -> Never:
@@ -95,6 +112,20 @@ def assert_never(value: Never) -> Never:
         ...         assert_never(effect)  # mypy error if variants missing
     """
     raise AssertionError(f"Unhandled case: {value!r}")
+
+
+def _cuda_rng_env() -> CudaRngEnv:
+    """Pure CUDA RNG environment probe."""
+    match torch.cuda.is_available():
+        case False:
+            return CudaRngEnvMissing(reason="cuda_unavailable")
+        case True:
+            count = torch.cuda.device_count()
+            return (
+                CudaRngEnvAvailable(device_count=count)
+                if count > 0
+                else CudaRngEnvMissing(reason="no_cuda_devices")
+            )
 
 
 class EffectInterpreter(Protocol):
@@ -137,8 +168,8 @@ class GPUInterpreter:
     async def interpret(self, effect: GPUEffect) -> Result[object, GPUError]:
         """Execute GPU effect with stream coordination."""
         match effect:
-            case TensorTransfer(source_device=src, target_device=dst, tensor_id=tid):
-                return await self._transfer_tensor(src, dst, tid)
+            case TensorTransfer() as transfer:
+                return await self._transfer_tensor(transfer)
             case StreamSync(stream_type=st):
                 return await self._sync_stream(st)
             case KernelLaunch(kernel_name=name, grid_config=grid, block_config=block):
@@ -148,51 +179,53 @@ class GPUInterpreter:
             case _:
                 assert_never(effect)
 
-    async def _transfer_tensor(
-        self,
-        src: object,
-        dst: object,
-        tensor_id: str,
-    ) -> Result[object, GPUError]:
+    async def _transfer_tensor(self, transfer: TensorTransfer) -> Result[object, GPUError]:
         """Transfer tensor between devices.
 
         Uses spectralmc.models.cpu_gpu_transfer for actual transfer.
         """
 
-        tensor_result = self._registry.get_torch_tensor(tensor_id)
+        tensor_result = self._registry.get_torch_tensor(transfer.tensor_id)
         match tensor_result:
             case Failure(_):
-                return Failure(GPUError(message=f"Tensor not found: {tensor_id}"))
+                return Failure(GPUError(message=f"Tensor not found: {transfer.tensor_id}"))
             case Success(tensor):
                 pass
 
         # Determine transfer destination
-        if dst == Device.cpu:
-            dest = TransferDestination.CPU
+        if transfer.target_device == Device.cpu:
+            dest = (
+                TransferDestination.CPU_PINNED
+                if transfer.output_pinning is OutputPinning.PINNED
+                else TransferDestination.CPU
+            )
         else:
             dest = TransferDestination.CUDA
 
         if isinstance(tensor, torch.Tensor):
-            plan_result = plan_tensor_transfer(tensor, dest=dest, allow_stage=True)
+            plan_result = plan_tensor_transfer(
+                tensor,
+                dest=dest,
+                stage_policy=transfer.stage_policy,
+            )
             if isinstance(plan_result, Success):
                 plan = plan_result.value
-                self._registry.register_metadata(
-                    f"transfer_plan:{tensor_id}",
-                    f"{plan.kind}|dest={plan.dest.value}|nb={plan.non_blocking}|pin={plan.pin_output}|reason={plan.reason}",
-                )
+                self._registry.register_metadata(f"transfer_plan:{transfer.tensor_id}", repr(plan))
             else:
                 self._registry.register_metadata(
-                    f"transfer_plan:{tensor_id}", f"error:{plan_result.error}"
+                    f"transfer_plan:{transfer.tensor_id}", f"error:{plan_result.error}"
                 )
 
-        match move_tensor_tree(tensor, dest=dest):
+        match move_tensor_tree(tensor, dest=dest, stage_policy=transfer.stage_policy):
             case Failure(error):
                 return Failure(GPUError(message=str(error)))
             case Success(moved_tensor):
-                self._registry.register_tensor(tensor_id, moved_tensor)
+                self._registry.register_tensor(transfer.tensor_id, moved_tensor)
                 return Success(moved_tensor)
 
-    async def _sync_stream(self, stream_type: str) -> Result[object, GPUError]:
+    async def _sync_stream(
+        self, stream_type: Literal["torch", "cupy", "numba"]
+    ) -> Result[object, GPUError]:
         """Synchronize the specified CUDA stream."""
         try:
             match stream_type:
@@ -204,7 +237,7 @@ class GPUInterpreter:
                     # Numba synchronize via cuda module
                     numba_sync()
                 case _:
-                    return Failure(GPUError(message=f"Unknown stream type: {stream_type}"))
+                    assert_never(stream_type)
             return Success(None)
         except RuntimeError as e:
             return Failure(GPUError(message=str(e)))
@@ -432,13 +465,16 @@ class TrainingInterpreter:
 
         try:
             loss: torch.Tensor
-            if effect.loss_type == "mse":
-                loss = torch.nn.functional.mse_loss(pred, target)
-            elif effect.loss_type == "mae":
-                loss = torch.nn.functional.l1_loss(pred, target)
-            else:
-                # effect.loss_type == "huber"
-                loss = torch.nn.functional.smooth_l1_loss(pred, target)
+            loss_kind = str(effect.loss_type)
+            match loss_kind:
+                case "mse":
+                    loss = torch.nn.functional.mse_loss(pred, target)
+                case "mae":
+                    loss = torch.nn.functional.l1_loss(pred, target)
+                case "huber":
+                    loss = torch.nn.functional.smooth_l1_loss(pred, target)
+                case other:
+                    return Failure(TrainingError(message=f"unsupported_loss_type:{other}"))
 
             # Store loss in shared registry for BackwardPass
             self._registry.register_tensor(effect.output_tensor_id, loss)
@@ -462,13 +498,14 @@ class TrainingInterpreter:
                 case Success(writer) if isinstance(writer, SummaryWriter):
                     for metric_name, metric_value in effect.metrics:
                         writer.add_scalar(metric_name, metric_value, effect.step)
-                case _:
-                    pass  # No writer registered, skip logging
+                case Success(_):
+                    return Failure(TrainingError(message="tensorboard_writer_invalid"))
+                case Failure(error):
+                    return Failure(TrainingError(message=f"tensorboard_writer_missing:{error}"))
 
             return Success(None)
-        except (ImportError, RuntimeError):
-            # Log metrics is optional - don't fail if TensorBoard unavailable
-            return Success(None)
+        except (ImportError, RuntimeError) as exc:
+            return Failure(TrainingError(message=f"tensorboard_logging_failed:{exc}"))
 
 
 class MonteCarloInterpreter:
@@ -568,6 +605,14 @@ class MonteCarloInterpreter:
             # Get the default CUDA stream for kernel launch
             stream = cuda.default_stream()
 
+            match effect.path_scheme:
+                case PathScheme.LOG_EULER:
+                    simulate_log_return = True
+                case PathScheme.SIMPLE_EULER:
+                    simulate_log_return = False
+                case _:
+                    assert_never(effect.path_scheme)
+
             # Launch the SimulateBlackScholes kernel (blocks, threads, stream)
             SimulateBlackScholes[blocks, threads_per_block, stream](
                 cuda.as_cuda_array(sims),
@@ -577,18 +622,23 @@ class MonteCarloInterpreter:
                 effect.rate,
                 effect.dividend,
                 effect.vol,
-                effect.simulate_log_return,
+                simulate_log_return,
             )
 
             # Synchronize to ensure kernel completes
             cuda.synchronize()
 
             # Optional forward normalization
-            if effect.normalize_forwards:
-                times = cp.linspace(dt, effect.expiry, effect.timesteps, dtype=sims.dtype)
-                forwards = effect.spot * cp.exp((effect.rate - effect.dividend) * times)
-                row_means = cp.mean(sims, axis=1, keepdims=True).squeeze()
-                sims *= cp.expand_dims(forwards / row_means, 1)
+            match effect.normalization:
+                case ForwardNormalization.NORMALIZE:
+                    times = cp.linspace(dt, effect.expiry, effect.timesteps, dtype=sims.dtype)
+                    forwards = effect.spot * cp.exp((effect.rate - effect.dividend) * times)
+                    row_means = cp.mean(sims, axis=1, keepdims=True).squeeze()
+                    sims *= cp.expand_dims(forwards / row_means, 1)
+                case ForwardNormalization.RAW:
+                    pass
+                case _:
+                    assert_never(effect.normalization)
 
             # Store result in shared registry with specified output ID
             self._registry.register_tensor(effect.output_tensor_id, sims)
@@ -793,11 +843,15 @@ class RNGInterpreter:
                 case "torch_cpu":
                     state = torch.get_rng_state().cpu().numpy().tobytes()
                 case "torch_cuda":
-                    if not torch.cuda.is_available():
-                        return Failure(RNGError(message="CUDA not available", rng_type=rng_type))
-                    states = torch.cuda.get_rng_state_all()
-                    # Serialize all CUDA device states
-                    state = b"".join(s.cpu().numpy().tobytes() for s in states)
+                    match _cuda_rng_env():
+                        case CudaRngEnvMissing(reason):
+                            return Failure(RNGError(message=reason, rng_type=rng_type))
+                        case CudaRngEnvAvailable(device_count=count):
+                            states = torch.cuda.get_rng_state_all()
+                            assert (
+                                len(states) == count
+                            ), f"CUDA RNG states ({len(states)}) differ from device count ({count})"
+                            state = b"".join(s.cpu().numpy().tobytes() for s in states)
                 case "numpy":
                     # Get numpy random state as bytes via pickle
                     state_dict = np.random.get_state(legacy=False)
@@ -824,18 +878,18 @@ class RNGInterpreter:
                     torch.set_rng_state(state_tensor)
                     return Success(None)
                 case "torch_cuda":
-                    if not torch.cuda.is_available():
-                        return Failure(RNGError(message="CUDA not available", rng_type=rng_type))
-                    # Restore requires knowing device count
-                    device_count = torch.cuda.device_count()
-                    state_size = len(state_bytes) // device_count
-                    states = []
-                    for i in range(device_count):
-                        chunk = state_bytes[i * state_size : (i + 1) * state_size]
-                        state_array = np.frombuffer(chunk, dtype=np.uint8)
-                        states.append(torch.from_numpy(state_array.copy()))
-                    torch.cuda.set_rng_state_all(states)
-                    return Success(None)
+                    match _cuda_rng_env():
+                        case CudaRngEnvMissing(reason):
+                            return Failure(RNGError(message=reason, rng_type=rng_type))
+                        case CudaRngEnvAvailable(device_count=device_count):
+                            state_size = len(state_bytes) // device_count
+                            states = []
+                            for i in range(device_count):
+                                chunk = state_bytes[i * state_size : (i + 1) * state_size]
+                                state_array = np.frombuffer(chunk, dtype=np.uint8)
+                                states.append(torch.from_numpy(state_array.copy()))
+                            torch.cuda.set_rng_state_all(states)
+                            return Success(None)
                 case "numpy":
                     state = pickle.loads(state_bytes)  # noqa: S301
                     np.random.set_state(state)

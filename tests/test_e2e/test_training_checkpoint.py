@@ -33,11 +33,7 @@ def _make_checkpoint_black_scholes_config() -> BlackScholesConfig:
         dtype=Precision.float32,
     )
 
-    return make_black_scholes_config(
-        sim_params=sim_params,
-        simulate_log_return=True,
-        normalize_forwards=True,
-    )
+    return make_black_scholes_config(sim_params=sim_params)
 
 
 @pytest.mark.asyncio

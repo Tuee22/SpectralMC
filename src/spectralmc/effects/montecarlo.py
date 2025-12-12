@@ -17,7 +17,22 @@ See Also:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Literal
+
+
+class PathScheme(str, Enum):
+    """Explicit path computation scheme (no boolean toggles)."""
+
+    LOG_EULER = "log_euler"
+    SIMPLE_EULER = "simple_euler"
+
+
+class ForwardNormalization(str, Enum):
+    """Explicit forward-normalization intent."""
+
+    NORMALIZE = "normalize_forwards"
+    RAW = "raw_paths"
 
 
 @dataclass(frozen=True)
@@ -55,8 +70,8 @@ class SimulatePaths:
         expiry: Time to expiration in years.
         timesteps: Number of timesteps to simulate.
         batches: Number of parallel simulations.
-        simulate_log_return: Use log-Euler scheme for variance reduction.
-        normalize_forwards: Normalize each time-slice to analytic forward.
+        path_scheme: Explicit path scheme (log-Euler or simple).
+        normalization: Forward normalization intent (normalize vs raw).
         input_normals_id: Identifier for pre-generated normal random matrix.
         output_tensor_id: Identifier for storing the simulated paths in registry.
     """
@@ -70,8 +85,8 @@ class SimulatePaths:
     expiry: float = 1.0
     timesteps: int = 252
     batches: int = 1024
-    simulate_log_return: bool = True
-    normalize_forwards: bool = True
+    path_scheme: PathScheme = PathScheme.LOG_EULER
+    normalization: ForwardNormalization = ForwardNormalization.NORMALIZE
     input_normals_id: str = ""
     output_tensor_id: str = "paths"
 

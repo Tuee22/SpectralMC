@@ -26,6 +26,7 @@ import pytest
 import torch
 from torch import Tensor
 
+from spectralmc.effects import ForwardNormalization, PathScheme
 from spectralmc.cvnn_factory import (
     ActivationCfg,
     ActivationKind,
@@ -140,8 +141,8 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
 
     cfg = make_black_scholes_config(
         sim_params=sim,
-        simulate_log_return=True,
-        normalize_forwards=False,
+        path_scheme=PathScheme.LOG_EULER,
+        normalization=ForwardNormalization.RAW,
     )
 
     bounds: dict[str, BoundSpec] = {

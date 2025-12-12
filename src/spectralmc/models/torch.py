@@ -13,10 +13,6 @@ Thread-safety contract
 * The context managers ``default_dtype`` and ``default_device`` **may only be
   entered from the main thread**; attempting to use them from a worker thread
   raises ``RuntimeError``.
-* To override the import-time thread guard (at your own risk) set the
-  environment variable::
-
-      SPECTRALMC_ALLOW_THREADS=1
 """
 
 from __future__ import annotations
@@ -29,6 +25,7 @@ import platform
 import sys
 import threading
 from contextlib import contextmanager
+from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable, Iterator, Mapping
 
@@ -46,8 +43,7 @@ if threading.active_count() > 1:
     raise ImportError(
         "SpectralMC façade imported after additional threads were created. "
         "Its global dtype/device helpers are not thread-safe. "
-        "Import this module in the *main thread* before spawning workers, "
-        "or set SPECTRALMC_ALLOW_THREADS=1 to bypass this check."
+        "Import this module in the *main thread* before spawning workers."
     )
 
 _MAIN_THREAD_ID: int = threading.get_ident()
@@ -77,6 +73,19 @@ from spectralmc.models.numerical import Precision  # noqa: E402
 # --------------------------------------------------------------------------- #
 torch.use_deterministic_algorithms(True, warn_only=False)
 
+
+@dataclass(frozen=True)
+class CudaDeterminismReady:
+    cudnn_version: int
+
+
+@dataclass(frozen=True)
+class CudaDeterminismMissing:
+    reason: str
+
+
+CudaDeterminismConfig = CudaDeterminismReady | CudaDeterminismMissing
+
 # NOTE: _HAS_CUDA is infrastructure for module-level cuDNN configuration.
 # This is acceptable per CPU/GPU policy: facade code must check CUDA availability
 # at import time to configure determinism flags. It does NOT create silent
@@ -85,11 +94,16 @@ torch.use_deterministic_algorithms(True, warn_only=False)
 _HAS_CUDA: bool = torch.cuda.is_available()
 
 if _HAS_CUDA:
-    if torch.backends.cudnn.version() is None:
+    cudnn_version = torch.backends.cudnn.version()
+    if cudnn_version is None:
+        _CUDA_DETERMINISM: CudaDeterminismConfig = CudaDeterminismMissing(
+            reason="cudnn_unavailable"
+        )
         raise RuntimeError(
             "SpectralMC requires cuDNN for deterministic GPU execution, "
             "but it is missing from the current runtime.",
         )
+    _CUDA_DETERMINISM = CudaDeterminismReady(cudnn_version)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.allow_tf32 = False
@@ -99,6 +113,7 @@ else:
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.allow_tf32 = False
+    _CUDA_DETERMINISM = CudaDeterminismMissing(reason="cuda_unavailable")
 
 
 # --------------------------------------------------------------------------- #
@@ -108,6 +123,11 @@ def _assert_main_thread(ctx_name: str) -> None:
     """Raise if called from any thread other than the importing main thread."""
     if threading.get_ident() != _MAIN_THREAD_ID:
         raise RuntimeError(f"{ctx_name} is not thread-safe; call it only from the main thread.")
+
+
+def cuda_determinism_config() -> CudaDeterminismConfig:
+    """Return the deterministic CUDA configuration status."""
+    return _CUDA_DETERMINISM
 
 
 # --------------------------------------------------------------------------- #
@@ -357,7 +377,11 @@ class TorchEnv(BaseModel):
     @classmethod
     def snapshot(cls) -> TorchEnv:
         cuda_ver = (torch.version.cuda or "<unknown>") if _HAS_CUDA else "<not available>"
-        cudnn_ver = (torch.backends.cudnn.version() or -1) if _HAS_CUDA else -1
+        match cuda_determinism_config():
+            case CudaDeterminismReady(cudnn_version=cudnn_ver):
+                pass
+            case CudaDeterminismMissing():
+                cudnn_ver = -1
         gpu = torch.cuda.get_device_name(0) if _HAS_CUDA else "<cpu>"
         return cls(
             torch_version=torch.__version__,

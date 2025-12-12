@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import assert_never
 
 from botocore.exceptions import ClientError
 
@@ -20,23 +21,25 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class CorruptionReport:
-    """Report of chain corruption detection.
+class ChainValid:
+    """Chain is intact and verified."""
 
-    Attributes:
-        is_valid: True if chain is intact
-        corrupted_version: First corrupted version (None if valid)
-        corruption_type: Type of corruption detected
-        details: Human-readable description
-    """
-
-    is_valid: bool
-    corrupted_version: ModelVersion | None
-    corruption_type: str | None
     details: str
 
 
-async def verify_chain_detailed(store: AsyncBlockchainModelStore) -> CorruptionReport:
+@dataclass(frozen=True)
+class ChainCorrupted:
+    """Chain corruption detected with explicit reason."""
+
+    corrupted_version: ModelVersion | None
+    corruption_type: str
+    details: str
+
+
+VerificationOutcome = ChainValid | ChainCorrupted
+
+
+async def verify_chain_detailed(store: AsyncBlockchainModelStore) -> VerificationOutcome:
     """
     Verify chain and return detailed report.
 
@@ -44,7 +47,7 @@ async def verify_chain_detailed(store: AsyncBlockchainModelStore) -> CorruptionR
         store: AsyncBlockchainModelStore instance
 
     Returns:
-        CorruptionReport with validation results
+        VerificationOutcome variant describing the chain state
     """
     # Fetch HEAD
     head_result = await store.get_head()
@@ -52,10 +55,7 @@ async def verify_chain_detailed(store: AsyncBlockchainModelStore) -> CorruptionR
     match head_result:
         case Failure(_):
             # Empty chain is valid (no corruption)
-            return CorruptionReport(
-                is_valid=True,
-                corrupted_version=None,
-                corruption_type=None,
+            return ChainValid(
                 details="Empty chain (no versions committed)",
             )
         case Success(head):
@@ -70,8 +70,7 @@ async def verify_chain_detailed(store: AsyncBlockchainModelStore) -> CorruptionR
             versions.append(version)
         except VersionNotFoundError as e:
             # Missing version in sequence
-            return CorruptionReport(
-                is_valid=False,
+            return ChainCorrupted(
                 corrupted_version=None,
                 corruption_type="missing_version",
                 details=f"Version {counter} missing from chain: {e}",
@@ -80,24 +79,21 @@ async def verify_chain_detailed(store: AsyncBlockchainModelStore) -> CorruptionR
     # Validate genesis block
     genesis = versions[0]
     if genesis.counter != 0:
-        return CorruptionReport(
-            is_valid=False,
+        return ChainCorrupted(
             corrupted_version=genesis,
             corruption_type="invalid_genesis_counter",
             details=f"Genesis counter is {genesis.counter}, expected 0",
         )
 
     if genesis.parent_hash != "":
-        return CorruptionReport(
-            is_valid=False,
+        return ChainCorrupted(
             corrupted_version=genesis,
             corruption_type="invalid_genesis_parent",
             details=f"Genesis parent_hash is '{genesis.parent_hash}', expected empty string",
         )
 
     if genesis.semantic_version != "1.0.0":
-        return CorruptionReport(
-            is_valid=False,
+        return ChainCorrupted(
             corrupted_version=genesis,
             corruption_type="invalid_genesis_semver",
             details=f"Genesis semantic_version is '{genesis.semantic_version}', expected '1.0.0'",
@@ -110,8 +106,7 @@ async def verify_chain_detailed(store: AsyncBlockchainModelStore) -> CorruptionR
 
         # Check counter increments by exactly 1
         if current.counter != previous.counter + 1:
-            return CorruptionReport(
-                is_valid=False,
+            return ChainCorrupted(
                 corrupted_version=current,
                 corruption_type="non_sequential_counter",
                 details=(
@@ -122,8 +117,7 @@ async def verify_chain_detailed(store: AsyncBlockchainModelStore) -> CorruptionR
 
         # Check Merkle chain property (parent_hash matches previous content_hash)
         if current.parent_hash != previous.content_hash:
-            return CorruptionReport(
-                is_valid=False,
+            return ChainCorrupted(
                 corrupted_version=current,
                 corruption_type="broken_merkle_chain",
                 details=(
@@ -135,8 +129,7 @@ async def verify_chain_detailed(store: AsyncBlockchainModelStore) -> CorruptionR
         # Check semantic version progression (patch increment)
         expected_semver = f"1.0.{current.counter}"
         if current.semantic_version != expected_semver:
-            return CorruptionReport(
-                is_valid=False,
+            return ChainCorrupted(
                 corrupted_version=current,
                 corruption_type="invalid_semver_progression",
                 details=(
@@ -146,17 +139,12 @@ async def verify_chain_detailed(store: AsyncBlockchainModelStore) -> CorruptionR
             )
 
     # All checks passed
-    return CorruptionReport(
-        is_valid=True,
-        corrupted_version=None,
-        corruption_type=None,
-        details=f"Chain verified: {len(versions)} versions intact",
-    )
+    return ChainValid(details=f"Chain verified: {len(versions)} versions intact")
 
 
 async def verify_chain(
     store: AsyncBlockchainModelStore,
-) -> Result[CorruptionReport, S3OperationError]:
+) -> Result[VerificationOutcome, S3OperationError]:
     """
     Verify blockchain integrity with functional error handling.
 
@@ -172,11 +160,7 @@ async def verify_chain(
         store: AsyncBlockchainModelStore instance
 
     Returns:
-        Success(CorruptionReport) with validation results:
-            - CorruptionReport.is_valid: True if chain intact
-            - CorruptionReport.corrupted_version: First corrupted version (if any)
-            - CorruptionReport.corruption_type: Type of corruption detected
-            - CorruptionReport.details: Human-readable description
+        Success(VerificationOutcome) describing whether the chain is valid or corrupted
 
         Failure(S3OperationError) for S3 operational failures:
             - S3BucketNotFound: Bucket doesn't exist
@@ -189,10 +173,10 @@ async def verify_chain(
         async with AsyncBlockchainModelStore("bucket") as store:
             result = await verify_chain(store)
             match result:
-                case Success(report) if report.is_valid:
-                    print(f"Chain valid: {report.details}")
-                case Success(report):
-                    print(f"Corruption: {report.corruption_type}")
+                case Success(ChainValid(details=details)):
+                    print(f"Chain valid: {details}")
+                case Success(ChainCorrupted(corruption_type=ct)):
+                    print(f"Corruption: {ct}")
                 case Failure(S3BucketNotFound(bucket=b)):
                     print(f"Bucket not found: {b}")
                 case Failure(error):
@@ -207,14 +191,7 @@ async def verify_chain(
         case Failure(error):
             # Check if it's HeadNotFoundError (empty chain - valid)
             if isinstance(error, HeadNotFoundError):
-                return Success(
-                    CorruptionReport(
-                        is_valid=True,
-                        corrupted_version=None,
-                        corruption_type=None,
-                        details="Empty chain (no versions committed)",
-                    )
-                )
+                return Success(ChainValid(details="Empty chain (no versions committed)"))
             # S3OperationError propagates
             return Failure(error)
 
@@ -255,8 +232,14 @@ async def find_corruption(store: AsyncBlockchainModelStore) -> ModelVersion | No
             print(f"Corruption at version {corrupted.counter}")
         ```
     """
-    report = await verify_chain_detailed(store)
-    return report.corrupted_version
+    outcome = await verify_chain_detailed(store)
+    match outcome:
+        case ChainValid():
+            return None
+        case ChainCorrupted(corrupted_version=version):
+            return version
+        case _:
+            assert_never(outcome)
 
 
 async def verify_version_completeness(

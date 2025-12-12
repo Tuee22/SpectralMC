@@ -100,7 +100,7 @@ from spectralmc.effects import (
     sequence_effects,
 )
 from spectralmc.effects.types import Effect
-from spectralmc.errors.gbm import NormalsGenerationFailed, NormalsUnavailable
+from spectralmc.errors.gbm import CudaRNGUnavailable, NormalsGenerationFailed, NormalsUnavailable
 from spectralmc.errors.serialization import SerializationError
 from spectralmc.errors.torch_facade import TorchFacadeError
 from spectralmc.errors.trainer import (
@@ -156,11 +156,45 @@ __all__: tuple[str, ...] = (
     "TensorBoardLogger",
     "GbmCVNNPricer",
     "TrainingConfig",
+    "NoCommit",
+    "FinalCommit",
+    "IntervalCommit",
+    "FinalAndIntervalCommit",
+    "CommitPlan",
 )
 
 # =============================================================================
 # Constants
 # =============================================================================
+
+
+# Commit plan ADT to avoid boolean toggles for blockchain effects
+@dataclass(frozen=True)
+class NoCommit:
+    kind: Literal["NoCommit"] = "NoCommit"
+
+
+@dataclass(frozen=True)
+class FinalCommit:
+    kind: Literal["FinalCommit"] = "FinalCommit"
+    commit_message_template: str = "Training checkpoint at step {step}"
+
+
+@dataclass(frozen=True)
+class IntervalCommit:
+    interval: PositiveInt
+    kind: Literal["IntervalCommit"] = "IntervalCommit"
+    commit_message_template: str = "Training checkpoint at step {step}"
+
+
+@dataclass(frozen=True)
+class FinalAndIntervalCommit:
+    interval: PositiveInt
+    kind: Literal["FinalAndIntervalCommit"] = "FinalAndIntervalCommit"
+    commit_message_template: str = "Training checkpoint at step {step}"
+
+
+CommitPlan = NoCommit | FinalCommit | IntervalCommit | FinalAndIntervalCommit
 
 # Allowed Effect types for filtering in effect sequence building
 _ALLOWED_EFFECT_TYPES: tuple[type[Effect], ...] = (
@@ -488,6 +522,37 @@ class CudaUnavailableForRNGRestore:
 GbmPricerError = DeviceDTypeError | DeviceNotCUDA | CudaUnavailableForRNGRestore
 
 
+@dataclass(frozen=True)
+class CudaEnvAvailable:
+    """CUDA environment is usable with at least one device."""
+
+    device_count: int
+
+
+@dataclass(frozen=True)
+class CudaEnvMissing:
+    """CUDA environment unavailable or unusable."""
+
+    reason: str
+
+
+CudaEnv = CudaEnvAvailable | CudaEnvMissing
+
+
+def _cuda_env() -> CudaEnv:
+    """Total CUDA environment probe that forbids silent CPU fallbacks."""
+    match torch.cuda.is_available():
+        case False:
+            return CudaEnvMissing(reason="cuda_unavailable")
+        case True:
+            count = torch.cuda.device_count()
+            return (
+                CudaEnvAvailable(device_count=count)
+                if count > 0
+                else CudaEnvMissing(reason="no_cuda_devices")
+            )
+
+
 # =============================================================================
 #  Trainer
 # =============================================================================
@@ -550,15 +615,14 @@ class GbmCVNNPricer:
             case None:
                 pass  # No CUDA RNG state to restore, validation passes
             case _:
-                # Checkpoint has CUDA RNG state - verify CUDA is available
-                match torch.cuda.is_available():
-                    case False:
+                match _cuda_env():
+                    case CudaEnvMissing():
                         return Failure(
                             CudaUnavailableForRNGRestore(
                                 message="Checkpoint contains CUDA RNG state but CUDA is not available"
                             )
                         )
-                    case True:
+                    case CudaEnvAvailable():
                         pass  # CUDA available, validation passes
 
         # Step 4: Create instance (all validation passed) - call private constructor
@@ -626,6 +690,15 @@ class GbmCVNNPricer:
                 pass  # No CUDA RNG state to restore
             case cuda_states:
                 # Factory validation guarantees CUDA is available if we reach here
+                env = _cuda_env()
+                assert isinstance(
+                    env, CudaEnvAvailable
+                ), f"CUDA RNG restore invariant violated: {_cuda_env()!r}"
+                count = env.device_count
+                assert count == len(cuda_states), (
+                    f"CUDA RNG state count ({len(cuda_states)}) does not match "
+                    f"device count ({count})"
+                )
                 torch.cuda.set_rng_state_all(
                     list(
                         map(
@@ -665,11 +738,13 @@ class GbmCVNNPricer:
         # operations. The TensorTree API cannot be used because it raises on
         # no-op moves (CPU RNG state is already on CPU).
         torch_cpu_rng = torch.get_rng_state().cpu().numpy().tobytes()
-        torch_cuda_rng: list[bytes] | None = (
-            [state.cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()]
-            if torch.cuda.is_available() and torch.cuda.device_count() > 0
-            else None
-        )
+        match _cuda_env():
+            case CudaEnvAvailable():
+                torch_cuda_rng: list[bytes] = [
+                    state.cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()
+                ]
+            case CudaEnvMissing(reason):
+                return Failure(NormalsUnavailable(error=CudaRNGUnavailable(reason=reason)))
 
         match self._context.mc_engine.snapshot():
             case Failure(error):
@@ -863,8 +938,8 @@ class GbmCVNNPricer:
                     expiry=1.0,
                     timesteps=mc_snapshot.sim_params.timesteps,
                     batches=mc_snapshot.sim_params.total_paths(),
-                    simulate_log_return=mc_snapshot.simulate_log_return,
-                    normalize_forwards=mc_snapshot.normalize_forwards,
+                    path_scheme=mc_snapshot.path_scheme,
+                    normalization=mc_snapshot.normalization,
                     input_normals_id=f"normals_{batch_idx}",
                     output_tensor_id=f"paths_{batch_idx}",
                 ),
@@ -1319,31 +1394,50 @@ class GbmCVNNPricer:
     @staticmethod
     def _should_commit_now(
         blockchain_store: AsyncBlockchainModelStore | None,
-        commit_interval: int | None,
+        commit_plan: CommitPlan,
         global_step: int,
-    ) -> bool:
-        """Check if periodic commit should happen this step."""
-        match (blockchain_store, commit_interval):
-            case (None, _) | (_, None):
-                return False
-            case (_, interval):
-                return global_step % interval == 0
+    ) -> tuple[bool, str]:
+        """Return (should_commit, template) for periodic commits."""
+        match (blockchain_store, commit_plan):
+            case (None, IntervalCommit() | FinalAndIntervalCommit()):
+                return (False, "")
+            case (_, IntervalCommit(interval=interval, commit_message_template=template)):
+                return (global_step % interval == 0, template)
+            case (_, FinalAndIntervalCommit(interval=interval, commit_message_template=template)):
+                return (global_step % interval == 0, template)
             case _:
-                raise AssertionError("Unreachable: tuple pattern match exhaustive")
+                return (False, "")
 
     @staticmethod
     def _should_commit_final(
         blockchain_store: AsyncBlockchainModelStore | None,
-        auto_commit: bool,
-    ) -> bool:
-        """Check if final commit should happen after training."""
-        match (blockchain_store, auto_commit):
-            case (None, _) | (_, False):
-                return False
-            case (_, True):
-                return True
+        commit_plan: CommitPlan,
+    ) -> tuple[bool, str]:
+        """Return (should_commit, template) for final commit."""
+        match (blockchain_store, commit_plan):
+            case (None, FinalCommit() | FinalAndIntervalCommit()):
+                return (False, "")
+            case (_, FinalCommit(commit_message_template=template)):
+                return (True, template)
+            case (_, FinalAndIntervalCommit(commit_message_template=template)):
+                return (True, template)
             case _:
-                raise AssertionError("Unreachable: tuple pattern match exhaustive")
+                return (False, "")
+
+    @staticmethod
+    def _validate_commit_plan(plan: CommitPlan) -> Result[CommitPlan, InvalidTrainerConfig]:
+        """Validate commit plan variants."""
+        match plan:
+            case NoCommit() | FinalCommit():
+                return Success(plan)
+            case IntervalCommit(interval=interval) | FinalAndIntervalCommit(interval=interval):
+                if interval <= 0:
+                    return Failure(
+                        InvalidTrainerConfig(
+                            message="commit interval must be positive for blockchain commit plan"
+                        )
+                    )
+                return Success(plan)
 
     def train(
         self,
@@ -1351,9 +1445,7 @@ class GbmCVNNPricer:
         *,
         logger: StepLogger | None = None,
         blockchain_store: AsyncBlockchainModelStore | None = None,
-        auto_commit: bool = False,
-        commit_interval: int | None = None,
-        commit_message_template: str = "Training checkpoint at step {step}",
+        commit_plan: CommitPlan = NoCommit(),
     ) -> Result[TrainingResult, TrainerError]:
         """
         Run **CUDA-only** optimisation for *config.num_batches* steps.
@@ -1362,9 +1454,7 @@ class GbmCVNNPricer:
             config: Training hyperparameters (num_batches, batch_size, learning_rate)
             logger: Optional callback executed after each step
             blockchain_store: Optional AsyncBlockchainModelStore for automatic commits
-            auto_commit: If True, commit snapshot after training completes (requires blockchain_store)
-            commit_interval: If set, commit every N batches during training (requires blockchain_store)
-            commit_message_template: Template for commit messages (can use {step}, {loss}, {batch})
+            commit_plan: Explicit blockchain commit plan (FinalCommit, IntervalCommit, etc.)
 
         Returns:
             TrainingResult with updated config and training metrics
@@ -1376,19 +1466,20 @@ class GbmCVNNPricer:
         # No need to check CUDA - _context guarantees we're on CUDA
         # (enforced by __init__ which raises RuntimeError if not on CUDA)
 
-        match (auto_commit, commit_interval is not None, blockchain_store is not None):
-            case (True, _, False) | (_, True, False):
-                return Failure(
-                    InvalidTrainerConfig(
-                        message="auto_commit or commit_interval requires blockchain_store to be provided"
-                    )
-                )
-            case _:
-                pass  # Valid configuration
+        match self._validate_commit_plan(commit_plan):
+            case Failure(plan_error):
+                return Failure(plan_error)
+            case Success(_):
+                pass
+
+        if blockchain_store is None and not isinstance(commit_plan, NoCommit):
+            return Failure(
+                InvalidTrainerConfig(message="commit_plan requires blockchain_store to be provided")
+            )
 
         match self._sampler_result:
-            case Failure(error):
-                return Failure(SamplerInitFailed(error=error))
+            case Failure(sampler_error):
+                return Failure(SamplerInitFailed(error=sampler_error))
             case Success(_):
                 pass
 
@@ -1467,8 +1558,8 @@ class GbmCVNNPricer:
             global_step += 1
 
             # Periodic blockchain commits
-            match self._should_commit_now(blockchain_store, commit_interval, global_step):
-                case True:
+            match self._should_commit_now(blockchain_store, commit_plan, global_step):
+                case True, template:
                     self._log_sync_message(
                         f"Periodic commit at step {global_step}",
                         level="info",
@@ -1480,11 +1571,11 @@ class GbmCVNNPricer:
                     self._commit_to_blockchain(
                         blockchain_store,
                         adam,
-                        commit_message_template,
+                        template,
                         updated_loss,
                         batch=global_step,
                     )
-                case False:
+                case False, _:
                     pass
 
             return Success(
@@ -1550,8 +1641,8 @@ class GbmCVNNPricer:
         self._sobol_skip = current_sobol_skip
 
         # ── Final blockchain commit ─────────────────────────────────── #
-        match self._should_commit_final(blockchain_store, auto_commit):
-            case True:
+        match self._should_commit_final(blockchain_store, commit_plan):
+            case True, template:
                 self._log_sync_message(
                     f"Final commit after training at step {current_global_step}",
                     level="info",
@@ -1561,11 +1652,11 @@ class GbmCVNNPricer:
                 self._commit_to_blockchain(
                     blockchain_store,
                     adam,
-                    commit_message_template,
+                    template,
                     final_loss,
                     batch=config.num_batches,
                 )
-            case False:
+            case False, _:
                 pass
 
         # ── Return immutable training result ────────────────────────── #
@@ -1589,9 +1680,7 @@ class GbmCVNNPricer:
         *,
         logger: StepLogger | None = None,
         blockchain_store: AsyncBlockchainModelStore | None = None,
-        auto_commit: bool = False,
-        commit_interval: int | None = None,
-        commit_message_template: str = "Training checkpoint at step {step}",
+        commit_plan: CommitPlan = NoCommit(),
     ) -> Result[TrainingResult, TrainerError]:
         """
         Effect-based training currently delegates to the synchronous implementation
@@ -1601,9 +1690,7 @@ class GbmCVNNPricer:
             config,
             logger=logger,
             blockchain_store=blockchain_store,
-            auto_commit=auto_commit,
-            commit_interval=commit_interval,
-            commit_message_template=commit_message_template,
+            commit_plan=commit_plan,
         )
 
     # ------------------------------------------------------------------ #

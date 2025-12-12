@@ -16,7 +16,7 @@ flowchart TB
   Purity[Purity Doctrine]
   Interpreter[Effect Interpreter]
   CPUvsGPU[CPU GPU Compute]
-  Facade[PyTorch Facade]
+  Facade[Torch Runtime]
   Repro[Reproducibility Proofs]
   Docker[Docker Workflow]
 
@@ -34,7 +34,7 @@ flowchart TB
 
 - **Make invalid states unrepresentable**: Effects and domain models are ADTs with exhaustive `match` coverage; Result types replace exceptions for expected flows.
 - **Pure descriptions, isolated execution**: Programs describe work as generators of effect ADTs; interpreters own all I/O (GPU kernels, storage, RNG, logging).
-- **Deterministic GPU-first execution**: CPU-only initialization followed by explicit device transfer; PyTorch imports flow through the facade to enforce deterministic settings and thread safety.
+- **Deterministic GPU-first execution**: CPU-only initialization followed by explicit device transfer; a TorchRuntime ADT + configuration effect enforces deterministic settings and thread affinity without relying on import order.
 - **Immutable state**: Frozen dataclasses for models/effects; functional updates only.
 - **Total pure models drive effects**: Pure ADTs from [total_pure_modelling.md](total_pure_modelling.md)
   choose device placement, retries, and hand-offs before interpreters run any side effects.
@@ -53,7 +53,7 @@ flowchart TB
 3. **Interpreters (Impure boundary)**  
    - Single boundary for side effects.  
    - Handles GPU operations (kernels, streams), storage (S3/blockchain CAS), logging, RNG capture/restore.  
-   - Uses PyTorch facade for deterministic device/dtype defaults.
+   - Receives a validated torch handle from the TorchRuntime effect for deterministic device/dtype defaults.
 
 4. **Infrastructure (Adapters)**  
    - Concrete integrations (PyTorch, CuPy, S3 client, chain verification tools).  
@@ -93,7 +93,7 @@ flowchart TB
 
 - Pure layers never import infrastructure modules directly; they depend on effect ADTs and domain types.
 - Interpreters/adapters may import infrastructure and must remain the sole owners of side effects.
-- PyTorch must be imported through the facade before any interpreter or model import to set deterministic global state.
+- Torch must be configured via the TorchRuntime ADT + configuration effect before interpreters run GPU work; do not rely on import order.
 
 ## Migration Notes
 
@@ -106,7 +106,7 @@ flowchart TB
 - [Effect Interpreter Doctrine](effect_interpreter.md)
 - [Purity Doctrine](purity_doctrine.md)
 - [CPU GPU Compute Policy](cpu_gpu_compute_policy.md)
-- [PyTorch Facade Pattern](pytorch_facade.md)
+- [Torch Runtime (facade removed)](pytorch_facade.md)
 - [Reproducibility Proofs](reproducibility_proofs.md)
 - [Docker Workflow](docker_workflow.md)
 - [Total Pure Modelling](total_pure_modelling.md)

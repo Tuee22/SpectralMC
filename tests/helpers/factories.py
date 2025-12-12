@@ -12,6 +12,7 @@ from typing import Literal
 
 import torch
 
+from spectralmc.effects import ForwardNormalization, PathScheme
 from spectralmc.gbm import (
     BlackScholesConfig,
     SimulationParams,
@@ -84,8 +85,8 @@ def make_simulation_params(
 
 def make_black_scholes_config(
     sim_params: SimulationParams | None = None,
-    simulate_log_return: bool = True,
-    normalize_forwards: bool = True,
+    path_scheme: PathScheme = PathScheme.LOG_EULER,
+    normalization: ForwardNormalization = ForwardNormalization.NORMALIZE,
 ) -> BlackScholesConfig:
     """Create BlackScholesConfig with defaults for testing.
 
@@ -94,8 +95,8 @@ def make_black_scholes_config(
 
     Args:
         sim_params: Simulation parameters (creates default if None)
-        simulate_log_return: Whether to simulate log returns (default: True)
-        normalize_forwards: Whether to normalize forwards (default: True)
+        path_scheme: Path computation scheme (default: log-Euler)
+        normalization: Forward normalization intent (default: normalize)
 
     Returns:
         Validated BlackScholesConfig instance
@@ -105,7 +106,7 @@ def make_black_scholes_config(
 
     Example:
         >>> config = make_black_scholes_config()
-        >>> assert config.simulate_log_return is True
+        >>> assert config.path_scheme is PathScheme.LOG_EULER
     """
     if sim_params is None:
         sim_params = make_simulation_params()
@@ -113,8 +114,8 @@ def make_black_scholes_config(
     return expect_success(
         build_black_scholes_config(
             sim_params=sim_params,
-            simulate_log_return=simulate_log_return,
-            normalize_forwards=normalize_forwards,
+            path_scheme=path_scheme,
+            normalization=normalization,
         )
     )
 

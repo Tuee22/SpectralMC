@@ -31,7 +31,7 @@ deterministic and illegal states are unrepresentable.
 **Related Standards**:
 - [Purity Doctrine](purity_doctrine.md) - Pure functions enabling reproducibility
 - [Effect Interpreter](effect_interpreter.md) - Effect ADT patterns enabling reproducibility
-- [PyTorch Facade](pytorch_facade.md) - Determinism configuration
+- [Torch Runtime (facade removed)](pytorch_facade.md) - Pure runtime ADT + deterministic config effect
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) - Device placement rules
 - [Coding Standards](coding_standards.md) - Type safety requirements
 
@@ -59,61 +59,83 @@ This is **trivially true** for pure functions. The challenge is ensuring all GPU
 
 ## Reproducibility via Effect Sequencing
 
-### PyTorch Facade as Effect Interpreter
+### Torch Runtime ADT + Determinism Effect
 
-The PyTorch Facade ([`src/spectralmc/models/torch.py`](../../src/spectralmc/models/torch.py)) serves as SpectralMC's effect interpreter for determinism. It intercepts all PyTorch operations and configures deterministic execution at import time.
+Determinism is enforced via a pure runtime probe followed by an explicit configuration effect:
 
-### Import-Time Effect Sequencing
+```python
+# Pseudocode
+@dataclass(frozen=True)
+class TorchRuntime:
+    kind: Literal["ready", "rejected"]
+    cuda_version: str | None = None
+    cudnn_version: int | None = None
+    reason: str | None = None
+
+def decide_torch_runtime() -> TorchRuntime:
+    # pure checks: CUDA present, device count > 0, cuDNN version known
+    ...
+
+def apply_torch_runtime(runtime: TorchRuntime) -> Result[torch.Module, RuntimeError]:
+    match runtime.kind:
+        case "ready":
+            os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
+            import torch
+            torch.use_deterministic_algorithms(True, warn_only=False)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+            torch.backends.cudnn.allow_tf32 = False
+            torch.backends.cuda.matmul.allow_tf32 = False
+            return Success(torch)
+        case "rejected":
+            return Failure(RuntimeError(runtime.reason or "torch_runtime_rejected"))
+```
+
+The effect interpreter owns `apply_torch_runtime` and injects the returned `torch` handle; callers
+never rely on import order.
+
+### Runtime Effect Sequencing
 
 ```mermaid
 flowchart TB
-    FacadeImport[Import Facade First]
-    TorchCheck[Torch Not Imported]
-    ThreadCheck[Main Thread Only]
-    ThreadId[Capture Thread Id]
-    SetCublas[Set CUBLAS Config]
-    ImportTorch[Import Torch]
-    SetDeterministic[Enable Determinism]
-    SetCudnn[Configure CuDNN]
-    Ready[Deterministic Ready]
+    Decide[Pure runtime probe]
+    Ready[TorchRuntime.ready]
+    Rejected[TorchRuntime.rejected(reason)]
+    Apply[Apply deterministic flags + import torch]
+    Error[Fail closed with reason]
+    Handle[Return injected torch handle]
 
-    FacadeImport --> TorchCheck
-    TorchCheck --> ThreadCheck
-    ThreadCheck --> ThreadId
-    ThreadId --> SetCublas
-    SetCublas --> ImportTorch
-    ImportTorch --> SetDeterministic
-    SetDeterministic --> SetCudnn
-    SetCudnn --> Ready
+    Decide --> Ready
+    Decide --> Rejected
+    Ready --> Apply
+    Rejected --> Error
+    Apply --> Handle
 ```
 
-### Theorem: Determinism via Effect Sequencing
+### Theorem: Determinism via Runtime Effect
 
-**Claim**: If the PyTorch Facade is imported before any computation, all subsequent GPU operations are deterministic.
+**Claim**: If a `TorchRuntime.ready` value is interpreted before any computation, all subsequent GPU
+operations are deterministic.
 
 **Proof**:
 
-1. The facade checks `"torch" in sys.modules` (lines 37-42) and raises `ImportError` if torch was imported first
-2. `torch.use_deterministic_algorithms(True, warn_only=False)` is called (line 69)
-3. This setting forces PyTorch to use only deterministic implementations
-4. Any non-deterministic operation raises `RuntimeError` (because `warn_only=False`)
-5. The `CUBLAS_WORKSPACE_CONFIG=:16:8` environment variable ensures cuBLAS uses deterministic algorithms
+1. `decide_torch_runtime` is pure; it produces `TorchRuntime.ready` only when CUDA and cuDNN meet
+   requirements (device count > 0, cuDNN version available).
+2. The interpreter handles only the `ready` variant; `rejected` short-circuits with an error,
+   preventing GPU work from starting.
+3. In the `ready` branch, deterministic flags are set (`use_deterministic_algorithms`, cuDNN and
+   TF32 disables, `CUBLAS_WORKSPACE_CONFIG`).
+4. Because `warn_only=False`, any attempt to use a non-deterministic op raises `RuntimeError`.
+5. All GPU work consumes the injected torch handle produced by the interpreter, so it shares the
+   configured deterministic state.
 
 **Therefore**: All operations that succeed are deterministic by construction. QED.
 
-### Compile-Time Enforcement
+### Enforcement
 
-Import order violations are caught at **import time**:
-
-```python
-# File: documents/engineering/reproducibility_proofs.md
-# This raises ImportError immediately
-import torch  # WRONG: torch before facade
-import spectralmc.models.torch  # Too late - ImportError!
-```
-
-The error message explicitly states:
-> "PyTorch was imported before the SpectralMC torch façade. Import 'spectralmc.models.torch' **first** so it can set deterministic flags."
+- If `TorchRuntime` is `rejected`, effect orchestration must log/propagate the reason and stop.
+- Lint/review gates must reject raw `import torch` in production paths; code should consume injected
+  torch handles from the runtime effect.
 
 ---
 
@@ -345,26 +367,25 @@ config.global_step = 100  # mypy error: Cannot assign to attribute
 ```mermaid
 flowchart TB
     CompileChecks[Compile time checks strict mypy]
-    ImportGuards[Import time guards]
     RuntimeGuards[Runtime guarantees]
     FrozenCheck[Frozen dataclass errors on mutation]
     ResultCheck[Result types require handling]
     AnyCheck[No Any Cast Ignore]
-    TorchOrder[Torch import order guard]
-    ThreadCheck[Main thread required]
+    TorchRuntime[TorchRuntime ADT required]
+    ThreadCheck[Thread affinity enforced in runtime]
     ImmutableConfig[GbmCVNNPricerConfig frozen]
     PatternMatch[Pattern matching with assert_never]
-    EffectSequence[Effect sequencing via facade]
+    EffectSequence[Effect sequencing via runtime effect]
 
     CompileChecks -->|enforces| FrozenCheck
     CompileChecks -->|enforces| ResultCheck
     CompileChecks -->|enforces| AnyCheck
-    ImportGuards -->|enforces| TorchOrder
-    ImportGuards -->|enforces| ThreadCheck
+    CompileChecks -->|enforces| TorchRuntime
+    CompileChecks -->|enforces| ThreadCheck
     FrozenCheck -->|supports| ImmutableConfig
     ResultCheck -->|supports| PatternMatch
     AnyCheck -->|supports| EffectSequence
-    TorchOrder -->|supports| EffectSequence
+    TorchRuntime -->|supports| EffectSequence
     ThreadCheck -->|supports| EffectSequence
     ImmutableConfig -->|feeds| RuntimeGuards
     PatternMatch -->|feeds| RuntimeGuards
@@ -456,7 +477,7 @@ flowchart TB
 | # | Guarantee | Mechanism | Verification |
 |---|-----------|-----------|--------------|
 | G1 | Pure Functions | Type system (frozen, no Any) | mypy --strict |
-| G2 | Effect Sequencing | PyTorch Facade | Import-time check |
+| G2 | Effect Sequencing | TorchRuntime ADT + configuration effect | Runtime decision + interpreter gate |
 | G3 | State Threading | Explicit RNG capture/restore | Checkpoint tests |
 | G4 | Checkpoint Correctness | Complete state serialization | Resume tests |
 | G5 | Integrity Verification | SHA256 content addressing | Hash verification |
@@ -469,7 +490,7 @@ When implementing new features, verify:
 
 - [ ] All configuration types use `frozen=True`
 - [ ] RNG state is captured in checkpoint if used
-- [ ] `spectralmc.models.torch` imported before any torch usage
+- [ ] TorchRuntime decision is made purely and interpreted before any torch usage
 - [ ] No `Any`, `cast`, or `type: ignore` in code
 - [ ] All GPU operations use deterministic algorithms
 - [ ] Tests verify bit-exact reproducibility with fixed seeds
@@ -481,7 +502,7 @@ When implementing new features, verify:
 
 - [Purity Doctrine](purity_doctrine.md) - Pure functions enabling reproducibility
 - [Effect Interpreter](effect_interpreter.md) - Effect ADT patterns
-- [PyTorch Facade](pytorch_facade.md) - Determinism implementation details
+- [Torch Runtime (facade removed)](pytorch_facade.md) - Determinism implementation details
 - [Coding Standards](coding_standards.md) - Type safety requirements
 - [Testing Requirements](testing_requirements.md) - Reproducibility test patterns
 - [Blockchain Storage](blockchain_storage.md) - Checkpoint verification

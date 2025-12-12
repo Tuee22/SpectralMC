@@ -15,7 +15,7 @@ flowchart TB
   Purity[Purity Doctrine]
   Immutability[Immutability Doctrine]
   Interpreter[Effect Interpreter]
-  Facade[PyTorch Facade]
+  Facade[Torch Runtime]
   CPUvsGPU[CPU GPU Compute]
   Testing[Testing]
   Docs[Documentation Standards]
@@ -37,7 +37,7 @@ flowchart TB
 | Pure code rules (no `for`/`if`/`raise` in pure paths) | [Purity Doctrine](purity_doctrine.md) |
 | Frozen data + safe updates | [Immutability Doctrine](immutability_doctrine.md) |
 | Effect ADTs + interpreter boundary | [Effect Interpreter Doctrine](effect_interpreter.md) |
-| Deterministic PyTorch import/device | [PyTorch Facade Pattern](pytorch_facade.md) |
+| Deterministic PyTorch runtime/device | [Torch Runtime (facade removed)](pytorch_facade.md) |
 | CPU init → GPU compute rules | [CPU GPU Compute Policy](cpu_gpu_compute_policy.md) |
 | Determinism proofs | [Reproducibility Proofs](reproducibility_proofs.md) |
 | Testing gates | [Testing](testing.md) |
@@ -57,7 +57,7 @@ flowchart TB
 - **Purity-first (Zero Tolerance)**: Tier 2 business logic enforces ZERO TOLERANCE for `for`/`while`/statement-level `if` (use `match`/comprehensions/conditional expressions). Tier 1 infrastructure and Tier 3 interpreters may use imperative patterns. Side effects in business logic must be modeled as Effect ADTs. See [purity_enforcement.md](purity_enforcement.md) for AST linter rules.
 - **Immutability by default**: All domain/effect dataclasses are `frozen=True`; updates use `dataclasses.replace` or new instances. No mutation through `__dict__`, `object.__setattr__`, or tuple hacks.
 - **Effects as data**: Programs yield effect ADTs; interpreters execute. No direct infrastructure calls inside programs or models.
-- **GPU determinism**: CPU-only initialization + explicit device transfer; PyTorch imports flow through the facade for deterministic settings and thread safety.
+- **GPU determinism**: CPU-only initialization + explicit device transfer; TorchRuntime ADT + configuration effect applies deterministic settings and thread affinity before GPU work.
 - **Reproducibility**: RNG state is explicit; checkpoint/restore semantics prove equivalence. See reproducibility proofs for invariants.
 
 ## Anti-Pattern Routing
@@ -71,7 +71,7 @@ flowchart TB
 | Mutable dataclasses | Convert to frozen + functional updates | immutability_doctrine.md |
 | Side effects in pure layers | Model as effect ADTs and interpret | effect_interpreter.md |
 | CPU fallbacks in tests | Assert GPU availability; explicit `cuda:0` | cpu_gpu_compute_policy.md; testing.md |
-| Direct `import torch` | Import facade first | pytorch_facade.md |
+| Direct `import torch` | Obtain/inject TorchRuntime handle; run deterministic runtime effect | pytorch_facade.md |
 | Silent exception swallowing | Return Result ADTs; exhaustive `match` | coding_standards.md; purity_doctrine.md |
 
 ## Enforcement
@@ -81,4 +81,4 @@ flowchart TB
 - Secondary gates:
   - `poetry run typecheck` / `check-types` for AST-based typing violations
   - `poetry run test-all` (GPU-only) to exercise interpreter/purity constraints
-- Review checklist: exhaustive matches with `assert_never`, no host-level commands, facade before torch, immutable data, Result-based errors, link to SSoT not duplicates.
+- Review checklist: exhaustive matches with `assert_never`, no host-level commands, TorchRuntime enforced (no raw torch imports), immutable data, Result-based errors, link to SSoT not duplicates.

@@ -63,4 +63,4 @@ Research on handling variable-length input sequences.
 
 - [Engineering Standards](../engineering/README.md) - Implementation practices
 - [Product Documentation](../product/index.md) - Deployment and operations
-- [PyTorch Facade](../engineering/pytorch_facade.md) - CVNN implementation patterns and determinism
+- [Torch Runtime (facade removed)](../engineering/pytorch_facade.md) - Deterministic torch runtime ADT/effect and CVNN implications

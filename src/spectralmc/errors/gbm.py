@@ -16,7 +16,18 @@ from spectralmc.errors.async_normals import (
 )
 from spectralmc.result import Result
 
-NormGeneratorError = InvalidShape | InvalidDType | QueueBusy | QueueEmpty | SeedOutOfRange
+
+@dataclass(frozen=True)
+class CudaRNGUnavailable:
+    """CUDA RNG state cannot be read (device missing or unavailable)."""
+
+    reason: str
+    kind: Literal["CudaRNGUnavailable"] = "CudaRNGUnavailable"
+
+
+NormGeneratorError = (
+    InvalidShape | InvalidDType | QueueBusy | QueueEmpty | SeedOutOfRange | CudaRNGUnavailable
+)
 
 
 @dataclass(frozen=True)

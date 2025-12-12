@@ -101,27 +101,26 @@ SpectralMC enforces strict purity standards for all non-test code. A **pure func
 
 The purity doctrine applies to **business logic**, not all code in SpectralMC. The codebase has three architectural tiers with different purity requirements:
 
-### Tier 1: Infrastructure and Facade Layers (EXEMPT)
+### Tier 1: Infrastructure and Runtime Layers (EXEMPT)
 
 **Exempt Files**:
-- `src/spectralmc/models/torch.py` - PyTorch facade for reproducibility
+- `src/spectralmc/models/torch.py` - Torch runtime configuration (determinism, devices)
 - `src/spectralmc/models/cpu_gpu_transfer.py` - Device transfer utilities
 - `src/spectralmc/cvnn.py` - PyTorch nn.Module layer library
 
 **Rationale**: These files provide the infrastructure that enables business logic to be pure. They handle:
-- Import-time environment configuration (deterministic flags)
+- Runtime environment configuration (deterministic flags)
 - Thread safety guarantees
 - Device placement and transfer
 - Standard PyTorch idioms (nn.Module patterns)
 
 **Acceptable patterns in infrastructure**:
-- Import-time guards: `if "torch" in sys.modules: raise ImportError(...)`
-- Thread safety checks: `if threading.get_ident() != _MAIN_THREAD_ID: raise RuntimeError(...)`
-- Global configuration: `torch.use_deterministic_algorithms(True)`
+- Runtime guards around CUDA/cuDNN readiness and thread affinity
+- Global configuration effects: `torch.use_deterministic_algorithms(True)` etc., applied explicitly by interpreters
 - nn.Module idioms: `if bias: self.bias = nn.Parameter(...)`
 - Weight initialization: `if isinstance(layer, nn.Linear): nn.init.xavier_uniform_(...)`
 
-Per [pytorch_facade.md](pytorch_facade.md), these patterns are necessary for guaranteeing reproducibility.
+Per [pytorch_facade.md](pytorch_facade.md), these patterns are applied via a TorchRuntime ADT plus an explicit configuration effect, not via import-order guards.
 
 ### Tier 2: Business Logic (ZERO TOLERANCE PURITY)
 
@@ -668,7 +667,7 @@ fail fast rather than return `Result` in such cases.
 
 ### Defensive assertions (programming errors)
 
-Infrastructure and facade code (e.g., `models/torch.py`) may use `raise` for **programming error checks**:
+Infrastructure and runtime config code (e.g., `models/torch.py`) may use `raise` for **programming error checks**:
 
 - Thread-safety assertions (e.g., "called from wrong thread")
 - Contract violations in context managers (e.g., "entered/exited in different threads")

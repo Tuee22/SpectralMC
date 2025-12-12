@@ -129,6 +129,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, TypeVar, Generic, Callable, Coroutine, Protocol
 
+from spectralmc.models.cpu_gpu_transfer import OutputPinning, StagePolicy
 from spectralmc.models.torch import Device
 from spectralmc.result import Result, Success, Failure
 
@@ -154,8 +155,8 @@ class TensorTransfer:
         source_device: Device to transfer from.
         target_device: Device to transfer to.
         tensor_id: Opaque identifier for the tensor or TensorTree.
-        pinned_required: Host memory must be pinned for non-blocking transfers.
-        allow_stage: Whether staging through pinned host memory is allowed.
+        output_pinning: Host pinning intent for CPU targets (explicit state, no booleans).
+        stage_policy: Explicit staging policy (allow/forbid) instead of boolean flags.
 
     Example:
         >>> match tensor_transfer(Device.cuda, Device.cpu, "model_weights"):
@@ -168,8 +169,8 @@ class TensorTransfer:
     source_device: Device = Device.cuda
     target_device: Device = Device.cpu
     tensor_id: str = ""
-    pinned_required: bool = False
-    allow_stage: bool = True
+    output_pinning: OutputPinning = OutputPinning.UNPINNED
+    stage_policy: StagePolicy = StagePolicy.ALLOW
 
 
 @dataclass(frozen=True)
@@ -183,8 +184,8 @@ def tensor_transfer(
     target: Device,
     tensor_id: str = "",
     *,
-    pinned_required: bool = False,
-    allow_stage: bool = True,
+    output_pinning: OutputPinning = OutputPinning.UNPINNED,
+    stage_policy: StagePolicy = StagePolicy.ALLOW,
 ) -> Result[TensorTransfer, InvalidTransferError]:
     """Create TensorTransfer, returning Failure if devices are identical.
 
@@ -208,8 +209,8 @@ def tensor_transfer(
                 source_device=source,
                 target_device=target,
                 tensor_id=tensor_id,
-                pinned_required=pinned_required,
-                allow_stage=allow_stage,
+                output_pinning=output_pinning,
+                stage_policy=stage_policy,
             )
         )
     )
@@ -1254,7 +1255,7 @@ See [Purity Doctrine](purity_doctrine.md) for complete purity requirements.
 - [Reproducibility Proofs](reproducibility_proofs.md) - How effects enable provable reproducibility
 - [Immutability Doctrine](immutability_doctrine.md) - Frozen dataclass requirements
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) - Device placement rules
-- [PyTorch Facade](pytorch_facade.md) - Determinism configuration as effect sequencing
+- [Torch Runtime (facade removed)](pytorch_facade.md) - Determinism configuration as runtime ADT + effect sequencing
 - [Blockchain Storage](blockchain_storage.md) - Storage effects implementation
 - [Total Pure Modelling](total_pure_modelling.md) - Source of the pure state machines that
   feed effect builders
@@ -1265,4 +1266,3 @@ See [Purity Doctrine](purity_doctrine.md) for complete purity requirements.
 - GPUInterpreter delegates device moves to the torch façade via `spectralmc.models.cpu_gpu_transfer.move_tensor_tree()`, which plans transfers (`TransferDecision`) purely and executes them with stream ownership.
 - Unpinned host → CUDA transfers are staged through pinned buffers; non-blocking is only used when safe. Invalid plans surface as `TransferRejected`/`InvalidTransferError`; no timing retries or silent fallbacks.
 - Registry updates occur only after successful execution; errors remain pure `Result` values.
-

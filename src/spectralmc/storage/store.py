@@ -15,7 +15,8 @@ import asyncio
 import json
 import logging
 import os
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from types import TracebackType
 from typing import (
     Callable,
@@ -65,6 +66,78 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
+@dataclass(frozen=True)
+class RetryScheduled:
+    """Planned retry with bounded, explicit delay."""
+
+    attempt: int
+    delay_seconds: float
+    scheduled_for: datetime
+
+
+@dataclass
+class RetryExhausted(Exception):
+    """Retry budget consumed (explicitly typed to avoid silent loops)."""
+
+    attempts: int
+
+
+@dataclass(frozen=True)
+class RetryGiveUp:
+    """Explicit stop signal when retries are not allowed for an error."""
+
+    reason: str
+
+
+RetryControl = RetryScheduled | RetryExhausted | RetryGiveUp
+
+
+def _retry_schedule(max_retries: int, base_delay: float, max_delay: float) -> list[RetryScheduled]:
+    """Deterministic retry plan to avoid unbounded sleeps."""
+    now = datetime.now(UTC)
+    schedule: list[RetryScheduled] = []
+    cumulative_delay = 0.0
+    for attempt in range(max_retries):
+        delay_seconds = min(base_delay * (2**attempt), max_delay)
+        cumulative_delay += delay_seconds
+        schedule.append(
+            RetryScheduled(
+                attempt=attempt,
+                delay_seconds=delay_seconds,
+                scheduled_for=now + timedelta(seconds=cumulative_delay),
+            )
+        )
+    return schedule
+
+
+def _retry_decision(
+    *,
+    attempt: int,
+    error_code: str,
+    schedule: list[RetryScheduled],
+    max_retries: int,
+) -> RetryControl:
+    """Map an error code and attempt to an explicit retry control signal."""
+    if error_code in ("PreconditionFailed", "412"):
+        return RetryGiveUp(reason="precondition_failed")
+
+    if error_code in ("SlowDown", "RequestLimitExceeded", "ServiceUnavailable"):
+        if attempt < max_retries:
+            if attempt >= len(schedule):
+                return RetryExhausted(attempts=attempt + 1)
+            return schedule[attempt]
+        return RetryExhausted(attempts=attempt + 1)
+
+    return RetryGiveUp(reason=f"non_retryable:{error_code}")
+
+
+async def _await_retry(schedule_entry: RetryScheduled) -> None:
+    """Effectful wait for the next retry window (bounded by schedule)."""
+    remaining = (schedule_entry.scheduled_for - datetime.now(UTC)).total_seconds()
+    if remaining > 0:
+        await asyncio.sleep(remaining)
+
+
 def retry_on_throttle(
     max_retries: int = 5, base_delay: float = 0.1, max_delay: float = 5.0
 ) -> Callable[
@@ -89,7 +162,7 @@ def retry_on_throttle(
         func: Callable[P, Coroutine[object, object, R]],
     ) -> Callable[P, Coroutine[object, object, R]]:
         async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            last_exception = None
+            schedule = _retry_schedule(max_retries, base_delay, max_delay)
 
             for attempt in range(max_retries + 1):
                 try:
@@ -97,28 +170,20 @@ def retry_on_throttle(
                 except ClientError as e:
                     error_code = e.response["Error"]["Code"]
 
-                    # Don't retry on precondition failures (conflicts)
-                    if error_code in ("PreconditionFailed", "412"):
-                        raise
-
-                    # Retry on throttling and transient errors
-                    if error_code in (
-                        "SlowDown",
-                        "RequestLimitExceeded",
-                        "ServiceUnavailable",
+                    match _retry_decision(
+                        attempt=attempt,
+                        error_code=error_code,
+                        schedule=schedule,
+                        max_retries=max_retries,
                     ):
-                        if attempt < max_retries:
-                            delay = min(base_delay * (2**attempt), max_delay)
-                            await asyncio.sleep(delay)
-                            last_exception = e
+                        case RetryGiveUp():
+                            raise
+                        case RetryExhausted():
+                            # Exhausted retry budget: surface original error for callers/tests
+                            raise e
+                        case RetryScheduled() as retry_plan:
+                            await _await_retry(retry_plan)
                             continue
-
-                    # Don't retry other errors
-                    raise
-
-            # Max retries exceeded
-            if last_exception:
-                raise last_exception
 
             raise RuntimeError("Unexpected retry logic failure")
 

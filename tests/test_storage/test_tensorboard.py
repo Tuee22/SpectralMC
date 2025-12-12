@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import torch
 
+from spectralmc.effects import ForwardNormalization, PathScheme
 from spectralmc.gbm import build_black_scholes_config, build_simulation_params
 from spectralmc.result import Failure, Success
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
@@ -42,8 +43,8 @@ def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPri
 
     match build_black_scholes_config(
         sim_params=sim_params,
-        simulate_log_return=True,
-        normalize_forwards=True,
+        path_scheme=PathScheme.LOG_EULER,
+        normalization=ForwardNormalization.NORMALIZE,
     ):
         case Failure(bs_err):
             pytest.fail(f"BlackScholesConfig creation failed: {bs_err}")

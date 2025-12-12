@@ -16,6 +16,8 @@ from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
+    ChainCorrupted,
+    ChainValid,
     InferenceClient,
     PinnedMode,
     TrackingMode,
@@ -26,7 +28,7 @@ from spectralmc.storage import (
 from spectralmc.storage.errors import (
     VersionNotFoundError,
 )
-from spectralmc.storage.gc import run_gc
+from spectralmc.storage.gc import ExecuteGC, PreviewGC, run_gc
 from tests.helpers import expect_success, make_black_scholes_config, make_simulation_params
 
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
@@ -49,11 +51,7 @@ def make_test_snapshot(
         dtype=Precision.float32,
     )
 
-    bs_config = make_black_scholes_config(
-        sim_params=sim_params,
-        simulate_log_return=True,
-        normalize_forwards=True,
-    )
+    bs_config = make_black_scholes_config(sim_params=sim_params)
 
     return GbmCVNNPricerConfig(
         cfg=bs_config,
@@ -65,6 +63,14 @@ def make_test_snapshot(
         torch_cpu_rng_state=torch.get_rng_state().numpy().tobytes(),
         torch_cuda_rng_states=[],
     )
+
+
+def _assert_chain_valid(outcome: ChainValid | ChainCorrupted) -> None:
+    match outcome:
+        case ChainValid():
+            return
+        case ChainCorrupted(corruption_type=corruption_type, details=details):
+            pytest.fail(f"Chain corrupted: {corruption_type} ({details})")
 
 
 @pytest.mark.asyncio
@@ -111,7 +117,7 @@ async def test_e2e_complete_lifecycle(async_store: AsyncBlockchainModelStore) ->
 
     # 5. Verify chain integrity
     report = expect_success(await verify_chain(async_store))
-    assert report.is_valid, f"Chain corrupted: {report.corruption_type}"
+    _assert_chain_valid(report)
 
     # 6. Load final snapshot and verify state
     final_snapshot = expect_success(
@@ -144,7 +150,7 @@ async def test_e2e_sequential_commits(async_store: AsyncBlockchainModelStore) ->
 
     # Verify chain integrity
     report = expect_success(await verify_chain(async_store))
-    assert report.is_valid, f"Chain corrupted: {report.corruption_type}"
+    _assert_chain_valid(report)
 
     # Verify HEAD exists and counter matches successful commits
     head = expect_success(await async_store.get_head())
@@ -260,7 +266,7 @@ async def test_e2e_chain_verification_multiple_versions(
 
     # Verify chain integrity
     report = expect_success(await verify_chain(async_store))
-    assert report.is_valid, f"Chain corrupted: {report.corruption_type}"
+    _assert_chain_valid(report)
 
     # Verify all versions are accessible
     for i in range(20):
@@ -285,7 +291,7 @@ async def test_e2e_garbage_collection_workflow(
         async_store,
         keep_versions=5,
         protect_tags=[3, 7],
-        dry_run=True,
+        mode=PreviewGC(),
     )
     preview_report = expect_success(preview_result)
 
@@ -302,7 +308,7 @@ async def test_e2e_garbage_collection_workflow(
         async_store,
         keep_versions=5,
         protect_tags=[3, 7],
-        dry_run=False,
+        mode=ExecuteGC(),
     )
     gc_report = expect_success(gc_result)
 
@@ -435,7 +441,7 @@ async def test_e2e_concurrent_gc_and_commits(
     async def gc_worker() -> None:
         """Run GC once during commits."""
         await asyncio.sleep(0.2)
-        await run_gc(async_store, keep_versions=5, dry_run=False)
+        await run_gc(async_store, keep_versions=5, mode=ExecuteGC())
 
     # Run concurrently
     await asyncio.gather(commit_worker(), gc_worker())
@@ -462,7 +468,7 @@ async def test_e2e_empty_chain_operations(
     assert head_result.is_failure()
 
     # GC on empty chain
-    report = expect_success(await run_gc(async_store, keep_versions=10, dry_run=True))
+    report = expect_success(await run_gc(async_store, keep_versions=10, mode=PreviewGC()))
     assert report.deleted_versions == []
     assert report.protected_versions == []
     assert report.bytes_freed == 0
@@ -495,11 +501,7 @@ async def test_e2e_large_model_storage(
         dtype=Precision.float32,
     )
 
-    bs_config = make_black_scholes_config(
-        sim_params=sim_params,
-        simulate_log_return=True,
-        normalize_forwards=True,
-    )
+    bs_config = make_black_scholes_config(sim_params=sim_params)
 
     large_snapshot = GbmCVNNPricerConfig(
         cfg=bs_config,
@@ -540,7 +542,7 @@ async def test_e2e_audit_log_integrity(async_store: AsyncBlockchainModelStore) -
         await commit_snapshot(async_store, snapshot, f"Commit {i}")
 
     # Run GC
-    await run_gc(async_store, keep_versions=3, dry_run=False)
+    await run_gc(async_store, keep_versions=3, mode=ExecuteGC())
 
     # Verify more commits
     for i in range(5, 8):
