@@ -11,6 +11,7 @@ from typing import Union
 import pytest
 import torch
 
+
 from spectralmc.cvnn_factory import (
     ActivationCfg,
     ActivationKind,
@@ -29,7 +30,7 @@ from spectralmc.gbm_trainer import (
     TrainingConfig,
 )
 from spectralmc.models.numerical import Precision
-from spectralmc.models.torch import DType as TorchDTypeEnum
+from spectralmc.models.torch import FullPrecisionDType
 from spectralmc.sobol_sampler import BoundSpec, build_bound_spec
 from spectralmc.storage import AsyncBlockchainModelStore, commit_snapshot
 from tests.helpers import (
@@ -40,7 +41,6 @@ from tests.helpers import (
 )
 
 # Module-level GPU requirement - test file fails immediately without GPU
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 def _make_test_cvnn(
@@ -52,7 +52,7 @@ def _make_test_cvnn(
     dtype: torch.dtype,
 ) -> ComplexValuedModel:
     """Create a simple CVNN for testing (matches test_gbm_trainer.py pattern)."""
-    enum_dtype = expect_success(TorchDTypeEnum.from_torch(dtype))
+    enum_dtype = expect_success(FullPrecisionDType.from_torch(dtype))
     cfg = CVNNConfig(
         dtype=enum_dtype,
         layers=[

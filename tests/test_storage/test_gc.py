@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 import torch
 
+
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
 from spectralmc.storage import (
@@ -24,8 +25,6 @@ from tests.helpers import (
     make_black_scholes_config,
     make_simulation_params,
 )
-
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPricerConfig:

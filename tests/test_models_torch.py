@@ -3,7 +3,7 @@ End-to-end tests for ``spectralmc.models.torch``.
 
 The suite focuses on *reproducibility* and *consistency* of:
 
-* Strongly-typed helpers (``DType``, ``Device``)
+* Strongly-typed helpers (``FullPrecisionDType``, ``ReducedPrecisionDType``, ``Device``)
 * Thread-safe context managers (``default_dtype``, ``default_device``)
 * SafeTensor and optimiser state round-tripping
 * Environment fingerprinting
@@ -16,14 +16,9 @@ from __future__ import annotations
 
 from typing import Mapping
 
-import torch
-
 import spectralmc.models.torch as sm_torch
+import torch
 from tests.helpers import expect_success
-
-
-# Module-level GPU requirement - test file fails immediately without GPU
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 # ──────────────────────────── helpers & fixtures ────────────────────────────
 
@@ -35,11 +30,11 @@ def _make_parameters() -> list[torch.nn.Parameter]:
     return [torch.nn.Parameter(p)]
 
 
-# ────────────────────────────── DType / Device ──────────────────────────────
+# ────────────────────────────── DTypes / Device ─────────────────────────────
 def test_dtype_roundtrip() -> None:
-    for d in sm_torch.DType:
+    for d in sm_torch.FullPrecisionDType:
         torch_dt: torch.dtype = d.to_torch()
-        dtype = expect_success(sm_torch.DType.from_torch(torch_dt))
+        dtype = expect_success(sm_torch.FullPrecisionDType.from_torch(torch_dt))
         assert dtype is d
 
 
@@ -165,7 +160,6 @@ def test_public_api_all_exports() -> None:
         "FullPrecisionDType",
         "ReducedPrecisionDType",
         "AnyDType",
-        "DType",
         "Device",
         "TensorState",
         "TorchEnv",

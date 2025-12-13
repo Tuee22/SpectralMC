@@ -1,62 +1,23 @@
 # src/spectralmc/models/torch.py
 """
-spectralmc.models.torch
-=======================
+Typed torch helpers for SpectralMC (Device/dtype enums, TensorState helpers).
 
-A minimal, fully-typed façade exposing just enough of PyTorch for SpectralMC
-while enforcing reproducible execution.
-
-Thread-safety contract
-----------------------
-* This module **must be imported from the main thread _before_ any other
-  threads are spawned**; otherwise it raises ``ImportError``.
-* The context managers ``default_dtype`` and ``default_device`` **may only be
-  entered from the main thread**; attempting to use them from a worker thread
-  raises ``RuntimeError``.
+Deterministic configuration is applied once via `spectralmc.runtime.get_torch_handle`;
+this module consumes that configured handle and exposes typed helpers.
 """
 
 from __future__ import annotations
 
-# --------------------------------------------------------------------------- #
-#  Early import-time guards                                                   #
-# --------------------------------------------------------------------------- #
-import os
 import platform
-import sys
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable, Iterator, Mapping
 
-
-# --- prevent pre-emptive torch import -------------------------------------- #
-if "torch" in sys.modules:
-    raise ImportError(
-        "PyTorch was imported before the SpectralMC torch façade. "
-        "Import 'spectralmc.models.torch' **first** so it can set "
-        "deterministic flags."
-    )
-
-# --- thread-safety: import must occur before worker threads ---------------- #
-if threading.active_count() > 1:
-    raise ImportError(
-        "SpectralMC façade imported after additional threads were created. "
-        "Its global dtype/device helpers are not thread-safe. "
-        "Import this module in the *main thread* before spawning workers."
-    )
-
-_MAIN_THREAD_ID: int = threading.get_ident()
-
-# --------------------------------------------------------------------------- #
-#  Early environment fixes                                                    #
-# --------------------------------------------------------------------------- #
-# Ensure deterministic cuBLAS kernels (ignored if CUDA is absent)
-os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
-
-import torch  # noqa: E402
-
-from spectralmc.errors.torch_facade import (  # noqa: E402
+import torch
+from spectralmc.runtime import get_torch_handle
+from spectralmc.errors.torch_facade import (
     InvalidAdamState,
     TensorStateConversionFailed,
     TorchFacadeError,
@@ -64,14 +25,11 @@ from spectralmc.errors.torch_facade import (  # noqa: E402
     UnsupportedTorchDevice,
     UnsupportedTorchDType,
 )
-from spectralmc.result import Failure, Result, Success  # noqa: E402
-from spectralmc.models.numerical import Precision  # noqa: E402
+from spectralmc.result import Failure, Result, Success
+from spectralmc.models.numerical import Precision
 
-
-# --------------------------------------------------------------------------- #
-#  Determinism knobs                                                          #
-# --------------------------------------------------------------------------- #
-torch.use_deterministic_algorithms(True, warn_only=False)
+get_torch_handle()
+_MAIN_THREAD_ID: int = threading.get_ident()
 
 
 @dataclass(frozen=True)
@@ -86,33 +44,16 @@ class CudaDeterminismMissing:
 
 CudaDeterminismConfig = CudaDeterminismReady | CudaDeterminismMissing
 
-# NOTE: _HAS_CUDA is infrastructure for module-level cuDNN configuration.
-# This is acceptable per CPU/GPU policy: facade code must check CUDA availability
-# at import time to configure determinism flags. It does NOT create silent
-# fallbacks - all GPU operations in SpectralMC fail-fast via explicit device
-# assertions in the compute layer (see cpu_gpu_compute_policy.md).
 _HAS_CUDA: bool = torch.cuda.is_available()
 
 if _HAS_CUDA:
     cudnn_version = torch.backends.cudnn.version()
-    if cudnn_version is None:
-        _CUDA_DETERMINISM: CudaDeterminismConfig = CudaDeterminismMissing(
-            reason="cudnn_unavailable"
-        )
-        raise RuntimeError(
-            "SpectralMC requires cuDNN for deterministic GPU execution, "
-            "but it is missing from the current runtime.",
-        )
-    _CUDA_DETERMINISM = CudaDeterminismReady(cudnn_version)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.allow_tf32 = False
-    torch.backends.cuda.matmul.allow_tf32 = False
+    _CUDA_DETERMINISM: CudaDeterminismConfig = (
+        CudaDeterminismReady(cudnn_version)
+        if cudnn_version is not None
+        else CudaDeterminismMissing(reason="cudnn_unavailable")
+    )
 else:
-    # Even on CPU-only builds make sure these flags exist and are disabled
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.allow_tf32 = False
     _CUDA_DETERMINISM = CudaDeterminismMissing(reason="cuda_unavailable")
 
 
@@ -205,9 +146,6 @@ class ReducedPrecisionDType(str, Enum):
 
 # Union type for contexts accepting any dtype
 AnyDType = FullPrecisionDType | ReducedPrecisionDType
-
-# Backward compatibility alias (deprecated, prefer explicit types)
-DType = FullPrecisionDType
 
 
 class Device(str, Enum):
@@ -628,7 +566,6 @@ __all__: tuple[str, ...] = (
     "FullPrecisionDType",
     "ReducedPrecisionDType",
     "AnyDType",
-    "DType",  # Backward compatibility alias
     "Device",
     "TensorState",
     "TorchEnv",

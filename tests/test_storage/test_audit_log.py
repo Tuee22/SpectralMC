@@ -8,12 +8,10 @@ from unittest.mock import patch
 
 import pytest
 from botocore.exceptions import ClientError
-import torch
+
 
 from spectralmc.result import Failure, Success
 from spectralmc.storage import AsyncBlockchainModelStore
-
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 @pytest.mark.asyncio

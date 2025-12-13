@@ -60,17 +60,20 @@ These settings remain mandatory; they just run under an effect instead of at imp
 - Legacy helpers like `default_device`/`default_dtype` should be re-expressed as explicit,
   validated effects or pure decisions around device/dtype creation. Do not rely on global defaults.
 - Tests should build the runtime ADT in fixtures, apply the configuration effect once, and inject
-  the handle into systems under test.
+  the handle into systems under test (see `spectralmc.runtime.torch_runtime.get_torch_handle`
+  and `tests.conftest.torch_handle`).
 
 ## Examples (concrete TPM-aligned patterns)
 
 ### Pure decision + effect application
 
 ```python
-# File: src/spectralmc/runtime/torch_runtime.py (conceptual)
+# File: src/spectralmc/runtime/torch_runtime.py
 from dataclasses import dataclass
+from types import ModuleType
 from typing import Literal
 import os
+import torch
 
 @dataclass(frozen=True)
 class TorchRuntime:
@@ -80,7 +83,6 @@ class TorchRuntime:
     reason: str | None = None
 
 def decide_torch_runtime() -> TorchRuntime:
-    import torch  # local import to keep decision pure from globals
     if not torch.cuda.is_available():
         return TorchRuntime(kind="rejected", reason="cuda_unavailable")
     cudnn_ver = torch.backends.cudnn.version()
@@ -88,10 +90,9 @@ def decide_torch_runtime() -> TorchRuntime:
         return TorchRuntime(kind="rejected", reason="cudnn_unavailable")
     return TorchRuntime(kind="ready", cuda_version=torch.version.cuda, cudnn_version=cudnn_ver)
 
-def apply_torch_runtime(runtime: TorchRuntime):
+def apply_torch_runtime(runtime: TorchRuntime) -> ModuleType:
     if runtime.kind != "ready":
         raise RuntimeError(runtime.reason or "torch_runtime_rejected")
-    import torch
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
     torch.use_deterministic_algorithms(True, warn_only=False)
     torch.backends.cudnn.deterministic = True

@@ -14,8 +14,6 @@ from __future__ import annotations
 from typing import Iterator
 
 import pytest
-import torch
-from torch import Tensor
 
 from spectralmc.cvnn import (
     ComplexLinear,
@@ -27,10 +25,12 @@ from spectralmc.cvnn import (
     zReLU,
 )
 from spectralmc.models.torch import Device as _dev
-from spectralmc.models.torch import DType as _dt
+from spectralmc.models.torch import FullPrecisionDType as _dt
 from spectralmc.models.torch import default_dtype
+import torch
 
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+Tensor = torch.Tensor
+
 
 # ─────────────────────────── global constants ────────────────────────────
 GPU_DEV: torch.device = _dev.cuda.to_torch()

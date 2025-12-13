@@ -19,7 +19,6 @@ from typing import TypeVar
 
 import cupy as cp
 import pytest
-import torch
 
 from spectralmc import async_normals
 from spectralmc.async_normals import BufferConfig
@@ -27,9 +26,8 @@ from spectralmc.models.numerical import Precision
 from spectralmc.result import Failure, Result, Success
 from spectralmc.validation import validate_model
 
-E = TypeVar("E")
 
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+E = TypeVar("E")
 
 
 # --------------------------------------------------------------------------- #

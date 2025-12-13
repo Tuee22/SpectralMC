@@ -51,7 +51,6 @@ system and keeps pure ADT flows aligned with [total_pure_modelling.md](total_pur
 ### Tier 2: Business Logic (ZERO TOLERANCE PURITY)
 
 **Files**:
-- `src/spectralmc/gbm_trainer.py` - Training orchestration
 - `src/spectralmc/cvnn_factory.py` - Model factory
 - `src/spectralmc/sobol_sampler.py` - Sampling logic
 - `src/spectralmc/serialization/*.py` - Data serialization
@@ -66,6 +65,7 @@ system and keeps pure ADT flows aligned with [total_pure_modelling.md](total_pur
 - `src/spectralmc/effects/interpreter.py` - Effect execution
 - `src/spectralmc/effects/mock.py` - Test interpreter
 - `src/spectralmc/storage/*.py` - Storage operations
+- `src/spectralmc/gbm_trainer.py` - Mixed orchestrator (training loop + interpreter wiring)
 - `src/spectralmc/__main__.py` - CLI entry point
 - `src/spectralmc/storage/__main__.py` - Storage CLI
 
@@ -442,7 +442,7 @@ def process(x: int) -> int:
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-purity
 
 # Check specific files
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-purity src/spectralmc/gbm_trainer.py
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-purity src/spectralmc/cvnn_factory.py
 
 # Auto-fix simple violations (if → ternary)
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-purity --fix
@@ -722,12 +722,11 @@ poetry run check-purity --explain PUR003
 
 ---
 
-## User-Configured Automation
+## Automation Policy
 
-For optional git hooks and GitHub Actions templates, see:
-- [User Automation Reference](user_automation_reference.md) — Pre-commit hooks and CI/CD templates (user responsibility)
-
-Per CLAUDE.md Git Workflow Policy, Claude Code does NOT configure git hooks or GitHub Actions.
+- No git hooks, `.pre-commit-config.yaml`, or CI/CD workflows are permitted for purity enforcement.
+- Run `poetry run check-purity` manually inside Docker; share outputs alongside code reviews.
+- See [User Automation Reference](user_automation_reference.md) for the explicit prohibition and manual command list.
 
 ---
 

@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
-import torch
 from typing import TypeVar
 
-# CRITICAL: Import facade BEFORE torch for deterministic algorithms
+import torch
+from spectralmc.runtime import get_torch_handle
 from spectralmc.effects import (
     CommitVersion,
     EffectSequence,
@@ -25,6 +25,8 @@ from spectralmc.serialization.tensors import ModelCheckpointConverter
 from spectralmc.storage.chain import ModelVersion
 from spectralmc.storage.store import AsyncBlockchainModelStore
 
+
+get_torch_handle()
 
 S = TypeVar("S")
 

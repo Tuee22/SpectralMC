@@ -11,8 +11,6 @@ from __future__ import annotations
 import json
 
 import pytest
-import torch
-from torch import Tensor, nn
 
 from spectralmc.cvnn_factory import (
     ActivationCfg,
@@ -26,17 +24,23 @@ from spectralmc.cvnn_factory import (
     SequentialCfg,
     build_model,
 )
-from spectralmc.models.torch import DType  # ← project's strongly-typed dtype enum
+from spectralmc.models.torch import FullPrecisionDType  # ← project's strongly-typed dtype enum
 from tests.helpers import expect_success
+import torch
+
+Tensor = torch.Tensor
+nn = torch.nn
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants shared across tests
 # ──────────────────────────────────────────────────────────────────────────────
 _DEVICE_CUDA: torch.device = torch.device("cuda:0")
-assert torch.cuda.is_available(), "These tests require a CUDA-capable device"
 
-_DTYPES: tuple[DType, ...] = (DType.float32, DType.float64)
+_DTYPES: tuple[FullPrecisionDType, ...] = (
+    FullPrecisionDType.float32,
+    FullPrecisionDType.float64,
+)
 
 ATOL: float = 1.0e-5
 RTOL: float = 1.0e-4
@@ -80,13 +84,15 @@ def _assert_state_dict_equal(a: dict[str, Tensor], b: dict[str, Tensor]) -> None
 # Helper functions consolidated to tests/helpers/result_utils.py
 
 
-def _build_test_model(cfg: CVNNConfig, *, dtype: DType) -> nn.Module:
+def _build_test_model(cfg: CVNNConfig, *, dtype: FullPrecisionDType) -> nn.Module:
     return expect_success(build_model(n_inputs=N_IN, n_outputs=N_OUT, cfg=cfg)).to(
         _DEVICE_CUDA, dtype.to_torch()
     )
 
 
-def _example_cfg(dtype: DType = DType.float32, seed: int = 314159) -> CVNNConfig:
+def _example_cfg(
+    dtype: FullPrecisionDType = FullPrecisionDType.float32, seed: int = 314159
+) -> CVNNConfig:
     """A representative, yet compact, CVNN topology."""
     return CVNNConfig(
         dtype=dtype,
@@ -118,7 +124,7 @@ def _example_cfg(dtype: DType = DType.float32, seed: int = 314159) -> CVNNConfig
 
 def _single_train_step(
     cfg: CVNNConfig,
-    dtype: DType,
+    dtype: FullPrecisionDType,
 ) -> dict[str, Tensor]:
     """Materialise → forward → backward → optimiser step → return state-dict.
 
@@ -173,7 +179,7 @@ def _single_train_step(
 
 
 @pytest.mark.parametrize("dtype", _DTYPES)
-def test_device_and_dtype_placement(dtype: DType) -> None:
+def test_device_and_dtype_placement(dtype: FullPrecisionDType) -> None:
     """Every parameter must respect the requested CUDA device and dtype."""
     cfg = _example_cfg(dtype)
     model = _build_test_model(cfg, dtype=dtype)
@@ -184,7 +190,7 @@ def test_device_and_dtype_placement(dtype: DType) -> None:
 
 
 @pytest.mark.parametrize("dtype", _DTYPES)
-def test_forward_backward_pass(dtype: DType) -> None:
+def test_forward_backward_pass(dtype: FullPrecisionDType) -> None:
     """A complete forward + backward pass should yield finite gradients."""
     cfg = _example_cfg(dtype)
 
@@ -218,7 +224,7 @@ def test_forward_backward_pass(dtype: DType) -> None:
 
 
 @pytest.mark.parametrize("dtype", _DTYPES)
-def test_full_reproducibility(dtype: DType) -> None:
+def test_full_reproducibility(dtype: FullPrecisionDType) -> None:
     """Two *independent* training runs from the same config must be identical."""
     cfg = _example_cfg(dtype)
 
@@ -230,7 +236,7 @@ def test_full_reproducibility(dtype: DType) -> None:
 
 def test_config_json_roundtrip() -> None:
     """Serialising and deserialising a config via JSON must be loss-less."""
-    cfg = _example_cfg(dtype=DType.float64, seed=271828)
+    cfg = _example_cfg(dtype=FullPrecisionDType.float64, seed=271828)
     json_str = cfg.model_dump_json()
     cfg_round = CVNNConfig.model_validate_json(json_str)
 

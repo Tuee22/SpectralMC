@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import pytest
-import torch
 
 from spectralmc.gbm import BlackScholesConfig
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
@@ -15,9 +14,12 @@ from spectralmc.storage import (
     commit_snapshot,
     load_snapshot_from_checkpoint,
 )
+import torch
 from tests.helpers import expect_success, make_black_scholes_config, make_simulation_params
 
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
+def _reset_seeds(seed: int = 42) -> None:
+    torch.manual_seed(seed)
 
 
 def _make_checkpoint_black_scholes_config() -> BlackScholesConfig:
@@ -39,6 +41,7 @@ def _make_checkpoint_black_scholes_config() -> BlackScholesConfig:
 @pytest.mark.asyncio
 async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -> None:
     """Test creating and loading a checkpoint with a simple model."""
+    _reset_seeds()
     # Create a simple model
     model = torch.nn.Sequential(
         torch.nn.Linear(5, 10),
@@ -145,6 +148,7 @@ async def test_checkpoint_multiple_commits(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
     """Test multiple sequential commits create proper chain."""
+    _reset_seeds()
     model = torch.nn.Linear(10, 10)
 
     bs_config = _make_checkpoint_black_scholes_config()
@@ -196,6 +200,7 @@ async def test_checkpoint_content_hash_integrity(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
     """Test that different checkpoints have different content hashes."""
+    _reset_seeds()
     model1 = torch.nn.Linear(5, 5)
     model2 = torch.nn.Linear(5, 5)
 

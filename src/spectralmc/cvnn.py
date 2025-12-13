@@ -47,10 +47,10 @@ from __future__ import annotations
 from functools import reduce
 
 import torch
-from torch import nn
+from spectralmc.runtime import get_torch_handle
 
-
-# CRITICAL: Import facade BEFORE torch for deterministic algorithms
+get_torch_handle()
+nn = torch.nn
 
 
 # ---------------------------------------------------------------------------

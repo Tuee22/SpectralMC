@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-import torch
-
 from spectralmc.effects import ForwardNormalization, PathScheme
 from spectralmc.gbm import (
     BlackScholesConfig,
@@ -21,6 +19,8 @@ from spectralmc.gbm import (
 )
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
+import torch
+
 from tests.helpers.constants import (
     DEFAULT_BATCHES_PER_RUN,
     DEFAULT_BUFFER_SIZE,

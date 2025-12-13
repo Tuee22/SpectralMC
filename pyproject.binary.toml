@@ -98,7 +98,6 @@ hypothesis       = ">=6.102,<7.0"
 mypy             = ">=1.15,<2.0"
 black            = ">=25.1,<26.0"
 ruff             = ">=0.8.0"
-pre-commit       = ">=4.0,<5.0"
 
 # --------------------------------------------------------------------------- #
 #                            S C R I P T S                                    #
@@ -126,10 +125,6 @@ type-check-all = "tools.check_type_safety:run_full_check"
 # Purity checking (zero-tolerance enforcement for Tier 2 business logic)
 # Usage: poetry run check-purity [--verbose] [--explain RULE]
 check-purity = "tools.check_purity:main"
-
-# PyProject synchronization validation (dual-file architecture enforcement)
-# Usage: poetry run check-pyproject [--verbose] [--fix-from=binary|source]
-check-pyproject = "tools.check_pyproject:main"
 
 # Protobuf code generation
 regen-proto = "tools.regen_proto:main"
@@ -236,6 +231,7 @@ tier3_effects = [
   "src/spectralmc/effects/interpreter.py",
   "src/spectralmc/storage/*.py",
   "src/spectralmc/__main__.py",
+  "src/spectralmc/gbm_trainer.py",
 ]
 
 [tool.purity.whitelist."src/spectralmc/serialization/tensors.py"]

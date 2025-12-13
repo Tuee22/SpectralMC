@@ -14,29 +14,41 @@ import gc
 import signal
 import uuid
 import warnings
-from types import FrameType
+from types import FrameType, ModuleType
 from typing import AsyncGenerator, Callable, Generator
 
-
-# CRITICAL: Import facade BEFORE torch for deterministic algorithms
-# isort: off
-import spectralmc.models.torch  # noqa: F401
+import numpy as np
 import torch
-
-# isort: on
 
 import cupy as cp
 import pytest
 import botocore.exceptions
 
 from spectralmc.storage import AsyncBlockchainModelStore
+from spectralmc.runtime import get_torch_handle
+
 
 # Module-level GPU requirement - test suite fails immediately without GPU
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 GPU_DEV: torch.device = torch.device("cuda:0")
-
+TORCH_HANDLE: ModuleType = get_torch_handle()
 DEFAULT_TEST_TIMEOUT_SECONDS = 60.0
+
+
+@pytest.fixture(scope="session")
+def torch_handle() -> ModuleType:
+    """Provide a deterministically configured torch handle for tests."""
+    return TORCH_HANDLE
+
+
+@pytest.fixture(autouse=True)
+def seed_prngs() -> Generator[None, None, None]:
+    """Deterministically seed all RNGs before every test."""
+    TORCH_HANDLE.manual_seed(42)
+    np.random.seed(42)
+    cp.random.seed(42)
+    yield
 
 
 def _build_timeout_handler(

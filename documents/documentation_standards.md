@@ -198,6 +198,13 @@ steps, examples, and next steps where applicable.
 - Mixing naming styles within the repo.
 - Copy-pasted diagrams or procedures; duplicated examples without attribution.
 - Arrow-style mixing inside a diagram; labels with punctuation/hyphens.
+
+## 13. Automation Prohibitions (Authoritative)
+
+- **No repo-managed automation**: Documentation must not direct readers to add `.pre-commit-config.yaml`, git hooks, or GitHub Actions/other CI/CD workflows.
+- **Manual verification only**: Standards may list manual checks/commands, but must avoid implying automated gates or pipelines.
+- **Remediation**: When retiring prior automation guidance, replace it with manual alternatives and an explicit statement that automation is disallowed.
+- **Scope**: Applies to all docs in `documents/`, `CLAUDE.md`, `README.md`, and any overlays; do not include templates for hooks or workflows.
 - Docstrings missing Args/Returns/Raises or shapes/types.
 - Examples using `Any`, `cast`, `# type: ignore`, or ellipses without context.
 

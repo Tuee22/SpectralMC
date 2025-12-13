@@ -185,22 +185,27 @@ class _NormGenerator:
     def create(
         cls, rows: int, cols: int, *, dtype: cp.dtype
     ) -> Result["_NormGenerator", InvalidShape | InvalidDType]:
-        if min(rows, cols) <= 0:
-            return Failure(InvalidShape(rows=rows, cols=cols))
-        match _validate_cupy_dtype(dtype):
-            case Failure(error):
-                return Failure(error)
-            case Success(validated):
-                return Success(cls(rows, cols, dtype=validated))
+        match min(rows, cols) <= 0:
+            case True:
+                return Failure(InvalidShape(rows=rows, cols=cols))
+            case False:
+                match _validate_cupy_dtype(dtype):
+                    case Failure(error):
+                        return Failure(error)
+                    case Success(validated):
+                        return Success(cls(rows, cols, dtype=validated))
 
     # ---------------- asynchronous pipeline --------------------------- #
 
     def enqueue(self, seed: int) -> Result[None, QueueBusy | SeedOutOfRange]:
         """Launch a kernel that fills the next matrix (non-blocking)."""
-        if self._generated is not None:
-            return Failure(QueueBusy())
-        if seed <= 0 or seed >= _SEED_LIMIT:
-            return Failure(SeedOutOfRange(seed=seed))
+        match (self._generated is not None, seed <= 0 or seed >= _SEED_LIMIT):
+            case True, _:
+                return Failure(QueueBusy())
+            case _, True:
+                return Failure(SeedOutOfRange(seed=seed))
+            case _:
+                pass
 
         self._event = cp.cuda.Event(disable_timing=True)
         with self._stream:
@@ -213,14 +218,17 @@ class _NormGenerator:
         self, next_seed: int
     ) -> Result[cp.ndarray, QueueEmpty | QueueBusy | SeedOutOfRange]:
         """Synchronise, return the ready matrix, then queue another."""
-        if self._generated is None:  # pragma: no cover
-            return Failure(QueueEmpty())
+        match self._generated:
+            case None:  # pragma: no cover
+                return Failure(QueueEmpty())
+            case generated:
+                pass
 
         t0 = time()
         self._stream.synchronize()
         self._sync_time += time() - t0
 
-        ready, self._generated = self._generated, None
+        ready, self._generated = generated, None
         enqueue_result = self.enqueue(next_seed)
         match enqueue_result:
             case Success(_):

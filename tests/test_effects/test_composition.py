@@ -6,8 +6,6 @@ Verifies EffectSequence, EffectParallel, and composition helpers.
 
 from __future__ import annotations
 
-import torch
-
 from spectralmc.effects import (
     BackwardPass,
     ForwardPass,
@@ -22,8 +20,6 @@ from spectralmc.effects.composition import (
     parallel_effects,
     sequence_effects,
 )
-
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 class TestEffectSequence:

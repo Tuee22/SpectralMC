@@ -7,7 +7,7 @@ Verifies effect recording, mock results, and assertion helpers.
 from __future__ import annotations
 
 import pytest
-import torch
+
 
 from spectralmc.effects import (
     BackwardPass,
@@ -20,8 +20,6 @@ from spectralmc.effects import (
 )
 from spectralmc.effects.errors import TrainingError
 from spectralmc.result import Failure, Success
-
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 class TestMockInterpreterRecording:

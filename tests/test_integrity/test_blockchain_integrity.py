@@ -9,6 +9,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 import torch
 
+
 from spectralmc.effects import ForwardNormalization, PathScheme
 from spectralmc.gbm import build_black_scholes_config, build_simulation_params
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
@@ -24,8 +25,6 @@ from spectralmc.storage import (
     verify_chain_detailed,
 )
 from spectralmc.storage.chain import ModelVersion
-
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 def test_content_hash_integrity() -> None:

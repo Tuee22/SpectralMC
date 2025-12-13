@@ -4,18 +4,16 @@
 from __future__ import annotations
 
 import pytest
-import torch
+
 
 from spectralmc.models.numerical import Precision
-from spectralmc.models.torch import Device, DType
+from spectralmc.models.torch import Device, FullPrecisionDType
 from spectralmc.result import Failure, Success
 from spectralmc.serialization.common import (
     DeviceConverter,
     DTypeConverter,
     PrecisionConverter,
 )
-
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 def test_precision_round_trip() -> None:
@@ -39,12 +37,12 @@ def test_device_round_trip() -> None:
 
 
 def test_dtype_round_trip() -> None:
-    """Test DType enum round-trip."""
+    """Test dtype enum round-trip."""
     for dtype in (
-        DType.float32,
-        DType.float64,
-        DType.complex64,
-        DType.complex128,
+        FullPrecisionDType.float32,
+        FullPrecisionDType.float64,
+        FullPrecisionDType.complex64,
+        FullPrecisionDType.complex128,
     ):
         proto_result = DTypeConverter.to_proto(dtype)
         match proto_result:

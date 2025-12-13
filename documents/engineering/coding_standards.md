@@ -48,7 +48,7 @@ To check if files would be reformatted without actually changing them:
 docker compose -f docker/docker-compose.yml exec spectralmc black --check .
 ```
 
-This is useful for CI/CD pipelines to verify that all code is properly formatted before merging.
+This is useful for manual verification before sharing changes.
 
 ### Configuration
 
@@ -101,45 +101,22 @@ All code must be Black-formatted before committing. This ensures:
 - **Minimal diffs**: Changes focus on logic, not whitespace
 - **No bikeshedding**: Formatting is automated, not debated
 
-#### 3. Automated Enforcement
+#### 3. Enforcement (Manual Only)
 
-##### Pre-commit Hooks (Recommended)
-
-Install pre-commit hooks to automatically format code before each commit:
+- **Automation prohibited**: No `.pre-commit-config.yaml`, git hooks, or CI/CD workflows may enforce formatting.
+- **Manual check**: Run Black yourself before committing:
 
 ```bash
 # File: documents/engineering/coding_standards.md
-# Install pre-commit (one-time setup)
-docker compose -f docker/docker-compose.yml exec spectralmc pip install pre-commit
-
-# Install git hooks (one-time setup)
-docker compose -f docker/docker-compose.yml exec spectralmc pre-commit install
+docker compose -f docker/docker-compose.yml exec spectralmc black .
 ```
 
-Create `.pre-commit-config.yaml` in the repository root:
-
-```yaml
-# File: documents/engineering/coding_standards.md
-repos:
-  - repo: https://github.com/psf/black
-    rev: 25.1.0
-    hooks:
-      - id: black
-        language_version: python3.12
-```
-
-Now Black will automatically format files when you run `git commit`.
-
-##### CI/CD Integration
-
-In continuous integration, verify formatting with:
+- **Manual verification**: To check without writing, run:
 
 ```bash
 # File: documents/engineering/coding_standards.md
 docker compose -f docker/docker-compose.yml exec spectralmc black --check .
 ```
-
-This command exits with a non-zero code if any files need formatting, failing the build.
 
 ### Example: Before and After
 
@@ -749,8 +726,11 @@ Stubs must have **zero occurrences** of:
 # ❌ INCORRECT - Untyped stub signature
 def forward(input): ...
 
-# ✅ CORRECT - Specific types
+# ✅ CORRECT - Specific types (torch handle injected)
 import torch
+from spectralmc.runtime import get_torch_handle
+
+get_torch_handle()
 
 def forward(input: torch.Tensor) -> torch.Tensor: ...
 ```

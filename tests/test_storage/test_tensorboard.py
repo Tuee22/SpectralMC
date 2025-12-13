@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import torch
 
+
 from spectralmc.effects import ForwardNormalization, PathScheme
 from spectralmc.gbm import build_black_scholes_config, build_simulation_params
 from spectralmc.result import Failure, Success
@@ -20,8 +21,6 @@ from spectralmc.storage import (
     commit_snapshot,
     log_blockchain_to_tensorboard,
 )
-
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPricerConfig:

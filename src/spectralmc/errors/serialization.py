@@ -57,6 +57,22 @@ class UnknownDType:
 
 
 @dataclass(frozen=True)
+class UnknownPathSchemeProto:
+    """Path scheme proto contains an unsupported value."""
+
+    value: int
+    kind: Literal["UnknownPathSchemeProto"] = "UnknownPathSchemeProto"
+
+
+@dataclass(frozen=True)
+class UnknownForwardNormalizationProto:
+    """Forward normalization proto contains an unsupported value."""
+
+    value: int
+    kind: Literal["UnknownForwardNormalizationProto"] = "UnknownForwardNormalizationProto"
+
+
+@dataclass(frozen=True)
 class InvalidTensorState:
     """Tensor state proto cannot be reconstructed as a torch.Tensor."""
 
@@ -94,6 +110,8 @@ SerializationError = (
     | GPUMemoryLimitExceeded
     | InvalidBlackScholesConfig
     | BoundSpecInvalid
+    | UnknownPathSchemeProto
+    | UnknownForwardNormalizationProto
 )
 
 T = TypeVar("T")
@@ -108,6 +126,8 @@ __all__ = [
     "UnknownDType",
     "UnsupportedPrecision",
     "UnknownThreadsPerBlock",
+    "UnknownPathSchemeProto",
+    "UnknownForwardNormalizationProto",
     "InvalidWidthSpecProto",
     "ValidationFailed",
 ]

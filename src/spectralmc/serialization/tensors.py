@@ -5,7 +5,9 @@ from __future__ import annotations
 
 
 import numpy as np
+
 import torch
+from spectralmc.runtime import get_torch_handle
 
 from spectralmc.errors.serialization import InvalidTensorState, SerializationError
 from spectralmc.errors.torch_facade import TorchFacadeError
@@ -21,6 +23,8 @@ from spectralmc.models.torch import (
 from spectralmc.proto import tensors_pb2
 from spectralmc.serialization.common import DeviceConverter, DTypeConverter
 from spectralmc.result import Failure, Result, Success
+
+get_torch_handle()
 
 
 class TensorStateConverter:
@@ -42,9 +46,9 @@ class TensorStateConverter:
         # Shape
         proto.shape.extend(tensor.shape)
 
-        # DType - convert to DType enum then to proto
+        # Dtype - convert to dtype enum then to proto
         torch_dtype = tensor.dtype
-        # Map torch.dtype to our DType enum via match/case
+        # Map torch.dtype to our dtype enum via match/case
         match torch_dtype:
             case torch.float32:
                 dtype_enum: AnyDType = FullPrecisionDType.float32
@@ -104,7 +108,7 @@ class TensorStateConverter:
             case Success(dtype_enum):
                 pass
 
-        # Map DType enum to torch.dtype via match/case
+        # Map dtype enum to torch.dtype via match/case
         match dtype_enum:
             case FullPrecisionDType.float32:
                 torch_dtype = torch.float32

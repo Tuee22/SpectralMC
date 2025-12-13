@@ -50,7 +50,7 @@ SpectralMC is a GPU-accelerated library for online machine learning using Monte 
   - `errors.py` - Exception hierarchy for storage operations
   - `__main__.py` - CLI tool for storage operations
 - `serialization/` - Protocol Buffer serialization
-  - `common.py` - Enum converters (Precision, Device, DType)
+  - `common.py` - Enum converters (Precision, Device, dtype enums)
   - `simulation.py` - Simulation parameter converters
   - `models.py` - Model configuration converters
   - `training.py` - Training configuration converters
@@ -303,37 +303,23 @@ SpectralMC uses dual pyproject files that must stay synchronized in shared secti
 
 ### Automated Validation
 
-**Check synchronization**:
-```bash
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-pyproject
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-pyproject --verbose
-```
-
-**Integrated into check-code**:
+**Check synchronization (part of check-code)**:
 ```bash
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-code
 ```
 
-### Pre-Commit Hooks
+### Automation Policy
 
-**Install**:
-```bash
-docker compose -f docker/docker-compose.yml exec spectralmc poetry add --group dev pre-commit
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run pre-commit install
-```
-
-**What hooks enforce**:
-- ✅ Shared sections synchronized before commit
-- ✅ Blocks commits of generated pyproject.toml
-- ✅ Runs check-code pipeline on Python changes
+- No `.pre-commit-config.yaml`, git hooks, or CI/CD workflows are allowed in this repository.
+- Run synchronization and quality checks manually inside Docker before handoff.
 
 ### Synchronization Rules
 
 **When editing shared sections** (scripts, mypy, black, pytest, pydantic-mypy, dev dependencies):
 1. Edit in BOTH pyproject.binary.toml AND pyproject.source.toml
-2. Run `poetry run check-pyproject` to verify
+2. Run `poetry run check-code` to verify synchronization
 3. Commit both files together
-4. Pre-commit hook will validate automatically
+4. Share manual check outputs (no automated hooks exist)
 
 **When editing different sections** (dependencies, sources):
 - Edit only the relevant file (binary or source)

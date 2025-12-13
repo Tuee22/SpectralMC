@@ -8,13 +8,17 @@ continuous learning systems that need minimal staleness.
 """
 
 import asyncio
+
 import torch
+from spectralmc.runtime import get_torch_handle
 
 from spectralmc.storage import AsyncBlockchainModelStore, InferenceClient, TrackingMode
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.gbm import build_black_scholes_config, build_simulation_params
 from spectralmc.models.numerical import Precision
 from spectralmc.result import Success, Failure
+
+get_torch_handle()
 
 
 async def main() -> None:

@@ -21,9 +21,13 @@ from dataclasses import dataclass
 from typing import Literal
 
 import cupy as cp
+
 import torch
+from spectralmc.runtime import get_torch_handle
 
 from spectralmc.result import Failure, Result, Success
+
+get_torch_handle()
 
 
 @dataclass(frozen=True)

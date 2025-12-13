@@ -12,12 +12,10 @@ Demonstrates the complete workflow:
 
 from __future__ import annotations
 
-# CRITICAL: Import torch façade FIRST to set deterministic flags
-# This must happen before any other imports that might transitively import PyTorch
-from spectralmc.models.torch import AdamOptimizerState, AdamParamState, AdamParamGroup
-
 import asyncio
 import torch
+from spectralmc.runtime import get_torch_handle
+from spectralmc.models.torch import AdamOptimizerState, AdamParamState, AdamParamGroup
 from spectralmc.gbm import build_black_scholes_config, build_simulation_params
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
@@ -27,6 +25,9 @@ from spectralmc.storage import (
     commit_snapshot,
     load_snapshot_from_checkpoint,
 )
+
+
+get_torch_handle()
 
 
 async def main() -> None:

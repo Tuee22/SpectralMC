@@ -24,10 +24,12 @@ from typing import Literal, Never, Protocol, TypeVar
 
 import cupy as cp
 import numpy as np
-import torch
 from numba import cuda
 from numba.cuda import synchronize as numba_sync
+
+import torch
 from torch.utils.tensorboard import SummaryWriter
+from spectralmc.runtime import get_torch_handle
 
 from spectralmc.effects.composition import EffectParallel, EffectSequence
 from spectralmc.effects.errors import (
@@ -80,6 +82,8 @@ from spectralmc.models.torch import Device
 from spectralmc.result import Failure, Result, Success
 from spectralmc.storage.s3_operations import S3Operations
 from spectralmc.storage.store import AsyncBlockchainModelStore
+
+get_torch_handle()
 
 T = TypeVar("T")
 

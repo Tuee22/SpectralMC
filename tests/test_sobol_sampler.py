@@ -25,14 +25,12 @@ import math
 from typing import Sequence
 
 import pytest
-import torch
+
 from pydantic import BaseModel, ValidationError, model_validator
 
 from spectralmc.errors.sampler import BoundSpecInvalid, DimensionMismatch, SamplerValidationFailed
 from spectralmc.result import Failure, Success
 from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler, build_bound_spec
-
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 # --------------------------------------------------------------------------- #

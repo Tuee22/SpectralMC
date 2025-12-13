@@ -8,8 +8,7 @@ import logging
 from dataclasses import dataclass
 
 import torch
-
-# CRITICAL: Import facade BEFORE torch for deterministic algorithms
+from spectralmc.runtime import get_torch_handle
 from ..errors.storage import (
     StartError,
     ValidationError as StorageValidationError,
@@ -22,6 +21,8 @@ from .checkpoint import load_snapshot_from_checkpoint
 from .errors import StorageError, VersionNotFoundError
 from .store import AsyncBlockchainModelStore
 
+
+get_torch_handle()
 
 logger = logging.getLogger(__name__)
 

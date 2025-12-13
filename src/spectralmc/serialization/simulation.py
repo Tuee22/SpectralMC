@@ -6,7 +6,12 @@ from __future__ import annotations
 from typing import Literal
 
 from spectralmc.effects import ForwardNormalization, PathScheme
-from spectralmc.errors.serialization import SerializationResult, UnknownThreadsPerBlock
+from spectralmc.errors.serialization import (
+    SerializationResult,
+    UnknownForwardNormalizationProto,
+    UnknownPathSchemeProto,
+    UnknownThreadsPerBlock,
+)
 from spectralmc.gbm import (
     BlackScholesConfig,
     SimulationParams,
@@ -91,8 +96,20 @@ class BlackScholesConfigConverter:
         """Convert to proto."""
         proto = simulation_pb2.BlackScholesConfigProto()
         proto.sim_params.CopyFrom(SimulationParamsConverter.to_proto(config.sim_params))
-        proto.simulate_log_return = config.path_scheme is PathScheme.LOG_EULER
-        proto.normalize_forwards = config.normalization is ForwardNormalization.NORMALIZE
+        path_scheme_to_proto: dict[PathScheme, int] = {
+            PathScheme.LOG_EULER: simulation_pb2.PathSchemeProto.PATH_SCHEME_LOG_EULER,
+            PathScheme.SIMPLE_EULER: simulation_pb2.PathSchemeProto.PATH_SCHEME_SIMPLE_EULER,
+        }
+        normalization_to_proto: dict[ForwardNormalization, int] = {
+            ForwardNormalization.NORMALIZE: (
+                simulation_pb2.ForwardNormalizationProto.FORWARD_NORMALIZATION_NORMALIZE
+            ),
+            ForwardNormalization.RAW: (
+                simulation_pb2.ForwardNormalizationProto.FORWARD_NORMALIZATION_RAW
+            ),
+        }
+        proto.path_scheme = path_scheme_to_proto[config.path_scheme]
+        proto.normalization = normalization_to_proto[config.normalization]
         return proto
 
     @staticmethod
@@ -107,22 +124,40 @@ class BlackScholesConfigConverter:
             case Success(sim_params):
                 pass
 
-        config_result = build_black_scholes_config(
-            sim_params=sim_params,
-            path_scheme=(
-                PathScheme.LOG_EULER if proto.simulate_log_return else PathScheme.SIMPLE_EULER
-            ),
-            normalization=(
+        path_scheme_mapping: dict[int, PathScheme] = {
+            simulation_pb2.PathSchemeProto.PATH_SCHEME_LOG_EULER: PathScheme.LOG_EULER,
+            simulation_pb2.PathSchemeProto.PATH_SCHEME_SIMPLE_EULER: PathScheme.SIMPLE_EULER,
+        }
+
+        normalization_mapping: dict[int, ForwardNormalization] = {
+            simulation_pb2.ForwardNormalizationProto.FORWARD_NORMALIZATION_NORMALIZE: (
                 ForwardNormalization.NORMALIZE
-                if proto.normalize_forwards
-                else ForwardNormalization.RAW
             ),
-        )
-        match config_result:
-            case Failure(config_err):
-                return Failure(config_err)
-            case Success(config):
-                return Success(config)
+            simulation_pb2.ForwardNormalizationProto.FORWARD_NORMALIZATION_RAW: (
+                ForwardNormalization.RAW
+            ),
+        }
+
+        match path_scheme_mapping.get(int(proto.path_scheme)):
+            case None:
+                return Failure(UnknownPathSchemeProto(value=int(proto.path_scheme)))
+            case path_scheme:
+                match normalization_mapping.get(int(proto.normalization)):
+                    case None:
+                        return Failure(
+                            UnknownForwardNormalizationProto(value=int(proto.normalization))
+                        )
+                    case normalization:
+                        config_result = build_black_scholes_config(
+                            sim_params=sim_params,
+                            path_scheme=path_scheme,
+                            normalization=normalization,
+                        )
+                        match config_result:
+                            case Failure(config_err):
+                                return Failure(config_err)
+                            case Success(config):
+                                return Success(config)
 
 
 class BoundSpecConverter:

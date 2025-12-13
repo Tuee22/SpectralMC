@@ -18,10 +18,20 @@ message SimulationParamsProto {
 }
 
 // ──────────────────────────── Black-Scholes Config ────────────────────────
+enum PathSchemeProto {
+  PATH_SCHEME_LOG_EULER = 0;
+  PATH_SCHEME_SIMPLE_EULER = 1;
+}
+
+enum ForwardNormalizationProto {
+  FORWARD_NORMALIZATION_NORMALIZE = 0;
+  FORWARD_NORMALIZATION_RAW = 1;
+}
+
 message BlackScholesConfigProto {
   SimulationParamsProto sim_params = 1;
-  bool simulate_log_return = 2;
-  bool normalize_forwards = 3;
+  PathSchemeProto path_scheme = 2;
+  ForwardNormalizationProto normalization = 3;
 }
 
 // ──────────────────────────── Option Contract ─────────────────────────────

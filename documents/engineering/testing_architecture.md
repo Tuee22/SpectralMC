@@ -169,9 +169,9 @@ def expect_success(result: Result[T, E]) -> T:
 from tests.helpers import expect_success
 
 def test_dtype_roundtrip() -> None:
-    for d in sm_torch.DType:
+    for d in sm_torch.FullPrecisionDType:
         torch_dt = d.to_torch()
-        dtype = expect_success(sm_torch.DType.from_torch(torch_dt))
+        dtype = expect_success(sm_torch.FullPrecisionDType.from_torch(torch_dt))
         assert dtype is d
 ```
 
@@ -632,7 +632,7 @@ def _expect_success(result: Result[T, E]) -> T:  # Duplicate!
 from tests.helpers import expect_success
 
 def test_dtype_roundtrip() -> None:
-    dtype = expect_success(sm_torch.DType.from_torch(torch.float32))
+    dtype = expect_success(sm_torch.FullPrecisionDType.from_torch(torch.float32))
     # ...
 ```
 

@@ -233,22 +233,17 @@ vim pyproject.source.toml  # Source-specific (PyTorch 2.4.1)
 - `[tool.pydantic-mypy]`
 - `[tool.poetry.group.dev.dependencies]`
 
-### Automated Enforcement
+### Manual Enforcement
 
-**Validation tool**:
+**Validation tool** (bundled inside `check-code`):
 ```bash
 # File: documents/engineering/docker_build_philosophy.md
-# Check synchronization manually
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-pyproject
-
-# Verbose mode with diff output
-docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-pyproject --verbose
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-code
 ```
 
-**Integrated checks**:
-- ✅ `poetry run check-code` - Runs pyproject validation automatically
-- ✅ Pre-commit hook - Validates before each commit
-- ✅ CI/CD workflow - Validates on pull requests
+**Manual checks** (automation is prohibited):
+- ✅ `poetry run check-code` - Runs pyproject validation and quality checks when invoked by a contributor
+- ❌ No git hooks or CI/CD workflows may enforce these checks
 
 **Exit codes**:
 - `0` - All shared sections synchronized
@@ -411,7 +406,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry install
 ### Prevention
 
 - Document when rebuilds are needed (CLAUDE.md)
-- Add pre-commit hooks to detect pyproject.toml [tool.poetry.scripts] changes
+- Manually run `check-code` when `[tool.poetry.scripts]` changes
 - Use consistent workflow: changes to scripts → immediate rebuild
 
 ### Policy: No Custom Entrypoint Scripts
@@ -608,7 +603,7 @@ This layout ensures the costly compile step is cached independently, and the pos
 **Use Binary Build if**:
 - You have a modern GPU (GTX 1060 or newer)
 - You want fast iteration during development
-- You're CI/CD testing on cloud GPUs
+- You're validating builds on cloud GPUs manually (no CI/CD pipelines)
 
 **Use Source Build if**:
 - You have a GTX 970 or GTX 980

@@ -75,7 +75,7 @@ class RetryScheduled:
     scheduled_for: datetime
 
 
-@dataclass
+@dataclass(frozen=True)
 class RetryExhausted(Exception):
     """Retry budget consumed (explicitly typed to avoid silent loops)."""
 

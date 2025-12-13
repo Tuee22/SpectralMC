@@ -64,17 +64,15 @@ import numpy as np
 from cupy.cuda import Stream as CuPyStream
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 
-# CRITICAL: Import facade BEFORE torch for deterministic algorithms
+import torch
+from torch.utils.tensorboard import SummaryWriter
+from spectralmc.runtime import get_torch_handle
 from spectralmc.models.torch import (
     AdamOptimizerState,
     AnyDType,
     Device,
-    DType,
     FullPrecisionDType,
 )
-import torch
-from torch import nn, optim
-from torch.utils.tensorboard import SummaryWriter
 
 from spectralmc.effects import (
     BackwardPass,
@@ -124,6 +122,10 @@ from spectralmc.storage.errors import (
     StorageError,
 )
 from spectralmc.storage.store import AsyncBlockchainModelStore
+
+get_torch_handle()
+nn = torch.nn
+optim = torch.optim
 
 LOGGER_NAME = __name__
 LogLevel = Literal["debug", "info", "warning", "error", "critical"]
@@ -655,7 +657,9 @@ class GbmCVNNPricer:
 
         # Complex dtypes & streams -------------------------------------- #
         self._complex_dtype: Precision = self._dtype.to_precision().to_complex().unwrap()
-        self._torch_cdtype: torch.dtype = DType.from_precision(self._complex_dtype).to_torch()
+        self._torch_cdtype: torch.dtype = FullPrecisionDType.from_precision(
+            self._complex_dtype
+        ).to_torch()
         self._cupy_cdtype: cp.dtype = self._complex_dtype.to_cupy()
 
         # Execution context (CUDA-only, validated by factory) ----------- #
@@ -1398,14 +1402,12 @@ class GbmCVNNPricer:
         global_step: int,
     ) -> tuple[bool, str]:
         """Return (should_commit, template) for periodic commits."""
-        match (blockchain_store, commit_plan):
-            case (None, IntervalCommit() | FinalAndIntervalCommit()):
-                return (False, "")
-            case (_, IntervalCommit(interval=interval, commit_message_template=template)):
-                return (global_step % interval == 0, template)
-            case (_, FinalAndIntervalCommit(interval=interval, commit_message_template=template)):
-                return (global_step % interval == 0, template)
-            case _:
+        match commit_plan:
+            case IntervalCommit(interval=interval, commit_message_template=template):
+                return (blockchain_store is not None and global_step % interval == 0, template)
+            case FinalAndIntervalCommit(interval=interval, commit_message_template=template):
+                return (blockchain_store is not None and global_step % interval == 0, template)
+            case NoCommit() | FinalCommit():
                 return (False, "")
 
     @staticmethod
@@ -1414,14 +1416,12 @@ class GbmCVNNPricer:
         commit_plan: CommitPlan,
     ) -> tuple[bool, str]:
         """Return (should_commit, template) for final commit."""
-        match (blockchain_store, commit_plan):
-            case (None, FinalCommit() | FinalAndIntervalCommit()):
-                return (False, "")
-            case (_, FinalCommit(commit_message_template=template)):
-                return (True, template)
-            case (_, FinalAndIntervalCommit(commit_message_template=template)):
-                return (True, template)
-            case _:
+        match commit_plan:
+            case FinalCommit(commit_message_template=template):
+                return (blockchain_store is not None, template)
+            case FinalAndIntervalCommit(commit_message_template=template):
+                return (blockchain_store is not None, template)
+            case NoCommit() | IntervalCommit():
                 return (False, "")
 
     @staticmethod
@@ -1430,13 +1430,15 @@ class GbmCVNNPricer:
         match plan:
             case NoCommit() | FinalCommit():
                 return Success(plan)
-            case IntervalCommit(interval=interval) | FinalAndIntervalCommit(interval=interval):
-                if interval <= 0:
-                    return Failure(
-                        InvalidTrainerConfig(
-                            message="commit interval must be positive for blockchain commit plan"
-                        )
+            case IntervalCommit(interval=interval) | FinalAndIntervalCommit(interval=interval) if (
+                interval <= 0
+            ):
+                return Failure(
+                    InvalidTrainerConfig(
+                        message="commit interval must be positive for blockchain commit plan"
                     )
+                )
+            case IntervalCommit() | FinalAndIntervalCommit():
                 return Success(plan)
 
     def train(
@@ -1472,10 +1474,17 @@ class GbmCVNNPricer:
             case Success(_):
                 pass
 
-        if blockchain_store is None and not isinstance(commit_plan, NoCommit):
-            return Failure(
-                InvalidTrainerConfig(message="commit_plan requires blockchain_store to be provided")
-            )
+        match commit_plan:
+            case NoCommit():
+                pass
+            case _ if blockchain_store is None:
+                return Failure(
+                    InvalidTrainerConfig(
+                        message="commit_plan requires blockchain_store to be provided"
+                    )
+                )
+            case _:
+                pass
 
         match self._sampler_result:
             case Failure(sampler_error):

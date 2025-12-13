@@ -1,14 +1,13 @@
-# src/spectralmc/cvnn_factory.py
+"""Factory helpers for building and loading complex-valued neural networks."""
+
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import TypeAlias
 
-import torch
 from pydantic import BaseModel, ConfigDict, PositiveInt
-from torch import nn
 
-# CRITICAL: Import facade BEFORE torch for deterministic algorithms
 from spectralmc.cvnn import (
     ComplexLinear,
     ComplexResidual,
@@ -31,8 +30,12 @@ from spectralmc.models.torch import (
     default_dtype,
 )
 from spectralmc.result import Failure, Success, collect_results, fold_results
-from dataclasses import dataclass
+import torch
+from spectralmc.runtime import get_torch_handle
 
+
+get_torch_handle()
+nn = torch.nn
 
 __all__: tuple[str, ...] = (
     "ActivationKind",

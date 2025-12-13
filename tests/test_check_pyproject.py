@@ -8,6 +8,7 @@ import pytest
 
 from tools import check_pyproject
 from tools.check_pyproject import TomlValue
+import tomllib
 
 
 @pytest.fixture
@@ -251,8 +252,6 @@ def test_missing_file_error(temp_dir: Path) -> None:
 
 def test_malformed_toml_error(temp_dir: Path) -> None:
     """Test validator errors on syntax error in TOML."""
-    import tomllib
-
     malformed_path = temp_dir / "malformed.toml"
     malformed_path.write_text("[tool.poetry\n")  # Missing closing bracket
 

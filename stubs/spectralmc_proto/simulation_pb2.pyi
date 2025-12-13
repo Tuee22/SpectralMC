@@ -12,10 +12,18 @@ class SimulationParamsProto:
     def __init__(self) -> None: ...
     def CopyFrom(self, other: SimulationParamsProto) -> None: ...
 
+class PathSchemeProto:
+    PATH_SCHEME_LOG_EULER: int
+    PATH_SCHEME_SIMPLE_EULER: int
+
+class ForwardNormalizationProto:
+    FORWARD_NORMALIZATION_NORMALIZE: int
+    FORWARD_NORMALIZATION_RAW: int
+
 class BlackScholesConfigProto:
     sim_params: SimulationParamsProto
-    simulate_log_return: bool
-    normalize_forwards: bool
+    path_scheme: int
+    normalization: int
     def __init__(self) -> None: ...
     def CopyFrom(self, other: SimulationParamsProto | BlackScholesConfigProto) -> None: ...
 

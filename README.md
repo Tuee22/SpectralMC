@@ -192,10 +192,11 @@ async with AsyncBlockchainModelStore("my-model-bucket") as store:
 
 ```python
 # File: README.md
-from spectralmc.storage import AsyncBlockchainModelStore, commit_snapshot
 import torch
+from spectralmc.runtime import get_torch_handle
+from spectralmc.storage import AsyncBlockchainModelStore, commit_snapshot
 
-# Train your model
+get_torch_handle()
 model = torch.nn.Linear(5, 5)
 config = make_config(model)  # Create GbmCVNNPricerConfig
 

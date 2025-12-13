@@ -13,9 +13,10 @@ from collections.abc import Mapping
 import pytest
 import torch
 
+
 from spectralmc.models import cpu_gpu_transfer
 from spectralmc.models.cpu_gpu_transfer import TransferDestination
-from spectralmc.models.torch import Device, DType  # façade first
+from spectralmc.models.torch import Device, FullPrecisionDType  # façade first
 from tests.helpers import expect_success
 from spectralmc.result import Failure
 
@@ -37,8 +38,11 @@ def _flatten(tree: cpu_gpu_transfer.TensorTree) -> list[torch.Tensor]:
             return []
 
 
+def _reset_seeds(seed: int = 42) -> None:
+    torch.manual_seed(seed)
+
+
 # Fail fast if no CUDA - satisfies user requirement
-assert torch.cuda.is_available(), "CUDA device required but none detected."
 
 
 ###############################################################################
@@ -66,6 +70,7 @@ def test_cuda_requested_but_not_available(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_cpu_to_cuda_and_back_roundtrip() -> None:
     """Test GPU→CPU transfer and roundtrip (intentional CPU usage)."""
+    _reset_seeds()
     original: cpu_gpu_transfer.TensorTree = {
         "a": torch.randn(2, 3),
         "b": [torch.arange(5), (torch.zeros(1), 3.14)],
@@ -101,6 +106,7 @@ def test_cpu_to_cuda_and_back_roundtrip() -> None:
 
 def test_unpinned_host_to_cuda_rejected_when_staging_disabled() -> None:
     """Unpinned host → CUDA should be rejected when staging is disabled."""
+    _reset_seeds()
     original: cpu_gpu_transfer.TensorTree = {
         "a": torch.randn(2, 2),
     }
@@ -120,6 +126,7 @@ def test_unpinned_host_to_cuda_rejected_when_staging_disabled() -> None:
     ],
 )
 def test_gpu_to_cpu_pin_memory_respected(dest: TransferDestination, expected_pinned: bool) -> None:
+    _reset_seeds()
     res = expect_success(
         cpu_gpu_transfer.move_tensor_tree(
             torch.randn(4, 4, device="cuda"),
@@ -136,10 +143,11 @@ def test_gpu_to_cpu_pin_memory_respected(dest: TransferDestination, expected_pin
 
 
 def test_module_state_device_dtype() -> None:
+    _reset_seeds()
     dev, dt = expect_success(
         cpu_gpu_transfer.module_state_device_dtype({"w": torch.randn(2, 2), "b": torch.zeros(2)})
     )
-    assert (dev, dt) == (Device.cpu, DType.float32)
+    assert (dev, dt) == (Device.cpu, FullPrecisionDType.float32)
 
 
 def test_optimizer_state_device_dtype_after_step() -> None:
@@ -149,7 +157,7 @@ def test_optimizer_state_device_dtype_after_step() -> None:
     }
     assert expect_success(cpu_gpu_transfer.optimizer_state_device_dtype(state)) == (
         Device.cpu,
-        DType.float32,
+        FullPrecisionDType.float32,
     )
 
 

@@ -12,8 +12,7 @@ from pathlib import Path
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
-
-# CRITICAL: Import facade BEFORE torch for deterministic algorithms
+from spectralmc.runtime import get_torch_handle
 from ..gbm_trainer import GbmCVNNPricerConfig
 from ..result import Failure, Success
 from .chain import ModelVersion
@@ -21,6 +20,8 @@ from .checkpoint import load_snapshot_from_checkpoint
 from .errors import StorageError, VersionNotFoundError
 from .store import AsyncBlockchainModelStore
 
+
+get_torch_handle()
 
 logger = logging.getLogger(__name__)
 

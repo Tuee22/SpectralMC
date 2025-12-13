@@ -84,7 +84,7 @@ class DeviceConverter:
 
 
 class DTypeConverter:
-    """Convert between Pydantic DType enums and Protobuf DTypeProto."""
+    """Convert between Pydantic dtype enums and Protobuf DTypeProto."""
 
     @staticmethod
     def to_proto(dtype: AnyDType) -> SerializationResult[int]:

@@ -3,7 +3,7 @@
 Pure-functional helpers to
 
 * move an arbitrarily-nested *TensorTree* CPU ↔ CUDA,
-* detect the unique (Device, DType) of a tree, and
+* detect the unique (Device, dtype) of a tree, and
 * derive that pair for model / optimiser ``state_dict`` objects.
 
 No explicit ``if``/``for`` loops in user-level code; comprehensions,
@@ -18,9 +18,6 @@ from collections.abc import Hashable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 
-import torch
-
-# CRITICAL: Import facade BEFORE torch for deterministic algorithms
 from spectralmc.errors.torch_facade import (
     CudaUnavailable,
     EmptyTensorTree,
@@ -38,8 +35,12 @@ from spectralmc.models.torch import (
     FullPrecisionDType,
     ReducedPrecisionDType,
 )
+import torch
+from spectralmc.runtime import get_torch_handle
 from spectralmc.result import Failure, Result, Success
 
+
+get_torch_handle()
 
 __all__ = [
     "TransferDestination",

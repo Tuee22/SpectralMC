@@ -15,8 +15,9 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+
 import torch
-import torch.nn as nn
+from spectralmc.runtime import get_torch_handle
 
 from spectralmc.gbm import BlackScholes, build_black_scholes_config, build_simulation_params
 from spectralmc.gbm_trainer import (
@@ -36,6 +37,8 @@ from spectralmc.storage import (
     load_snapshot_from_checkpoint,
 )
 
+get_torch_handle()
+nn = torch.nn
 assert torch.cuda.is_available(), "CUDA required for SpectralMC blockchain training example"
 
 

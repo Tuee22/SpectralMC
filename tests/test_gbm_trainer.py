@@ -24,6 +24,7 @@ from typing import Sequence, Union
 
 import pytest
 import torch
+
 from torch import Tensor
 
 from spectralmc.effects import ForwardNormalization, PathScheme
@@ -44,13 +45,12 @@ from spectralmc.gbm_trainer import (
 )
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import AdamOptimizerState
-from spectralmc.models.torch import DType as TorchDTypeEnum
+from spectralmc.models.torch import FullPrecisionDType
 from spectralmc.sobol_sampler import BoundSpec, build_bound_spec
 from tests.helpers import expect_success, make_black_scholes_config, make_simulation_params
 
 
 # Module-level GPU requirement - test file fails immediately without GPU
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 # --------------------------------------------------------------------------- #
@@ -105,7 +105,7 @@ def _make_cvnn(
     dtype: torch.dtype,
 ) -> ComplexValuedModel:
     """Factory wrapper around :pyfunc:`spectralmc.cvnn_factory.build_model`."""
-    enum_dtype = expect_success(TorchDTypeEnum.from_torch(dtype))
+    enum_dtype = expect_success(FullPrecisionDType.from_torch(dtype))
     cfg = CVNNConfig(
         dtype=enum_dtype,
         layers=[

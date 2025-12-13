@@ -52,10 +52,6 @@ from .verification import (
 )
 
 
-# Backward compatibility alias (deprecated - use AsyncBlockchainModelStore)
-BlockchainModelStore = AsyncBlockchainModelStore
-
-
 __all__ = [
     # Chain primitives
     "ModelVersion",
@@ -71,7 +67,6 @@ __all__ = [
     "ChainCorruptionError",
     # Store
     "AsyncBlockchainModelStore",
-    "BlockchainModelStore",  # Backward compat alias
     "retry_on_throttle",
     # Inference
     "InferenceClient",

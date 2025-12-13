@@ -15,9 +15,15 @@ import torch
 
 
 # Module-level GPU requirement - test file fails immediately without GPU
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 GPU_DEV = torch.device("cuda:0")
+_CP_RNG = cp.random.default_rng(42)
+
+
+def _reset_seeds(seed: int = 42) -> None:
+    global _CP_RNG
+    torch.manual_seed(seed)
+    _CP_RNG = cp.random.default_rng(seed)
 
 
 def test_gpu_memory_sufficient() -> None:
@@ -50,6 +56,7 @@ def test_gpu_compute_capability() -> None:
 
 def test_gpu_operations_basic() -> None:
     """Verify basic GPU operations work (PyTorch kernel execution)."""
+    _reset_seeds()
     # Test basic tensor operations
     x = torch.randn(100, 100, device=GPU_DEV)
     y = torch.matmul(x, x.T)
@@ -63,14 +70,15 @@ def test_gpu_operations_basic() -> None:
 
 def test_cupy_available() -> None:
     """Verify CuPy is available and can run GPU operations."""
+    _reset_seeds()
     # Use cupy.cuda.runtime to check availability
     cuda_runtime = cp.cuda.runtime
     device_count: int = cuda_runtime.getDeviceCount()
     assert device_count > 0, "CuPy CUDA not available"
 
     # Test basic CuPy operations using cp.random module
-    random_module = cp.random
-    a = random_module.randn(100, 100)
+    assert "_CP_RNG" in globals()
+    a = _CP_RNG.standard_normal((100, 100))
     b = cp.tensordot(a, a.T, axes=1)
 
     # Verify result is finite

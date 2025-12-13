@@ -55,13 +55,24 @@ All tests are fully typed and mypy-strict-clean.
 
 from __future__ import annotations
 
+from types import ModuleType
 from typing import List, Tuple
-import pytest
-from tests.fixtures import torch_handle  # Fixture applies TorchRuntime configuration effect
-torch = torch_handle
 
-def test_complex_linear_forward() -> None:
+import pytest
+
+import torch
+from spectralmc.runtime import get_torch_handle
+
+
+@pytest.fixture(scope="session")
+def torch_handle() -> ModuleType:
+    """Return the deterministically configured torch handle."""
+    return get_torch_handle()
+
+
+def test_complex_linear_forward(torch_handle: ModuleType) -> None:
     """Test complex linear layer forward pass."""
+    torch = torch_handle
     layer = ComplexLinear(in_features=4, out_features=2)
     real_input: torch.Tensor = torch.randn(3, 4)
     imag_input: torch.Tensor = torch.randn(3, 4)
@@ -77,7 +88,7 @@ def test_complex_linear_forward() -> None:
 - Type hints on all test functions (`-> None`)
 - Type hints on all test variables
 - Explicit imports (no `from module import *`)
-- Facade imported before PyTorch
+- TorchRuntime effect applied once and injected as a handle (no import-order dependency)
 
 ---
 
@@ -171,7 +182,9 @@ Use the global guard (already present in `tests/conftest.py`) to fail immediatel
 
 ```python
 # File: documents/engineering/testing_requirements.md
-import torch
+from spectralmc.runtime import get_torch_handle
+
+get_torch_handle()
 
 # Module-level GPU requirement - test file fails immediately without GPU
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
@@ -240,7 +253,9 @@ Ensure all tests are **deterministic** by setting random seeds:
 
 ```python
 # File: documents/engineering/testing_requirements.md
-import torch
+from spectralmc.runtime import get_torch_handle
+
+get_torch_handle()
 
 def test_deterministic_generation() -> None:
     """Test that random generation is deterministic."""
@@ -262,7 +277,9 @@ def test_deterministic_generation() -> None:
 
 ```python
 # File: documents/engineering/testing_requirements.md
-import torch
+from spectralmc.runtime import get_torch_handle
+
+get_torch_handle()
 
 def test_numerical_computation() -> None:
     """Test numerical computation with tolerance."""
@@ -287,7 +304,9 @@ Use pytest fixtures for common test setup. **Never use conditional device fallba
 ```python
 # File: documents/engineering/testing_requirements.md
 import pytest
-import torch
+from spectralmc.runtime import get_torch_handle
+
+get_torch_handle()
 
 # Module-level GPU requirement
 assert torch.cuda.is_available(), "CUDA required"
@@ -333,8 +352,10 @@ Tests should cover:
 ```python
 # File: documents/engineering/testing_requirements.md
 import pytest
-import torch
+from spectralmc.runtime import get_torch_handle
 from pydantic import ValidationError
+
+get_torch_handle()
 
 def test_bound_spec_happy_path() -> None:
     """Test BoundSpec with valid bounds."""

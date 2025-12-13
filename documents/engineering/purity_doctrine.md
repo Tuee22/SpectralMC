@@ -21,7 +21,7 @@
 
 ### What Zero Tolerance Means
 
-**In Tier 2 Business Logic Files** (`gbm_trainer.py`, `serialization/*`, `cvnn_factory.py`, `sobol_sampler.py`):
+**In Tier 2 Business Logic Files** (`serialization/*`, `cvnn_factory.py`, `sobol_sampler.py`):
 - ❌ ZERO statement-level `for` loops (use comprehensions, helper functions, or Effect ADTs)
 - ❌ ZERO statement-level `if` branches (use conditional expressions or `match`/`case`)
 - ❌ ZERO `while` loops (use generator expressions with `next()`)
@@ -125,7 +125,6 @@ Per [pytorch_facade.md](pytorch_facade.md), these patterns are applied via a Tor
 ### Tier 2: Business Logic (ZERO TOLERANCE PURITY)
 
 **Enforced Files**:
-- `src/spectralmc/gbm_trainer.py` - Training orchestration
 - `src/spectralmc/serialization/*` - Data serialization
 - `src/spectralmc/cvnn_factory.py` - Model factory
 - `src/spectralmc/sobol_sampler.py` - Sampling logic
@@ -160,6 +159,7 @@ See [Purity Enforcement](purity_enforcement.md) for AST linter whitelist configu
 **Mixed Purity Files**:
 - `src/spectralmc/effects/interpreter.py` - Effect execution
 - `src/spectralmc/storage/*` - Storage operations
+- `src/spectralmc/gbm_trainer.py` - Training orchestration + interpreter wiring
 
 **Rationale**: Effect descriptions (ADTs) are pure; effect execution is impure by design.
 
@@ -174,7 +174,6 @@ See [Purity Enforcement](purity_enforcement.md) for AST linter whitelist configu
 The following patterns are **STRICTLY FORBIDDEN** in Tier 2 business logic files. These patterns are acceptable in Tier 1 infrastructure (see architectural boundaries above).
 
 **Files where these patterns are FORBIDDEN**:
-- `src/spectralmc/gbm_trainer.py`
 - `src/spectralmc/serialization/*.py` (except tensors.py:174)
 - `src/spectralmc/async_normals.py` (whitelisted guard at line 311 only)
 - `src/spectralmc/cvnn_factory.py`
@@ -601,9 +600,9 @@ Before approving any PR touching Tier 2 files:
 - [ ] Comprehensions have no side effects
 - [ ] Match/case uses exhaustive patterns
 
-### CI/CD Integration
+### Manual Gate Checks
 
-**Required gates** (must pass before merge):
+Run these commands manually before merging changes (automation and CI/CD hooks are prohibited):
 1. `poetry run check-code` (Ruff + Black + MyPy)
 2. `poetry run check-purity` (AST-based purity linting)
 3. `poetry run test-all` (all tests passing)

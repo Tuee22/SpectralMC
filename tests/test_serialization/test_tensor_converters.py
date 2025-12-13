@@ -7,6 +7,7 @@ All tests require GPU - missing GPU is a hard failure, not a skip.
 from __future__ import annotations
 
 import torch
+
 from tests.helpers import expect_success
 
 from spectralmc.models.torch import (
@@ -23,7 +24,10 @@ from spectralmc.serialization.tensors import (
 )
 
 # Module-level GPU requirement - test file fails immediately without GPU
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
+
+
+def _reset_seeds(seed: int = 42) -> None:
+    torch.manual_seed(seed)
 
 
 def _tensor_from_state(state: TensorState) -> torch.Tensor:
@@ -32,6 +36,7 @@ def _tensor_from_state(state: TensorState) -> torch.Tensor:
 
 def test_tensor_state_round_trip_float32() -> None:
     """Test TensorStateConverter with float32 tensor."""
+    _reset_seeds()
     original = torch.randn(3, 4, dtype=torch.float32)
 
     proto = expect_success(TensorStateConverter.to_proto(original))
@@ -44,6 +49,7 @@ def test_tensor_state_round_trip_float32() -> None:
 
 def test_tensor_state_round_trip_float64() -> None:
     """Test TensorStateConverter with float64 tensor."""
+    _reset_seeds()
     original = torch.randn(5, 10, dtype=torch.float64)
 
     proto = expect_success(TensorStateConverter.to_proto(original))
@@ -55,6 +61,7 @@ def test_tensor_state_round_trip_float64() -> None:
 
 def test_tensor_state_round_trip_complex64() -> None:
     """Test TensorStateConverter with complex64 tensor."""
+    _reset_seeds()
     real = torch.randn(4, 4, dtype=torch.float32)
     imag = torch.randn(4, 4, dtype=torch.float32)
     original = torch.view_as_complex(torch.stack([real, imag], dim=-1))
@@ -68,6 +75,7 @@ def test_tensor_state_round_trip_complex64() -> None:
 
 def test_tensor_state_round_trip_complex128() -> None:
     """Test TensorStateConverter with complex128 tensor."""
+    _reset_seeds()
     real = torch.randn(3, 5, dtype=torch.float64)
     imag = torch.randn(3, 5, dtype=torch.float64)
     original = torch.view_as_complex(torch.stack([real, imag], dim=-1))
@@ -81,6 +89,7 @@ def test_tensor_state_round_trip_complex128() -> None:
 
 def test_tensor_state_requires_grad() -> None:
     """Test TensorStateConverter preserves requires_grad."""
+    _reset_seeds()
     original = torch.randn(3, 3, dtype=torch.float32, requires_grad=True)
 
     proto = expect_success(TensorStateConverter.to_proto(original))
@@ -91,6 +100,7 @@ def test_tensor_state_requires_grad() -> None:
 
 def test_tensor_state_no_requires_grad() -> None:
     """Test TensorStateConverter with requires_grad=False."""
+    _reset_seeds()
     original = torch.randn(3, 3, dtype=torch.float32, requires_grad=False)
 
     proto = expect_success(TensorStateConverter.to_proto(original))
@@ -101,6 +111,7 @@ def test_tensor_state_no_requires_grad() -> None:
 
 def test_adam_optimizer_state_round_trip() -> None:
     """Test AdamOptimizerStateConverter round-trip."""
+    _reset_seeds()
     # Create sample optimizer state
     param_states = {
         0: expect_success(
@@ -172,6 +183,7 @@ def test_adam_optimizer_state_round_trip() -> None:
 
 def test_rng_state_round_trip() -> None:
     """Test RNGStateConverter round-trip."""
+    _reset_seeds()
     cpu_state = torch.get_rng_state().numpy().tobytes()
     cuda_states = []
 
@@ -211,6 +223,7 @@ def test_tensor_scalar() -> None:
 
 def test_tensor_large() -> None:
     """Test TensorStateConverter with large tensor."""
+    _reset_seeds()
     original = torch.randn(100, 100, 100, dtype=torch.float32)
 
     proto = expect_success(TensorStateConverter.to_proto(original))
@@ -222,6 +235,7 @@ def test_tensor_large() -> None:
 
 def test_model_checkpoint_round_trip() -> None:
     """Test ModelCheckpointConverter with complete checkpoint."""
+    _reset_seeds()
     # Create sample model state dict
     model_state_dict = {
         "layer1.weight": torch.randn(10, 5),

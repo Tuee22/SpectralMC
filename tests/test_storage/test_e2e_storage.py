@@ -12,6 +12,7 @@ import asyncio
 import pytest
 import torch
 
+
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
 from spectralmc.storage import (
@@ -30,8 +31,6 @@ from spectralmc.storage.errors import (
 )
 from spectralmc.storage.gc import ExecuteGC, PreviewGC, run_gc
 from tests.helpers import expect_success, make_black_scholes_config, make_simulation_params
-
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 def make_test_snapshot(

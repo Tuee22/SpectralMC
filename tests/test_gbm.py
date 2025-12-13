@@ -14,7 +14,7 @@ from typing import Literal, TypeAlias
 
 import numpy as np
 import pytest
-import torch
+
 
 from spectralmc.effects import ForwardNormalization, PathScheme
 from spectralmc.gbm import (
@@ -26,8 +26,6 @@ from spectralmc.models.numerical import Precision
 from spectralmc.quantlib import bs_price_quantlib
 from spectralmc.result import Failure, Success
 from spectralmc.sobol_sampler import SobolConfig, SobolSampler, build_bound_spec
-
-assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 
 # ─────────────────────────────── type aliases ───────────────────────────────
