@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 
-
 from spectralmc.storage.chain import (
     ModelVersion,
     bump_semantic_version,
