@@ -17,10 +17,9 @@ This guide covers production deployment of SpectralMC's blockchain model storage
 3. [IAM Policies & Security](#iam-policies--security)
 4. [Multi-Environment Strategy](#multi-environment-strategy)
 5. [MinIO Production Setup](#minio-production-setup)
-6. [Monitoring & Observability](#monitoring--observability)
-7. [Backup & Disaster Recovery](#backup--disaster-recovery)
-8. [Cost Optimization](#cost-optimization)
-9. [Troubleshooting](#troubleshooting)
+6. [Backup & Disaster Recovery](#backup--disaster-recovery)
+7. [Cost Optimization](#cost-optimization)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -41,10 +40,15 @@ flowchart TB
 ```
 
 **Key Components**:
-- **AsyncBlockchainModelStore**: S3-based storage with atomic CAS commits
+- **AsyncBlockchainModelStore**: S3-based storage with atomic CAS manifest updates
+- **head.json**: ETag/object-locked manifest as SSoT for training/inference state
+- **Audit log**: Append-only S3 records linked to manifest counter/hash
 - **InferenceClient**: Production model serving (pinned/tracking modes)
 - **GarbageCollector**: Automated cleanup of old versions
-- **Chain Verification**: Tamper detection via Merkle chain validation
+
+**Source of truth**: All operational state (current version, history, audit events) is derived
+from S3 (`head.json`, immutable version directories, audit log). Do not mirror this state in
+external monitoring systems.
 
 ---
 
@@ -67,6 +71,14 @@ aws s3api create-bucket \
 aws s3api put-bucket-versioning \
     --bucket spectralmc-models-prod \
     --versioning-configuration Status=Enabled
+```
+
+**Optional: Enable Object Lock** to harden `head.json` and audit logs:
+```bash
+# File: documents/product/deployment.md
+aws s3api put-object-lock-configuration \
+    --bucket spectralmc-models-prod \
+    --object-lock-configuration "ObjectLockEnabled=Enabled,Rule={DefaultRetention={Mode=GOVERNANCE,Days=1}}"
 ```
 
 **3. Configure Lifecycle Policy** (cost optimization):
@@ -156,7 +168,7 @@ flowchart TB
 
 | Component | Permissions | Rationale |
 |-----------|------------|-----------|
-| **Training Node** | Read/Write/Delete | Commits checkpoints, updates chain.json |
+| **Training Node** | Read/Write/Delete | Commits checkpoints, updates head.json |
 | **Inference Node** | Read only | Loads models, never modifies storage |
 | **GC Job** | Read/Delete | Removes old versions, no write needed |
 | **Admin/CI** | Full access | Bucket setup, disaster recovery |
@@ -461,65 +473,6 @@ mc admin bucket remote add myminio/spectralmc-models-prod \
 
 ---
 
-## Monitoring & Observability
-
-### Key Metrics to Track
-
-**Storage Metrics**:
-- `spectralmc_storage_size_bytes` - Total storage used
-- `spectralmc_version_count` - Number of versions
-- `spectralmc_commit_rate` - Commits per second
-- `spectralmc_commit_latency_seconds` - Time to commit
-
-**Inference Metrics**:
-- `spectralmc_inference_client_version` - Current version being served
-- `spectralmc_model_load_time_seconds` - Time to load model
-- `spectralmc_inference_requests_total` - Request count
-
-**GC Metrics**:
-- `spectralmc_gc_versions_deleted_total` - Versions deleted
-- `spectralmc_gc_bytes_freed_total` - Storage freed
-- `spectralmc_gc_run_duration_seconds` - GC execution time
-
-### CloudWatch Logs
-
-Enable CloudWatch logging for S3:
-```bash
-# File: documents/product/deployment.md
-aws s3api put-bucket-logging \
-    --bucket spectralmc-models-prod \
-    --bucket-logging-status file://logging.json
-```
-
-`logging.json`:
-```json
-/* File: logging.json */
-{
-  "LoggingEnabled": {
-    "TargetBucket": "spectralmc-logs",
-    "TargetPrefix": "s3-access-logs/"
-  }
-}
-```
-
-### Alerting
-
-**CloudWatch Alarms**:
-
-1. **High Storage Growth**:
-```bash
-# File: documents/product/deployment.md
-aws cloudwatch put-metric-alarm \
-    --alarm-name spectralmc-high-storage-growth \
-    --alarm-description "Alert when storage grows >10GB/day" \
-    --metric-name BucketSizeBytes \
-    --namespace AWS/S3 \
-    --statistic Average \
-    --period 86400 \
-    --threshold 10737418240 \
-    --comparison-operator GreaterThanThreshold
-```
-
 2. **Chain Corruption Detected**:
    - Set up custom metric for corruption detection
    - Alert on any non-zero corruption events
@@ -584,10 +537,10 @@ flowchart TB
   HasBackup[Replica Available]
 
   Restore[Restore From DR]
-  Verify[Verify Chain Integrity]
-  CheckIntegrity{Chain Valid}
-  Corrupted[Identify Corruption]
-  Valid[Chain Verified]
+  Verify[Verify Manifest]
+  CheckIntegrity{Manifest Valid}
+  Corrupted[Identify Drift]
+  Valid[Manifest Verified]
   UpdateClients[Update Inference Clients]
   Monitor[Monitor 24 Hours]
   Complete[Recovery Complete]
@@ -597,7 +550,7 @@ flowchart TB
   Assess -->|backup exists| HasBackup
   HasBackup -->|restore data| Restore
   Restore -->|verify| Verify
-  Verify -->|validate chain| CheckIntegrity
+  Verify -->|validate manifest| CheckIntegrity
   CheckIntegrity -->|invalid| Corrupted
   CheckIntegrity -->|valid| Valid
   Corrupted -->|notify clients| UpdateClients
@@ -616,7 +569,7 @@ flowchart TB
 aws s3 sync s3://spectralmc-models-dr s3://spectralmc-models-prod
 ```
 
-2. **Verify chain integrity**:
+2. **Verify manifest/audit integrity**:
 ```bash
 # File: documents/product/deployment.md
 python -m spectralmc.storage verify spectralmc-models-prod --detailed
@@ -722,9 +675,9 @@ protect_tags: [all_production_releases]
 - **Cause**: Concurrent commits from multiple trainers
 - **Solution**: Implement commit retry logic or use separate buckets per trainer
 
-**3. "ChainCorruptionError: Broken Merkle chain"**:
-- **Cause**: Manual S3 modification or bit rot
-- **Solution**: Restore from backup, run `verify --detailed` to identify corruption point
+**3. "ManifestIntegrityError"**:
+- **Cause**: `head.json` points to a missing/modified version directory
+- **Solution**: Restore manifest and version payload from backup, run `verify --detailed` to confirm
 
 **4. Slow inference client startup**:
 - **Cause**: Large checkpoint download
@@ -734,10 +687,10 @@ protect_tags: [all_production_releases]
 
 ```bash
 # File: documents/product/deployment.md
-# Verify chain integrity
+# Verify manifest integrity
 python -m spectralmc.storage verify my-bucket --detailed
 
-# Find corruption
+# Find payload/manifest drift
 python -m spectralmc.storage find-corruption my-bucket
 
 # List all versions

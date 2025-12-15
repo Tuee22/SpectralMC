@@ -21,10 +21,10 @@ Production deployment of SpectralMC blockchain model storage:
 - S3/MinIO configuration
 - IAM policies and security
 - Multi-environment strategy
-- Monitoring and disaster recovery
+- Disaster recovery
 - Cost optimization
 
-**Key Topics**: AWS S3, MinIO, IAM, backup, monitoring
+**Key Topics**: AWS S3, MinIO, IAM, backup
 
 ### [Training Integration](training_integration.md)
 

@@ -653,9 +653,10 @@ Tag important versions for protection from GC:
 # Manually protect version 42 by adding to protect_tags in GC policy
 ```
 
-### 5. Monitoring
+### 5. Visibility
 
-Use TensorBoard to visualize training history:
+S3 is the source of truth for training state (`head.json`, version directories, audit log).
+TensorBoard logs are optional for local debugging:
 
 ```bash
 # File: documents/product/training_integration.md

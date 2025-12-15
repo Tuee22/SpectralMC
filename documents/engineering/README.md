@@ -21,7 +21,6 @@ flowchart TB
   Cmds[Command Reference]
   Artifacts[Build Artifact Management]
   Observability[Observability]
-  Monitoring[Monitoring Alerting]
   TPM[Total Pure Modelling]
 
   Hub --> Arch
@@ -32,7 +31,6 @@ flowchart TB
   Hub --> Cmds
   Hub --> Artifacts
   Hub --> Observability
-  Hub --> Monitoring
   Hub --> TPM
   Docker --> Cmds
   Test --> CQ
@@ -51,7 +49,6 @@ flowchart TB
 | Exact command syntax | [Command Reference](command_reference.md) |
 | Handle build artifacts/lockfiles | [Build Artifact Management](build_artifact_management.md) |
 | Metrics/observability policy | [Observability](observability.md) |
-| Monitoring/alerting status | [Monitoring & Alerting](monitoring_and_alerting.md) |
 | GPU build paths | [GPU Build Guide](gpu_build.md) |
 
 ## Core Standards
@@ -66,7 +63,7 @@ flowchart TB
 - **[Command Reference](command_reference.md)** — Canonical command list (check-code, test-all, logs).
 - **[Build Artifact Management](build_artifact_management.md)** — Lockfile policy, `/opt` containment, verification.
 - **[Observability](observability.md)** — Metrics scope tailored to SpectralMC (GPU + storage).
-- **[Monitoring & Alerting](monitoring_and_alerting.md)** — Placeholder for deployment-specific alert rules.
+- **[Monitoring & Alerting](monitoring_and_alerting.md)** — Retired; centralized monitoring is out of scope.
 
 ## Domain-Specific Standards
 

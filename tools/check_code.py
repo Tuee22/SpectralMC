@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-PyProject sync + Ruff + Black + Purity + MyPy code quality checker.
+PyProject sync + Immutability + Ruff + Black + Purity + MyPy code quality checker.
 
-Runs pyproject synchronization validation, ruff linting, black formatting, purity
-checking, then mypy type checking with fail-fast behavior. Exits immediately on
-first failure.
+Runs pyproject synchronization validation, immutability audit, ruff linting,
+black formatting, purity checking, then mypy type checking with fail-fast
+behavior. Exits immediately on first failure.
 """
 
 import subprocess
@@ -50,7 +50,20 @@ def main() -> int:
     if pyproject_status != 0:
         return pyproject_status
 
-    # Step 1: Run Ruff
+    # Step 1: Run immutability doctrine audit
+    print("🔍 Running Immutability doctrine audit...")
+    immutability_result = subprocess.run(
+        ["poetry", "run", "python", "-m", "tools.check_immutability"],
+        check=False,
+    )
+
+    if immutability_result.returncode != 0:
+        print(f"❌ Immutability audit failed with exit code {immutability_result.returncode}")
+        return immutability_result.returncode
+
+    print("✅ Immutability audit passed!\n")
+
+    # Step 2: Run Ruff
     print("🔍 Running Ruff linter...")
     ruff_result = subprocess.run(
         ["poetry", "run", "ruff", "check", "--fix", "src/spectralmc/", "tools/", "tests/"],
@@ -63,7 +76,7 @@ def main() -> int:
 
     print("✅ Ruff passed!\n")
 
-    # Step 2: Run Black
+    # Step 3: Run Black
     print("🔍 Running Black formatter...")
     black_result = subprocess.run(
         ["poetry", "run", "black", "src/spectralmc/", "tools/", "tests/"],
@@ -76,7 +89,7 @@ def main() -> int:
 
     print("✅ Black passed!\n")
 
-    # Step 3: Run Purity Checker (zero-tolerance for Tier 2 business logic)
+    # Step 4: Run Purity Checker (zero-tolerance for Tier 2 business logic)
     print("🔍 Running Purity checker...")
     purity_result = subprocess.run(
         ["poetry", "run", "check-purity"],
@@ -90,7 +103,7 @@ def main() -> int:
 
     print("✅ Purity check passed!\n")
 
-    # Step 4: Run MyPy
+    # Step 5: Run MyPy
     # Paths match pyproject.toml [tool.mypy] files configuration
     print("🔍 Running MyPy type checker...")
     mypy_result = subprocess.run(

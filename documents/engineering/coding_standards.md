@@ -1284,7 +1284,7 @@ match result:
                 # Retry or fail
             case S3UnknownError(original_error=e):
                 logger.error(f"Unknown S3 error: {e}")
-                # Escalate to monitoring
+                # Escalate to audit log / operator review
             case _:
                 # Exhaustiveness check - will fail type checking if new variant added
                 assert_never(error)

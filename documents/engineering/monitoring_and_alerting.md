@@ -1,26 +1,24 @@
 # File: documents/engineering/monitoring_and_alerting.md
-# Monitoring and Alerting
+# Monitoring and Alerting (Retired)
 
-**Status**: Reference only  
+**Status**: Deprecated  
 **Supersedes**: none  
-**Referenced by**: engineering/README.md (future)
+**Referenced by**: engineering/README.md (for historical context)
 
-> **Purpose**: Placeholder alignment with effectful naming. SpectralMC alerting rules depend on the chosen telemetry platform and must be defined deployment-by-deployment. Use this file to document adopted rules once the platform is selected.
-> **📖 Authoritative Reference**: [Observability](observability.md)
+> **Purpose**: Record that centralized monitoring/alerting (Prometheus, OpenTelemetry, etc.)
+> is not part of the SpectralMC operational model. S3-backed manifests and audit logs are
+> the source of truth for training and model state; use deployment-specific logging only.
 
 ## Cross-References
 
-- [Observability](observability.md) — Core metrics and telemetry architecture
-- [Engineering README](README.md) — Engineering standards hub
+- [Observability](observability.md) — Logging and audit expectations without Prometheus
+- [Blockchain Model Versioning](blockchain_storage.md) — S3 state and audit log SSoT
+- [Documentation Standards](../documentation_standards.md) — Metadata and linking rules
 
-## Interim Guidance
+## Current Policy
 
-- Build alerts on the core metrics defined in [observability.md](observability.md) (GPU utilization, training health, storage integrity, RNG determinism).
-- Define severity levels, routing, and runbooks in deployment-specific overlays (not in source) to avoid leaking environment details.
-- Keep PromQL/alert expressions (or equivalent) co-located with deployment manifests; link them here when finalized.
-
-## Action Items
-
-- Choose telemetry stack (Prometheus/OpenTelemetry/etc.).
-- Document severity/routing conventions and runbooks per deployment.
-- Backfill links here once adopted.
+- No centralized monitoring stack is prescribed. Do not add Prometheus/OpenTelemetry hooks.
+- Operational state comes from S3: `head.json`, immutable version directories, and the
+  append-only audit log.
+- Per-deployment logging (stdout/structured logs) may be used for debugging but must not
+  attempt to mirror training or checkpoint state; treat S3 as the canonical record.

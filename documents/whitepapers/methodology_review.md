@@ -570,7 +570,7 @@ assert rmspe <= 0.01  # 1%
 - May need to increase MC samples from 2^19 to 2^20 or 2^21
 - Add variance reduction techniques if too slow
 
-**Priority 3: Implement Convergence Monitoring**
+**Priority 3: Implement Convergence Logging/Checks**
 ```python
 # File: documents/whitepapers/methodology_review.md
 def train_with_validation(trainer, train_contracts, val_contracts):
@@ -912,7 +912,7 @@ SpectralMC is a **high-risk, high-reward research prototype** with:
 
 1. ✅ End-to-end accuracy test (CVNN vs QuantLib < 1% error)
 2. ✅ Tighten validation tolerance (15% → 1%)
-3. ✅ Implement convergence monitoring
+3. ✅ Implement convergence logging/checks
 4. ✅ Benchmark computational advantage claims
 
 **If validation succeeds**, this could be **transformative**. Learning characteristic functions via neural networks for derivative pricing is genuinely novel. The pure-GPU pipeline and deterministic training are production-quality engineering.
@@ -972,7 +972,7 @@ SpectralMC is a **high-risk, high-reward research prototype** with:
 4. **Phase 4: Production (if validated) (3-6 months)**
    - Model registry with versioning
    - Serving infrastructure (FastAPI)
-   - Monitoring and fallback strategies
+   - Operational fallback strategies (logging/audit-only)
    - Integration with existing trading systems
 
 **Only proceed to Phase 4 if Phase 1 validation succeeds.**

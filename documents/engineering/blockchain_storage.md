@@ -14,19 +14,24 @@
 
 ## Overview
 
-SpectralMC uses a blockchain-based approach for model versioning with S3 storage, providing production-ready version control for ML models.
+SpectralMC uses immutable S3 objects with a single manifest to provide production-ready model
+version control. S3 (and its object-lock/ETag history) is the sole source of truth for
+training state; no auxiliary monitoring system is required.
 
 **Key Features**:
 - **Immutable version history** with SHA256 content addressing
-- **Semantic versioning** (MAJOR.MINOR.PATCH)
-- **Merkle chain linking** for tamper detection
-- **Atomic commits** with ETag-based CAS (Compare-And-Swap)
+- **Version directories keyed by counter + hash** (no Merkle parent links)
+- **Single `head.json`** guarded by ETag or S3 object-lock as the manifest SSoT
+- **Append-only audit log** in S3 for human-readable commit traceability
+- **Atomic manifest updates** via ETag-based Compare-And-Swap (CAS)
 - **S3 storage** with aioboto3 async operations
 - **Protocol Buffer serialization** for cross-platform compatibility
 - **InferenceClient** with pinned/tracking modes
-- **Chain verification** to detect corruption
 - **Garbage collection** for old versions
 - **TensorBoard integration** for metrics logging
+
+**Source of truth**: `head.json` in S3 is authoritative for training/inference state. All
+derivative signals (logs, audit entries, TensorBoard summaries) are advisory only.
 
 ---
 
@@ -47,60 +52,66 @@ Production S3-based storage with atomic CAS commits:
 # File: documents/engineering/blockchain_storage.md
 S3 Bucket Structure:
 my-model-bucket/
-├── chain.json                    # HEAD pointer with ETag
+├── head.json                     # Manifest: current counter/hash, ETag-guarded
+├── audit/
+│   └── 2024/05/05T12:00:00Z.json # Append-only audit records (one file per commit)
 └── versions/
-    ├── v0000000000_1.0.0_abcd1234/
+    ├── v0000000000_abcd1234/
     │   ├── checkpoint.pb         # Protocol Buffer serialized model
-    │   ├── metadata.json         # Version info
+    │   ├── metadata.json         # Version info (counter, semver, content_hash)
     │   └── content_hash.txt      # SHA256 checksum
-    └── v0000000001_1.0.1_ef567890/
+    └── v0000000001_ef567890/
         ├── checkpoint.pb
         ├── metadata.json
         └── content_hash.txt
 ```
 
 **Key Features**:
-- `chain.json`: Atomic HEAD pointer updated via CAS (ETag-based)
-- `versions/`: Immutable version directories (never modified after creation)
+- `head.json`: Atomic manifest (counter, content_hash, version_id) guarded by ETag or
+  S3 object-lock/versioning
+- `audit/`: Append-only human-readable entries referencing the manifest counter/hash
+- `versions/`: Immutable version directories keyed by counter + content hash
 - `checkpoint.pb`: Protocol Buffer serialized model state
-- `metadata.json`: Version metadata (counter, semver, parent_hash, timestamp)
+- `metadata.json`: Version metadata (counter, semver, timestamp, content_hash)
 - `content_hash.txt`: SHA256 checksum for integrity verification
+
+### Audit Log
+
+- Append-only JSON entries written to `audit/` with timestamp, counter, content hash,
+  commit message, and writer identity.
+- Used for operational forensics; does not participate in CAS for `head.json`.
+- Consumers should treat audit entries as advisory; `head.json` remains authoritative.
 
 ---
 
-## Atomic Commit Protocol (10-step CAS)
+## Atomic Manifest Update (CAS)
 
 ```mermaid
 flowchart TB
-  Start[Read chain head ETag]
-  BuildMeta[Build version metadata + content hash]
-  UploadCheckpoint[Upload checkpoint file]
-  UploadMeta[Upload metadata file]
-  UploadHash[Upload content hash file]
-  UpdateHead[CAS update chain json If Match ETag]
-  CommitSuccess[Commit succeeds]
+  Start[Read head.json + ETag]
+  BuildMeta[Build metadata + content hash]
+  UploadVersion[Upload immutable version directory]
+  AppendAudit[Append audit record]
+  UpdateHead[CAS update head.json If-Match ETag]
+  Success[Manifest updated]
   Conflict[412 Precondition Failed]
-  Rollback[Delete uploaded files]
-  Retry[Retry with backoff]
 
-  Start -->|read head| BuildMeta
-  BuildMeta -->|prepare metadata| UploadCheckpoint
-  UploadCheckpoint -->|upload checkpoint| UploadMeta
-  UploadMeta -->|upload metadata| UploadHash
-  UploadHash -->|upload hash| UpdateHead
-  UpdateHead -->|success| CommitSuccess
-  UpdateHead -->|precondition failed| Conflict
-  Conflict -->|cleanup| Rollback
-  Rollback -->|retry strategy| Retry
-  Retry -->|restart sequence| Start
+  Start --> BuildMeta
+  BuildMeta --> UploadVersion
+  UploadVersion --> AppendAudit
+  AppendAudit --> UpdateHead
+  UpdateHead -->|success| Success
+  UpdateHead -->|ETag changed| Conflict
 ```
 
 ### CAS Guarantees
 
-- **Atomicity**: Either all files committed or none (rollback on conflict)
-- **Consistency**: chain.json always points to valid version
-- **Isolation**: Concurrent commits detected via ETag mismatch
-- **Durability**: S3 provides 99.999999999% durability
+- **Atomicity at manifest**: Either `head.json` advances to the new counter/hash or it does
+  not; version payloads remain immutable even on conflicts.
+- **Consistency**: `head.json` always references a valid version directory.
+- **Isolation**: Concurrent writers are detected via ETag/Object-Lock; retry with a fresh
+  read of `head.json`.
+- **Durability**: S3 durability plus optional object-lock protects `head.json` and audit logs.
 
 ---
 
@@ -231,47 +242,34 @@ async with InferenceClient(
 
 ---
 
-## Chain Verification
+## Manifest and Audit Verification
 
-Detect tampering and corruption with automated verification.
+Detect corruption or drift by validating the manifest and audit log against immutable
+version payloads.
 
-### Chain Verification Algorithm
+### Verification Algorithm
 
 ```mermaid
 flowchart TB
-  Start[Start Verification]
-  LoadVersions[Load all versions from S3]
-  CheckGenesis{Genesis Valid}
-  GenesisOK[Genesis Valid]
-  GenesisFail[Genesis Invalid]
+  Start[Load head.json + ETag]
+  LoadVersion[Load referenced version payload]
+  HashCheck{Hash matches content}
+  AuditCheck{Audit entry present}
+  CounterCheck{Counter monotonic}
+  SemverCheck{Semver valid}
+  Valid[All checks passed]
+  Invalid[CORRUPTION DETECTED]
 
-  IterateVersions[Iterate through versions]
-  CheckParentHash{Parent Hash Matches}
-  CheckCounter{Counter Sequence}
-  CheckSemver{Semver Sequence}
-
-  ParentHashOK[Merkle chain intact]
-  CounterOK[Counter monotonic]
-  SemverOK[Semantic version valid]
-
-  AllValid[All checks passed]
-  CorruptionFound[CORRUPTION DETECTED]
-
-  Start -->|load versions| LoadVersions
-  LoadVersions -->|validate genesis| CheckGenesis
-  CheckGenesis -->|valid| GenesisOK
-  CheckGenesis -->|invalid| GenesisFail
-  GenesisOK -->|iterate| IterateVersions
-  IterateVersions -->|check parent| CheckParentHash
-  CheckParentHash -->|match| ParentHashOK
-  CheckParentHash -->|mismatch| CorruptionFound
-  ParentHashOK -->|check counter| CheckCounter
-  CheckCounter -->|sequential| CounterOK
-  CheckCounter -->|gap or duplicate| CorruptionFound
-  CounterOK -->|check semver| CheckSemver
-  CheckSemver -->|valid| SemverOK
-  CheckSemver -->|invalid| CorruptionFound
-  SemverOK -->|report valid| AllValid
+  Start --> LoadVersion
+  LoadVersion --> HashCheck
+  HashCheck -->|match| AuditCheck
+  HashCheck -->|mismatch| Invalid
+  AuditCheck -->|present| CounterCheck
+  AuditCheck -->|missing| Invalid
+  CounterCheck -->|sequential| SemverCheck
+  CounterCheck -->|gap| Invalid
+  SemverCheck -->|valid| Valid
+  SemverCheck -->|invalid| Invalid
 ```
 
 ### Code Usage
@@ -282,32 +280,23 @@ from spectralmc.storage import verify_chain, verify_chain_detailed
 from spectralmc.result import Success, Failure
 
 async with AsyncBlockchainModelStore("my-model-bucket") as store:
-    # Functional verification with Result types
     result = await verify_chain(store)
 
     match result:
         case Success(report) if report.is_valid:
-            print(f"Chain valid: {report.details}")
+            print(f"Manifest valid: {report.details}")
         case Success(report):
-            # Corruption detected
             print(f"Corruption: {report.corruption_type}")
-            print(f"At version: {report.corrupted_version.counter}")
         case Failure(error):
             print(f"S3 error during verification: {error}")
-
-    # Alternative: Use verify_chain_detailed directly (returns CorruptionReport)
-    report = await verify_chain_detailed(store)
-    if not report.is_valid:
-        print(f"Corruption: {report.corruption_type}")
-        print(f"At version: {report.corrupted_version.counter}")
 ```
 
 ### Validation Checks
 
-- Genesis block integrity (counter=0, empty parent_hash, semver="1.0.0")
-- Merkle chain property: `parent_hash == previous.content_hash`
+- Manifest hash matches the payload in `versions/`
 - Counter monotonicity (strictly increasing by 1)
 - Semantic version progression
+- Audit entry exists for every manifest advance
 
 ---
 
@@ -440,7 +429,7 @@ See `examples/training_with_blockchain_storage.py` for complete example.
 
 ```bash
 # File: documents/engineering/blockchain_storage.md
-# Verify chain integrity (Docker-only)
+# Verify manifest integrity (Docker-only)
 docker compose -f docker/docker-compose.yml exec spectralmc \
   poetry run python -m spectralmc.storage verify my-model-bucket
 
@@ -467,8 +456,8 @@ docker compose -f docker/docker-compose.yml exec spectralmc \
 
 ### Complete CLI Commands
 
-- `verify` - Verify blockchain integrity
-- `find-corruption` - Find first corrupted version
+- `verify` - Verify manifest and payload integrity
+- `find-corruption` - Find first corrupted version (hash/counter/semver mismatch)
 - `list-versions` - List all versions
 - `inspect` - Inspect specific version in detail
 - `gc-preview` - Preview garbage collection (dry run)
@@ -486,7 +475,7 @@ All storage features have comprehensive test coverage:
   - gc-preview, gc-run with protected tags
   - tensorboard-log, error handling
 - **InferenceClient**: 8 tests (pinned mode, tracking mode, lifecycle)
-- **Chain verification**: 15 tests (genesis, merkle chain, corruption detection)
+- **Manifest verification**: 15 tests (hash, counter, semver, audit presence)
 - **Garbage collection**: 15 tests (retention policies, safety checks)
 - **TensorBoard**: 12 tests (logging, metadata, error handling)
 - **Training integration**: 7 tests (auto_commit, periodic commits, optimizer state preservation)

@@ -5,44 +5,53 @@
 **Supersedes**: none  
 **Referenced by**: engineering/README.md
 
-> **Purpose**: Define SpectralMC’s observability expectations (metrics/logging) in a backend-agnostic way. Aligns naming with effectful while excluding non-SpectralMC domain detail.
+> **Purpose**: Define SpectralMC’s observability expectations with logging and S3-native audit
+> trails. No centralized monitoring stack is prescribed; S3 manifests are the source of truth
+> for training and model state.
 
 ## Scope
 
-- Metrics for GPU execution, training workflows, and storage integrity.
-- Logging modeled as effects; interpreters emit logs.
-- Alerting severity/routing are documented separately once platform is selected.
+- Logging modeled as effects; interpreters emit structured logs.
+- S3 `head.json` + immutable version directories + audit log are canonical for state.
+- No Prometheus/OpenTelemetry/metrics requirements; avoid adding metric dependencies.
 
 ## Principles
 
-- **Type-safe metrics**: metrics are defined once with fixed label schemas; avoid runtime creation.
-- **Deterministic, GPU-first signals**: capture device, dtype, and kernel identifiers to detect CPU fallbacks.
-- **Low cardinality**: bound label value sets (model_id, kernel, device, version) to prevent explosion.
-- **Separation of concerns**: program code emits metric/log effects; interpreters send to the telemetry backend.
+- **State lives in S3**: `head.json` guarded by ETag/object-lock and version directories keyed
+  by counter+hash are definitive.
+- **Structured logs only**: emit context-rich JSON logs from interpreters (device, version
+  counter, content hash, audit ID) to aid debugging without inventing secondary state.
+- **Deterministic breadcrumbs**: log RNG seeds, device placement, and S3 keys used so runs can
+  be replayed from S3 alone.
+- **Separation of concerns**: pure layers produce log effects; interpreters write logs and
+  append audit records.
 
-## Core Metrics (minimum set)
+## Logging Expectations
 
-- **GPU utilization**: per-device kernel occupancy and memory footprint.
-- **Training health**: loss/gradient norms, step duration, checkpoint success/failure.
-- **Storage integrity**: chain verification results, CAS commit/rollback counts.
-- **RNG determinism**: RNG capture/restore success, divergence counters.
+- Include: version counter/hash, S3 object keys, device IDs, RNG seeds, commit message, and
+  audit log record ID for each commit/load.
+- Record failures that bypass commit (serialization failure, ETag mismatch, missing bucket)
+  and note whether `head.json` changed.
+- Avoid: ad-hoc metrics, Prometheus/OpenTelemetry exporters, or runtime metric definition.
 
 ## Logging
 
 - Use `LogMessage` effects with level/message/context; avoid direct logger calls in pure code.
+- Emit logs from interpreters; pure layers remain deterministic and free of I/O.
 - Include device/model identifiers in log context to spot CPU fallbacks or mismatched models.
-- Ensure logs are emitted from interpreters; pure layers remain deterministic.
+- Prefer structured JSON payloads to allow easy filtering without a metrics backend.
 
 ## Implementation Notes
 
-- Backend is intentionally unspecified (Prometheus/OpenTelemetry/etc.); choose a consistent stack per deployment and keep schemas stable.
-- Metric and log definitions live alongside interpreters to ensure GPU/storage context is available.
-- Alerting rules should build on these metrics; see `monitoring_and_alerting.md` when adopted.
+- There is no prescribed metrics backend. Do not add Prometheus/OpenTelemetry dependencies.
+- S3 bucket logging/object-lock may be enabled per deployment for additional auditability.
+- Audit log entries (append-only in S3) and `head.json` ETag history are the primary sources
+  for operational reconstruction; avoid duplicating this state elsewhere.
 
 ## Cross-References
 
-- [Effect Interpreter Doctrine](effect_interpreter.md) — logging/metrics as effects.
-- [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) — device expectations for metric dimensions.
-- [Blockchain Model Versioning](blockchain_storage.md) — integrity metrics.
-- [Testing](testing.md) — ensures GPU-only paths and deterministic signals.
+- [Effect Interpreter Doctrine](effect_interpreter.md) — logging effects and interpreter duties.
+- [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) — device expectations for logging context.
+- [Blockchain Model Versioning](blockchain_storage.md) — S3 SSoT and audit log design.
+- [Monitoring and Alerting (Retired)](monitoring_and_alerting.md) — rationale for no Prometheus stack.
 - [Documentation Standards](../documentation_standards.md) — metadata and linking.

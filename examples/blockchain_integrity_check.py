@@ -11,6 +11,7 @@ Demonstrates:
 from __future__ import annotations
 
 import asyncio
+from dataclasses import FrozenInstanceError
 import tempfile
 
 from spectralmc.storage import AsyncBlockchainModelStore
@@ -91,15 +92,15 @@ async def main() -> None:
     # Version immutability
     print("\n5. Version Immutability")
 
-    def _attempt_mutation(version: object) -> None:
+    def _attempt_mutation(version: ModelVersion) -> None:
         """Try mutating a frozen dataclass; should raise FrozenInstanceError."""
-        setattr(version, "counter", 999)
+        version.counter = 999
 
     try:
         _attempt_mutation(versions[0])
         print("✗ Version was modified (should not happen!)")
-    except Exception as e:
-        print(f"✓ Version is immutable: {type(e).__name__}")
+    except FrozenInstanceError:
+        print("✓ Version is immutable: FrozenInstanceError")
 
     print("\n✓ Integrity verification complete")
 
