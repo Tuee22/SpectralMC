@@ -40,14 +40,20 @@ from spectralmc.gbm import BlackScholes
 from spectralmc.gbm_trainer import (
     ComplexValuedModel,
     GbmCVNNPricer,
-    GbmCVNNPricerConfig,
     TrainingConfig,
 )
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import AdamOptimizerState
-from spectralmc.models.torch import FullPrecisionDType
-from spectralmc.sobol_sampler import BoundSpec, build_bound_spec
-from tests.helpers import expect_success, make_black_scholes_config, make_simulation_params
+from spectralmc.models.torch import Device, FullPrecisionDType
+from tests.helpers import (
+    expect_success,
+    make_black_scholes_config,
+    make_domain_bounds,
+    make_gbm_cvnn_config,
+    make_simulation_params,
+    max_param_diff,
+    seed_all_rngs,
+)
 
 
 # Module-level GPU requirement - test file fails immediately without GPU
@@ -72,17 +78,6 @@ def _clone_model(model: ComplexValuedModel) -> ComplexValuedModel:
     first = next(iter(model.parameters()))
     dup.to(first.device, first.dtype)
     return dup
-
-
-def _max_param_diff(a: ComplexValuedModel, b: ComplexValuedModel) -> float:
-    """Return the L∞-norm between two models' parameters."""
-    return max(
-        (
-            float(torch.abs(pa - pb).max().item())
-            for pa, pb in zip(a.parameters(), b.parameters(), strict=True)
-        ),
-        default=0.0,
-    )
 
 
 def _tree_equal(x: object, y: object) -> bool:
@@ -124,9 +119,8 @@ def _make_cvnn(
 
 def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
     """Deterministically construct a :class:`GbmCVNNPricer`."""
-    device = torch.device("cuda:0")
     torch_dtype = torch.float32 if precision is Precision.float32 else torch.float64
-    torch.manual_seed(seed)
+    seed_all_rngs(seed)
 
     sim = make_simulation_params(
         skip=0,
@@ -145,18 +139,24 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
         normalization=ForwardNormalization.RAW,
     )
 
-    bounds: dict[str, BoundSpec] = {
-        "X0": build_bound_spec(50.0, 150.0).unwrap(),
-        "K": build_bound_spec(50.0, 150.0).unwrap(),
-        "T": build_bound_spec(0.1, 2.0).unwrap(),
-        "r": build_bound_spec(0.0, 0.1).unwrap(),
-        "d": build_bound_spec(0.0, 0.05).unwrap(),
-        "v": build_bound_spec(0.1, 0.5).unwrap(),
-    }
+    bounds = make_domain_bounds()
 
-    net = _make_cvnn(6, sim.network_size, seed=seed, device=device, dtype=torch_dtype)
+    net = _make_cvnn(
+        6,
+        sim.network_size,
+        seed=seed,
+        device=Device.cuda.to_torch(),
+        dtype=torch_dtype,
+    )
     return expect_success(
-        GbmCVNNPricer.create(GbmCVNNPricerConfig(cfg=cfg, domain_bounds=bounds, cvnn=net))
+        GbmCVNNPricer.create(
+            make_gbm_cvnn_config(
+                net,
+                sim_params=sim,
+                bs_config=cfg,
+                domain_bounds=bounds,
+            )
+        )
     )
 
 
@@ -169,7 +169,7 @@ def _make_gbm_trainer(precision: Precision, *, seed: int) -> GbmCVNNPricer:
 def test_deterministic_construction(precision: Precision) -> None:
     first = _make_gbm_trainer(precision, seed=42)
     second = _make_gbm_trainer(precision, seed=42)
-    assert _max_param_diff(first._cvnn, second._cvnn) == 0.0
+    assert max_param_diff(first._cvnn, second._cvnn) == 0.0
 
 
 # --------------------------------------------------------------------------- #
@@ -186,7 +186,7 @@ def test_lockstep_training(precision: Precision) -> None:
         cfg = TrainingConfig(num_batches=batches, batch_size=8, learning_rate=LEARNING_RATE)
         first.train(cfg)
         second.train(cfg)
-        assert _max_param_diff(first._cvnn, second._cvnn) == 0.0
+        assert max_param_diff(first._cvnn, second._cvnn) == 0.0
 
 
 # --------------------------------------------------------------------------- #
@@ -208,7 +208,7 @@ def test_snapshot_cycle_deterministic(precision: Precision) -> None:
     trainer.train(cfg)
     clone.train(cfg)
 
-    assert _max_param_diff(trainer._cvnn, clone._cvnn) == 0.0
+    assert max_param_diff(trainer._cvnn, clone._cvnn) == 0.0
 
 
 # --------------------------------------------------------------------------- #
@@ -242,7 +242,7 @@ def test_snapshot_restart_without_optimizer(precision: Precision) -> None:
     trainer_without_opt.train(cfg)
     restarted.train(cfg)
 
-    assert _max_param_diff(trainer_without_opt._cvnn, restarted._cvnn) == 0.0
+    assert max_param_diff(trainer_without_opt._cvnn, restarted._cvnn) == 0.0
 
 
 # --------------------------------------------------------------------------- #

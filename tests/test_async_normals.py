@@ -23,8 +23,9 @@ import pytest
 from spectralmc import async_normals
 from spectralmc.async_normals import BufferConfig
 from spectralmc.models.numerical import Precision
-from spectralmc.result import Failure, Result, Success
+from spectralmc.result import Result
 from spectralmc.validation import validate_model
+from tests.helpers import expect_failure, expect_success
 
 
 E = TypeVar("E")
@@ -53,18 +54,11 @@ def _collect(
     n: int,
 ) -> list[cp.ndarray]:
     """Collect *n* matrices from a generator."""
-    match gen_result:
-        case Failure(create_err):
-            pytest.fail(f"generator unavailable: {create_err}")
-        case Success(gen):
-            matrices: list[cp.ndarray] = []
-            for _ in range(n):
-                match gen.get_matrix():
-                    case Success(mat):
-                        matrices.append(mat)
-                    case Failure(matrix_err):
-                        pytest.fail(f"get_matrix failed: {matrix_err}")
-            return matrices
+    gen = expect_success(gen_result)
+    matrices: list[cp.ndarray] = []
+    for _ in range(n):
+        matrices.append(expect_success(gen.get_matrix()))
+    return matrices
 
 
 # --------------------------------------------------------------------------- #
@@ -75,33 +69,17 @@ def _collect(
 def test_private_norm_generator(precision: Precision) -> None:
     """Smoke-test the private single-stream generator."""
     rows, cols = 4, 6
-    gen_result = async_normals._NormGenerator.create(rows, cols, dtype=precision.to_cupy())
-    match gen_result:
-        case Success(gen):
-            enqueue_result = gen.enqueue(123)
-            match enqueue_result:
-                case Failure(enqueue_err):
-                    pytest.fail(f"enqueue failed: {enqueue_err}")
-            first_result = gen.get_matrix(456)
-            second_result = gen.get_matrix(789)
-        case Failure(create_err):
-            pytest.fail(f"generator creation failed: {create_err}")
-
-    assert isinstance(first_result, Success) and isinstance(second_result, Success)
-    first = first_result.unwrap()
-    second = second_result.unwrap()
+    gen = expect_success(async_normals._NormGenerator.create(rows, cols, dtype=precision.to_cupy()))
+    expect_success(gen.enqueue(123))
+    first = expect_success(gen.get_matrix(456))
+    second = expect_success(gen.get_matrix(789))
 
     assert first.shape == (rows, cols)
     assert first.dtype == precision.to_cupy()
     assert not cp.allclose(first, second)
 
     before = gen.get_time_spent_synchronizing()
-    third_result = gen.get_matrix(111)
-    match third_result:
-        case Success(_):
-            pass
-        case Failure(matrix_err):
-            pytest.fail(f"third get_matrix failed: {matrix_err}")
+    _ = expect_success(gen.get_matrix(111))
     after = gen.get_time_spent_synchronizing()
     assert after >= before
 
@@ -128,11 +106,7 @@ def test_checkpoint_reproducibility(precision: Precision) -> None:
     gen0 = async_normals.ConcurrentNormGenerator.create(buffer0, cfg0)
 
     initial = _collect(gen0, 10)
-    match gen0:
-        case Success(g):
-            snap = g.snapshot()
-        case Failure(err):
-            pytest.fail(f"generator creation failed: {err}")
+    snap = expect_success(gen0).snapshot()
 
     expected = _collect(gen0, 6)
     assert len(initial) == 10
@@ -163,28 +137,20 @@ def test_diagnostics(precision: Precision) -> None:
         BufferConfig.create(2, cfg.rows, cfg.cols), cfg
     )
 
-    match gen_result:
-        case Success(gen):
-            t0 = gen.get_time_spent_synchronizing()
-            first = gen.get_matrix()
-            match first:
-                case Failure(err):
-                    pytest.fail(f"get_matrix failed: {err}")
-                case Success(_):
-                    pass
-            t1 = gen.get_time_spent_synchronizing()
-            assert t1 >= t0
+    gen = expect_success(gen_result)
+    t0 = gen.get_time_spent_synchronizing()
+    expect_success(gen.get_matrix())
+    t1 = gen.get_time_spent_synchronizing()
+    assert t1 >= t0
 
-            cp.cuda.Device().synchronize()
-            idle_before = gen.get_idle_time()
-            _ = gen.get_matrix()
-            cp.cuda.Device().synchronize()
-            idle_after = gen.get_idle_time()
-            assert idle_after >= idle_before
+    cp.cuda.Device().synchronize()
+    idle_before = gen.get_idle_time()
+    _ = expect_success(gen.get_matrix())
+    cp.cuda.Device().synchronize()
+    idle_after = gen.get_idle_time()
+    assert idle_after >= idle_before
 
-            assert gen.dtype == precision.to_cupy()
-        case Failure(err):
-            pytest.fail(f"generator creation failed: {err}")
+    assert gen.dtype == precision.to_cupy()
 
 
 # --------------------------------------------------------------------------- #
@@ -202,11 +168,8 @@ def test_norm_config_validation() -> None:
         dtype=Precision.float32,
         skips=0,
     )
-    match bad_rows:
-        case Failure(err):
-            assert "rows" in str(err)
-        case Success(_):
-            pytest.fail("expected validation failure for rows <= 0")
+    err_rows = expect_failure(bad_rows)
+    assert "rows" in str(err_rows)
 
     bad_dtype = validate_model(
         async_normals.ConcurrentNormGeneratorConfig,
@@ -216,8 +179,5 @@ def test_norm_config_validation() -> None:
         dtype="float16",  # deliberate invalid input to test validation
         skips=0,
     )
-    match bad_dtype:
-        case Failure(err):
-            assert "dtype" in str(err)
-        case Success(_):
-            pytest.fail("expected validation failure for invalid dtype")
+    err_dtype = expect_failure(bad_dtype)
+    assert "dtype" in str(err_dtype)

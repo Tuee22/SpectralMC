@@ -15,11 +15,12 @@ from __future__ import annotations
 import asyncio
 import torch
 from spectralmc.runtime import get_torch_handle
-from spectralmc.models.torch import AdamOptimizerState, AdamParamState, AdamParamGroup
-from spectralmc.gbm import build_black_scholes_config, build_simulation_params
-from spectralmc.gbm_trainer import GbmCVNNPricerConfig
-from spectralmc.models.numerical import Precision
-from spectralmc.result import Success, Failure
+from spectralmc.models.torch import AdamOptimizerState, AdamParamGroup, AdamParamState
+from spectralmc.testing import (
+    make_gbm_cvnn_config,
+    make_test_simulation_params,
+    seed_all_rngs,
+)
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     commit_snapshot,
@@ -33,6 +34,7 @@ get_torch_handle()
 async def main() -> None:
     """Demonstrate checkpoint training workflow."""
     print("=== Training with Blockchain Checkpoint Storage ===")
+    seed_all_rngs(42)
 
     print("\n1. Creating Model and Training State")
 
@@ -75,47 +77,13 @@ async def main() -> None:
         param_states=param_states, param_groups=param_groups
     )
 
-    # Create simulation config (required for GbmCVNNPricerConfig)
-    match build_simulation_params(
-        timesteps=100,
-        network_size=1024,
-        batches_per_mc_run=8,
-        threads_per_block=256,
-        mc_seed=42,
-        buffer_size=10000,
-        skip=0,
-        dtype=Precision.float32,
-    ):
-        case Failure(err):
-            print(f"   ERROR: SimulationParams failed: {err}")
-            return
-        case Success(sim_params):
-            pass
-
-    match build_black_scholes_config(
-        sim_params=sim_params,
-        simulate_log_return=True,
-        normalize_forwards=True,
-    ):
-        case Failure(err):
-            print(f"   ERROR: BlackScholesConfig failed: {err}")
-            return
-        case Success(bs_config):
-            pass
-
-    # Capture RNG state for reproducibility
-    cpu_rng_state = torch.get_rng_state().numpy().tobytes()
-
-    # Create snapshot (in practice, from GbmCVNNPricer.snapshot())
-    snapshot = GbmCVNNPricerConfig(
-        cfg=bs_config,
-        domain_bounds={},
-        cvnn=model,
-        optimizer_state=optimizer_state,
+    sim_params = make_test_simulation_params()
+    snapshot = make_gbm_cvnn_config(
+        model,
         global_step=100,
-        sobol_skip=0,
-        torch_cpu_rng_state=cpu_rng_state,
-        torch_cuda_rng_states=[],
+        sim_params=sim_params,
+        domain_bounds={},
+        optimizer_state=optimizer_state,
     )
 
     print(

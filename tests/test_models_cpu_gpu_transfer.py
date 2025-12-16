@@ -17,7 +17,7 @@ import torch
 from spectralmc.models import cpu_gpu_transfer
 from spectralmc.models.cpu_gpu_transfer import TransferDestination
 from spectralmc.models.torch import Device, FullPrecisionDType  # façade first
-from tests.helpers import expect_success
+from tests.helpers import expect_success, seed_all_rngs
 from spectralmc.result import Failure
 
 
@@ -39,7 +39,7 @@ def _flatten(tree: cpu_gpu_transfer.TensorTree) -> list[torch.Tensor]:
 
 
 def _reset_seeds(seed: int = 42) -> None:
-    torch.manual_seed(seed)
+    seed_all_rngs(seed)
 
 
 # Fail fast if no CUDA - satisfies user requirement
@@ -129,7 +129,7 @@ def test_gpu_to_cpu_pin_memory_respected(dest: TransferDestination, expected_pin
     _reset_seeds()
     res = expect_success(
         cpu_gpu_transfer.move_tensor_tree(
-            torch.randn(4, 4, device="cuda"),
+            torch.randn(4, 4, device=Device.cuda.to_torch()),
             dest=dest,
         )
     )

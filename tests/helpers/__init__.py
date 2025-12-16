@@ -47,10 +47,16 @@ from tests.helpers.constants import (
     RTOL_FLOAT64,
     SMALL_MODEL_SIZE,
 )
+from spectralmc.gbm import ThreadsPerBlock
+from spectralmc.testing import seed_all_rngs
 from tests.helpers.factories import (
+    make_domain_bounds,
     make_black_scholes_config,
     make_gbm_cvnn_config,
     make_simulation_params,
+    make_test_cvnn,
+    make_training_config,
+    max_param_diff,
 )
 from tests.helpers.result_utils import E, T, expect_failure, expect_success
 
@@ -64,6 +70,12 @@ __all__ = [
     "make_simulation_params",
     "make_black_scholes_config",
     "make_gbm_cvnn_config",
+    "make_test_cvnn",
+    "make_domain_bounds",
+    "make_training_config",
+    "max_param_diff",
+    "seed_all_rngs",
+    "ThreadsPerBlock",
     # Assertions
     "assert_tensors_close",
     "assert_no_nan_inf",

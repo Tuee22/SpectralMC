@@ -6,7 +6,6 @@ from __future__ import annotations
 import pytest
 
 from spectralmc.gbm import BlackScholesConfig
-from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import AdamOptimizerState, AdamParamGroup, AdamParamState
 from spectralmc.storage import (
@@ -15,11 +14,16 @@ from spectralmc.storage import (
     load_snapshot_from_checkpoint,
 )
 import torch
-from tests.helpers import expect_success, make_black_scholes_config, make_simulation_params
+from tests.helpers import (
+    expect_success,
+    make_black_scholes_config,
+    make_domain_bounds,
+    make_gbm_cvnn_config,
+    make_simulation_params,
+    seed_all_rngs,
+)
 
-
-def _reset_seeds(seed: int = 42) -> None:
-    torch.manual_seed(seed)
+DOMAIN_BOUNDS = make_domain_bounds()
 
 
 def _make_checkpoint_black_scholes_config() -> BlackScholesConfig:
@@ -41,7 +45,7 @@ def _make_checkpoint_black_scholes_config() -> BlackScholesConfig:
 @pytest.mark.asyncio
 async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -> None:
     """Test creating and loading a checkpoint with a simple model."""
-    _reset_seeds()
+    seed_all_rngs(42)
     # Create a simple model
     model = torch.nn.Sequential(
         torch.nn.Linear(5, 10),
@@ -79,19 +83,12 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
     # Note: This is a simplified test, real usage would have proper BlackScholes config
     bs_config = _make_checkpoint_black_scholes_config()
 
-    # Capture RNG state
-    cpu_rng_state = torch.get_rng_state().numpy().tobytes()
-    cuda_rng_states: list[bytes] = []
-
-    snapshot = GbmCVNNPricerConfig(
-        cfg=bs_config,
-        domain_bounds={},
-        cvnn=model,
-        optimizer_state=optimizer_state,
+    snapshot = make_gbm_cvnn_config(
+        model,
         global_step=100,
-        sobol_skip=0,
-        torch_cpu_rng_state=cpu_rng_state,
-        torch_cuda_rng_states=cuda_rng_states,
+        bs_config=bs_config,
+        domain_bounds=DOMAIN_BOUNDS,
+        optimizer_state=optimizer_state,
     )
 
     # Commit snapshot (async)
@@ -136,11 +133,9 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
         optimizer_state.param_states
     ), "Optimizer param states count should match"
 
-    # Verify global step
+    # Verify global step and RNG state
     assert loaded_snapshot.global_step == 100
-
-    # Verify RNG state
-    assert loaded_snapshot.torch_cpu_rng_state == cpu_rng_state
+    assert loaded_snapshot.torch_cpu_rng_state == snapshot.torch_cpu_rng_state
 
 
 @pytest.mark.asyncio
@@ -148,12 +143,10 @@ async def test_checkpoint_multiple_commits(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
     """Test multiple sequential commits create proper chain."""
-    _reset_seeds()
+    seed_all_rngs(42)
     model = torch.nn.Linear(10, 10)
 
     bs_config = _make_checkpoint_black_scholes_config()
-
-    cpu_rng_state = torch.get_rng_state().numpy().tobytes()
 
     versions = []
 
@@ -164,15 +157,12 @@ async def test_checkpoint_multiple_commits(
             for param in model.parameters():
                 param.add_(0.1)
 
-        snapshot = GbmCVNNPricerConfig(
-            cfg=bs_config,
-            domain_bounds={},
-            cvnn=model,
-            optimizer_state=None,
+        snapshot = make_gbm_cvnn_config(
+            model,
             global_step=i * 100,
+            bs_config=bs_config,
+            domain_bounds=DOMAIN_BOUNDS,
             sobol_skip=0,
-            torch_cpu_rng_state=cpu_rng_state,
-            torch_cuda_rng_states=[],
         )
 
         version = await commit_snapshot(async_store, snapshot, f"Epoch {i}")
@@ -200,41 +190,33 @@ async def test_checkpoint_content_hash_integrity(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
     """Test that different checkpoints have different content hashes."""
-    _reset_seeds()
+    seed_all_rngs(42)
     model1 = torch.nn.Linear(5, 5)
     model2 = torch.nn.Linear(5, 5)
 
     # Initialize with different values
-    torch.manual_seed(42)
+    seed_all_rngs(42)
     model1.weight.data = torch.randn(5, 5)
 
-    torch.manual_seed(123)
+    seed_all_rngs(123)
     model2.weight.data = torch.randn(5, 5)
 
     bs_config = _make_checkpoint_black_scholes_config()
 
-    cpu_rng_state = torch.get_rng_state().numpy().tobytes()
-
-    snapshot1 = GbmCVNNPricerConfig(
-        cfg=bs_config,
-        domain_bounds={},
-        cvnn=model1,
-        optimizer_state=None,
+    snapshot1 = make_gbm_cvnn_config(
+        model1,
         global_step=0,
+        bs_config=bs_config,
+        domain_bounds=DOMAIN_BOUNDS,
         sobol_skip=0,
-        torch_cpu_rng_state=cpu_rng_state,
-        torch_cuda_rng_states=[],
     )
 
-    snapshot2 = GbmCVNNPricerConfig(
-        cfg=bs_config,
-        domain_bounds={},
-        cvnn=model2,
-        optimizer_state=None,
+    snapshot2 = make_gbm_cvnn_config(
+        model2,
         global_step=0,
+        bs_config=bs_config,
+        domain_bounds=DOMAIN_BOUNDS,
         sobol_skip=0,
-        torch_cpu_rng_state=cpu_rng_state,
-        torch_cuda_rng_states=[],
     )
 
     version1 = await commit_snapshot(async_store, snapshot1, "Model 1")

@@ -12,17 +12,19 @@ from __future__ import annotations
 
 import cupy as cp
 import torch
+from spectralmc.models.torch import Device
+from tests.helpers import seed_all_rngs
 
 
 # Module-level GPU requirement - test file fails immediately without GPU
 
-GPU_DEV = torch.device("cuda:0")
+GPU_DEV = Device.cuda.to_torch()
 _CP_RNG = cp.random.default_rng(42)
 
 
 def _reset_seeds(seed: int = 42) -> None:
     global _CP_RNG
-    torch.manual_seed(seed)
+    seed_all_rngs(seed)
     _CP_RNG = cp.random.default_rng(seed)
 
 

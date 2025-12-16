@@ -57,7 +57,7 @@ flowchart TB
 
 Example (TPM guard → decision → effect):
 ```python
-# File: docs example
+# File: src/spectralmc/runtime/torch_runtime.py (example usage)
 from spectralmc.runtime.torch_runtime import decide_torch_runtime, apply_torch_runtime
 runtime = decide_torch_runtime()  # pure
 torch_handle = apply_torch_runtime(runtime)  # effectful, deterministic flags

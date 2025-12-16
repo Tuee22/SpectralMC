@@ -13,9 +13,7 @@ import torch
 from spectralmc.runtime import get_torch_handle
 
 from spectralmc.storage import AsyncBlockchainModelStore, InferenceClient, TrackingMode
-from spectralmc.gbm_trainer import GbmCVNNPricerConfig
-from spectralmc.gbm import build_black_scholes_config, build_simulation_params
-from spectralmc.models.numerical import Precision
+from spectralmc.testing import make_gbm_cvnn_config, make_test_simulation_params, seed_all_rngs
 from spectralmc.result import Success, Failure
 
 get_torch_handle()
@@ -32,6 +30,7 @@ async def main() -> None:
         # 2. Check initial state
         print("\n2. Checking current versions")
         head_result = await store.get_head()
+        seed_all_rngs(42)
         match head_result:
             case Success(head):
                 print(f"   Current HEAD: version {head.counter}")
@@ -51,44 +50,12 @@ async def main() -> None:
         )
 
         # 4. Create config template
-        match build_simulation_params(
-            timesteps=100,
-            network_size=1024,
-            batches_per_mc_run=8,
-            threads_per_block=256,
-            mc_seed=42,
-            buffer_size=10000,
-            skip=0,
-            dtype=Precision.float32,
-        ):
-            case Failure(err):
-                print("   ERROR: Failed to build SimulationParams")
-                print(f"   Details: {err}")
-                return
-            case Success(sim_params):
-                pass
-
-        match build_black_scholes_config(
-            sim_params=sim_params,
-            simulate_log_return=True,
-            normalize_forwards=True,
-        ):
-            case Failure(err):
-                print("   ERROR: Failed to build BlackScholesConfig")
-                print(f"   Details: {err}")
-                return
-            case Success(bs_config):
-                pass
-
-        config_template = GbmCVNNPricerConfig(
-            cfg=bs_config,
-            domain_bounds={},
-            cvnn=model_template,
-            optimizer_state=None,
+        sim_params = make_test_simulation_params()
+        config_template = make_gbm_cvnn_config(
+            model_template,
             global_step=0,
-            sobol_skip=0,
-            torch_cpu_rng_state=torch.get_rng_state().numpy().tobytes(),
-            torch_cuda_rng_states=[],
+            sim_params=sim_params,
+            domain_bounds={},
         )
 
         # 5. Create InferenceClient in TRACKING mode

@@ -11,9 +11,9 @@ The file type-checks under ``mypy --strict`` without suppressions.
 """
 from __future__ import annotations
 
-from typing import Iterator
-
 import pytest
+from typing import Iterator
+from tests.helpers import seed_all_rngs
 
 from spectralmc.cvnn import (
     ComplexLinear,
@@ -57,12 +57,12 @@ def dt(request: pytest.FixtureRequest) -> Iterator[torch.dtype]:
 def _rand(
     *shape: int,
     requires_grad: bool = False,
-    dev: torch.device = GPU_DEV,  # Changed from CPU_DEV - tests default to GPU
+    dev: torch.device = GPU_DEV,
     dt: torch.dtype | None = None,
 ) -> Tensor:
     """Return a deterministic random tensor without perturbing the global RNG."""
     state = torch.random.get_rng_state()
-    torch.manual_seed(42)
+    seed_all_rngs(42)
     if dt is None:
         dt = torch.get_default_dtype()
     out = torch.randn(*shape, dtype=dt, device=dev, requires_grad=requires_grad)

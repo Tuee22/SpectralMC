@@ -318,7 +318,7 @@ Instead of manually whitelisting every guard clause or CUDA kernel, the AST chec
 
 **Example (automatically exempted)**:
 ```python
-   # File: src/spectralmc/async_normals.py
+# File: src/spectralmc/async_normals.py
 def create(cls, rows: int, cols: int, *, dtype: cp.dtype) -> Result[...]:
     # ✅ CORRECT - Guard clause (automatically exempted)
     if min(rows, cols) <= 0:

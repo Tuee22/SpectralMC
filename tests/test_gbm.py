@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 import warnings
-from typing import Literal, TypeAlias
+from typing import TypeAlias
 
 import numpy as np
 import pytest
@@ -19,13 +19,13 @@ import pytest
 from spectralmc.effects import ForwardNormalization, PathScheme
 from spectralmc.gbm import (
     BlackScholes,
-    build_black_scholes_config,
-    build_simulation_params,
+    ThreadsPerBlock,
 )
 from spectralmc.models.numerical import Precision
 from spectralmc.quantlib import bs_price_quantlib
-from spectralmc.result import Failure, Success
-from spectralmc.sobol_sampler import SobolConfig, SobolSampler, build_bound_spec
+from spectralmc.sobol_sampler import SobolConfig, SobolSampler
+from spectralmc.testing import default_domain_bounds
+from tests.helpers import expect_success, make_black_scholes_config, make_simulation_params
 
 
 # ─────────────────────────────── type aliases ───────────────────────────────
@@ -33,21 +33,21 @@ Inputs: TypeAlias = BlackScholes.Inputs
 HostPriceResults: TypeAlias = BlackScholes.HostPricingResults
 
 # ──────────────────────────────── constants ─────────────────────────────────
-_BS_DIMENSIONS = {
-    "X0": build_bound_spec(0.001, 10_000).unwrap(),
-    "K": build_bound_spec(0.001, 20_000).unwrap(),
-    "T": build_bound_spec(0.0, 10.0).unwrap(),
-    "r": build_bound_spec(-0.20, 0.20).unwrap(),
-    "d": build_bound_spec(-0.20, 0.20).unwrap(),
-    "v": build_bound_spec(0.0, 2.0).unwrap(),
-}
+_BS_DIMENSIONS = default_domain_bounds(
+    x0=(0.001, 10_000),
+    k=(0.001, 20_000),
+    t=(0.0, 10.0),
+    r=(-0.20, 0.20),
+    d=(-0.20, 0.20),
+    v=(0.0, 2.0),
+)
 
 _TIMESTEPS = 1
 _NETWORK_SIZE = 256
 _BATCHES_PER_RUN = (
     2**15
 )  # Reduced workload (now 32,768 batches) to keep test runtime under the 60s timeout
-_THREADS_PER_BLOCK: Literal[32, 64, 128, 256, 512, 1024] = 256
+_THREADS_PER_BLOCK: ThreadsPerBlock = 256
 _MC_SEED = 7
 _BUFFER_SIZE = 1
 
@@ -71,7 +71,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module=r".*QuantL
 # ─────────────────────── helper constructors / utilities ────────────────────
 def _make_engine(precision: Precision, *, skip: int = 0) -> BlackScholes:
     """Factory for a deterministic engine instance."""
-    match build_simulation_params(
+    sim_params = make_simulation_params(
         timesteps=_TIMESTEPS,
         network_size=_NETWORK_SIZE,
         batches_per_mc_run=_BATCHES_PER_RUN,
@@ -80,33 +80,19 @@ def _make_engine(precision: Precision, *, skip: int = 0) -> BlackScholes:
         buffer_size=_BUFFER_SIZE,
         skip=skip,
         dtype=precision,
-    ):
-        case Failure(sim_err):
-            pytest.fail(f"SimulationParams creation failed: {sim_err}")
-        case Success(sim_params):
-            pass
+    )
 
-    match build_black_scholes_config(
+    cfg = make_black_scholes_config(
         sim_params=sim_params,
         path_scheme=PathScheme.LOG_EULER,
         normalization=ForwardNormalization.RAW,
-    ):
-        case Failure(cfg_err):
-            pytest.fail(f"BlackScholesConfig creation failed: {cfg_err}")
-        case Success(cfg):
-            return BlackScholes(cfg)
+    )
+    return BlackScholes(cfg)
 
 
 def _collect(engine: BlackScholes, inp: Inputs, n: int) -> list[HostPriceResults]:
     """Return *n* independent Monte-Carlo prices."""
-    prices: list[HostPriceResults] = []
-    for _ in range(n):
-        match engine.price_to_host(inp):
-            case Success(price):
-                prices.append(price)
-            case Failure(err):
-                pytest.fail(f"price_to_host failed: {err}")
-    return prices
+    return [expect_success(engine.price_to_host(inp)) for _ in range(n)]
 
 
 # ───────────────────────────────── tests ────────────────────────────────────
@@ -136,16 +122,9 @@ def test_black_scholes_mc(precision: Precision) -> None:
         rel_err = (mean - analytic) / analytic if analytic >= _ANALYTIC_CUTOFF else None
         return z, rel_err
 
-    match sampler_result:
-        case Success(sampler):
-            sample_result = sampler.sample(_NUM_SOBOL_POINTS)
-            match sample_result:
-                case Success(samples):
-                    results = [_stats(inp) for inp in samples]
-                case Failure(err):
-                    pytest.fail(f"Sobol sample failed: {err}")
-        case Failure(err):
-            pytest.fail(f"Sobol sampler creation failed: {err}")
+    sampler = expect_success(sampler_result)
+    samples = expect_success(sampler.sample(_NUM_SOBOL_POINTS))
+    results = [_stats(inp) for inp in samples]
     z_scores = [z for z, _ in results]
     rel_errors = [re for _, re in results if re is not None]
 
@@ -163,15 +142,10 @@ def test_snapshot_determinism(precision: Precision) -> None:
     inp = BlackScholes.Inputs(X0=100, K=100, T=1.0, r=0.05, d=0.0, v=0.2)
 
     _ = _collect(engine, inp, _SNAPSHOT_REPS)
-    snap_result = engine.snapshot()
-
-    match snap_result:
-        case Failure(err):
-            pytest.fail(f"snapshot failed: {err}")
-        case Success(snap):
-            expected = _collect(engine, inp, _SNAPSHOT_REPS)
-            restored = BlackScholes(snap)
-            reproduced = _collect(restored, inp, _SNAPSHOT_REPS)
+    snap = expect_success(engine.snapshot())
+    expected = _collect(engine, inp, _SNAPSHOT_REPS)
+    restored = BlackScholes(snap)
+    reproduced = _collect(restored, inp, _SNAPSHOT_REPS)
 
     for e, r in zip(expected, reproduced, strict=True):
         assert math.isclose(e.put_price, r.put_price, rel_tol=_DET_REL_TOL)

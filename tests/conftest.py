@@ -26,12 +26,13 @@ import botocore.exceptions
 
 from spectralmc.storage import AsyncBlockchainModelStore
 from spectralmc.runtime import get_torch_handle
+from spectralmc.models.torch import Device
 
 
 # Module-level GPU requirement - test suite fails immediately without GPU
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
-GPU_DEV: torch.device = torch.device("cuda:0")
+GPU_DEV: torch.device = Device.cuda.to_torch()
 TORCH_HANDLE: ModuleType = get_torch_handle()
 DEFAULT_TEST_TIMEOUT_SECONDS = 60.0
 

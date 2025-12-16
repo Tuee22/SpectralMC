@@ -7,8 +7,6 @@ import pytest
 import torch
 
 
-from spectralmc.gbm_trainer import GbmCVNNPricerConfig
-from spectralmc.models.numerical import Precision
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     ExecuteGC,
@@ -19,40 +17,18 @@ from spectralmc.storage import (
     commit_snapshot,
     run_gc,
 )
-from tests.helpers import (
-    expect_failure,
-    expect_success,
-    make_black_scholes_config,
-    make_simulation_params,
-)
+from spectralmc.gbm_trainer import GbmCVNNPricerConfig
+from tests.helpers import expect_failure, expect_success, make_domain_bounds, make_gbm_cvnn_config
+
+DOMAIN_BOUNDS = make_domain_bounds()
 
 
 def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPricerConfig:
-    """Factory to create test configurations (GbmCVNNPricerConfig is frozen)."""
-    sim_params = make_simulation_params(
-        timesteps=100,
-        network_size=1024,
-        batches_per_mc_run=8,
-        threads_per_block=256,
-        mc_seed=42,
-        buffer_size=10000,
-        skip=0,
-        dtype=Precision.float32,
-    )
-
-    bs_config = make_black_scholes_config(sim_params=sim_params)
-
-    cpu_rng_state = torch.get_rng_state().numpy().tobytes()
-
-    return GbmCVNNPricerConfig(
-        cfg=bs_config,
-        domain_bounds={},
-        cvnn=model,
-        optimizer_state=None,
+    """Create a standardised pricer config for GC scenarios."""
+    return make_gbm_cvnn_config(
+        model,
         global_step=global_step,
-        sobol_skip=0,
-        torch_cpu_rng_state=cpu_rng_state,
-        torch_cuda_rng_states=[],
+        domain_bounds=DOMAIN_BOUNDS,
     )
 
 
@@ -75,7 +51,11 @@ async def test_gc_keep_all_versions(async_store: AsyncBlockchainModelStore) -> N
     """Test GC with keep_versions=None keeps everything."""
     # Create 5 versions
     for i in range(5):
-        config = make_test_config(torch.nn.Linear(5, 5), global_step=i * 100)
+        config = make_gbm_cvnn_config(
+            torch.nn.Linear(5, 5),
+            global_step=i * 100,
+            domain_bounds=DOMAIN_BOUNDS,
+        )
         await commit_snapshot(async_store, config, f"V{i}")
 
     policy = RetentionPolicy(keep_versions=None)  # Keep all
@@ -93,7 +73,11 @@ async def test_gc_keep_recent_versions(async_store: AsyncBlockchainModelStore) -
     """Test GC keeps N most recent versions."""
     # Create 10 versions
     for i in range(10):
-        config = make_test_config(torch.nn.Linear(5, 5), global_step=i * 100)
+        config = make_gbm_cvnn_config(
+            torch.nn.Linear(5, 5),
+            global_step=i * 100,
+            domain_bounds=DOMAIN_BOUNDS,
+        )
         await commit_snapshot(async_store, config, f"V{i}")
 
     # Keep last 5 versions
@@ -119,7 +103,11 @@ async def test_gc_genesis_always_protected(
     """Test that v0 (genesis) is never deleted."""
     # Create 3 versions
     for i in range(3):
-        config = make_test_config(torch.nn.Linear(5, 5))
+        config = make_gbm_cvnn_config(
+            torch.nn.Linear(5, 5),
+            global_step=i * 100,
+            domain_bounds=DOMAIN_BOUNDS,
+        )
         await commit_snapshot(async_store, config, f"V{i}")
 
     # Keep only 1 version (should be v2, but v0 also protected)
@@ -141,7 +129,11 @@ async def test_gc_protected_tags(async_store: AsyncBlockchainModelStore) -> None
     """Test that tagged versions are always protected."""
     # Create 10 versions
     for i in range(10):
-        config = make_test_config(torch.nn.Linear(5, 5))
+        config = make_gbm_cvnn_config(
+            torch.nn.Linear(5, 5),
+            global_step=i * 100,
+            domain_bounds=DOMAIN_BOUNDS,
+        )
         await commit_snapshot(async_store, config, f"V{i}")
 
     # Keep last 3 versions + protect v3 and v5 (e.g., production releases)

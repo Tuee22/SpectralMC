@@ -31,6 +31,7 @@
 Run checks explicitly (inside Docker) before sharing changes:
 
 ```bash
+# File: tools/manual_verification.sh
 # Format
 docker compose -f docker/docker-compose.yml exec spectralmc black .
 

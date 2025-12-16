@@ -14,6 +14,11 @@ Spectral Monte-Carlo (SpectralMC) is an online machine-learning method that trai
 
 While useful in multiple domains, SpectralMC is especially relevant to the field of Quantitative Finance, where stochastic processes are widely used. Traditional Monte-Carlo-based solutions can be compute-intensive, sometimes requiring large compute clusters. By contrast, SpectralMC trains and performs inference continuously on the GPU to reduce overall computational load. This allows efficient training and inference accuracy, with a much smaller computational footprint than traditional Monte-Carlo methods.
 
+If you want to read the entire codebase via a single end-to-end path, start with the GPU-only
+test `tests/test_e2e/test_full_stack_cvnn_pricer.py`. It walks through CVNN construction,
+GBM simulation setup, training, snapshotting, blockchain commit/reload, and deterministic
+inference—touching the major subsystems in one place.
+
 ## Key Features
 
 ### Training Lifecycle Overview

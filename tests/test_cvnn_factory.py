@@ -24,8 +24,11 @@ from spectralmc.cvnn_factory import (
     SequentialCfg,
     build_model,
 )
-from spectralmc.models.torch import FullPrecisionDType  # ← project's strongly-typed dtype enum
-from tests.helpers import expect_success
+from spectralmc.models.torch import (
+    Device,
+    FullPrecisionDType,
+)  # ← project's strongly-typed dtype enum
+from tests.helpers import expect_success, seed_all_rngs
 import torch
 
 Tensor = torch.Tensor
@@ -35,7 +38,7 @@ nn = torch.nn
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants shared across tests
 # ──────────────────────────────────────────────────────────────────────────────
-_DEVICE_CUDA: torch.device = torch.device("cuda:0")
+_DEVICE_CUDA: torch.device = Device.cuda.to_torch()
 
 _DTYPES: tuple[FullPrecisionDType, ...] = (
     FullPrecisionDType.float32,
@@ -63,7 +66,7 @@ def _rand(
 ) -> Tensor:
     """Deterministic random tensor that restores the global RNG afterwards."""
     state = torch.random.get_rng_state()
-    torch.manual_seed(12345)  # fixed seed → test independence
+    seed_all_rngs(12345)  # fixed seed → test independence
     out = torch.randn(*shape, dtype=dtype, device=device, requires_grad=requires_grad)
     torch.random.set_rng_state(state)
     return out

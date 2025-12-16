@@ -6,20 +6,10 @@ All tests require GPU - missing GPU is a hard failure, not a skip.
 
 from __future__ import annotations
 
-from typing import Union
-
 import pytest
 import torch
 
 
-from spectralmc.cvnn_factory import (
-    ActivationCfg,
-    ActivationKind,
-    CVNNConfig,
-    ExplicitWidth,
-    LinearCfg,
-    build_model,
-)
 from spectralmc.errors.trainer import InvalidTrainerConfig
 from spectralmc.gbm_trainer import (
     ComplexValuedModel,
@@ -27,84 +17,44 @@ from spectralmc.gbm_trainer import (
     IntervalCommit,
     GbmCVNNPricer,
     GbmCVNNPricerConfig,
-    TrainingConfig,
 )
 from spectralmc.models.numerical import Precision
-from spectralmc.models.torch import FullPrecisionDType
-from spectralmc.sobol_sampler import BoundSpec, build_bound_spec
 from spectralmc.storage import AsyncBlockchainModelStore, commit_snapshot
 from tests.helpers import (
     expect_failure,
     expect_success,
     make_black_scholes_config,
+    make_domain_bounds,
     make_simulation_params,
+    make_training_config,
+    make_test_cvnn,
+    make_gbm_cvnn_config,
 )
+
+DOMAIN_BOUNDS = make_domain_bounds()
+SIM_PARAMS = make_simulation_params(
+    timesteps=10,  # Reduced from 100: match test_e2e_storage.py pattern
+    network_size=128,  # Reduced from 1024: sufficient for CVNN operation
+    batches_per_mc_run=2,  # Reduced from 8: minimum for mean calculation
+    threads_per_block=256,
+    mc_seed=42,
+    buffer_size=256,  # Reduced from 10000: conservative async buffer (was 3.82 GB, now 1.26 MB)
+    skip=0,
+    dtype=Precision.float32,
+)
+BS_CONFIG = make_black_scholes_config(sim_params=SIM_PARAMS)
 
 # Module-level GPU requirement - test file fails immediately without GPU
 
 
-def _make_test_cvnn(
-    n_inputs: int,
-    n_outputs: int,
-    *,
-    seed: int,
-    device: Union[str, torch.device],
-    dtype: torch.dtype,
-) -> ComplexValuedModel:
-    """Create a simple CVNN for testing (matches test_gbm_trainer.py pattern)."""
-    enum_dtype = expect_success(FullPrecisionDType.from_torch(dtype))
-    cfg = CVNNConfig(
-        dtype=enum_dtype,
-        layers=[
-            LinearCfg(
-                width=ExplicitWidth(value=32),
-                activation=ActivationCfg(kind=ActivationKind.MOD_RELU),
-            ),
-        ],
-        seed=seed,
-    )
-    return expect_success(build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg)).to(
-        device, dtype
-    )
-
-
-def make_test_config(model: ComplexValuedModel, global_step: int = 0) -> GbmCVNNPricerConfig:
-    """Factory to create test configurations."""
-    sim_params = make_simulation_params(
-        timesteps=10,  # Reduced from 100: match test_e2e_storage.py pattern
-        network_size=128,  # Reduced from 1024: sufficient for CVNN operation
-        batches_per_mc_run=2,  # Reduced from 8: minimum for mean calculation
-        threads_per_block=256,
-        mc_seed=42,
-        buffer_size=256,  # Reduced from 10000: conservative async buffer (was 3.82 GB, now 1.26 MB)
-        skip=0,
-        dtype=Precision.float32,
-    )
-
-    bs_config = make_black_scholes_config(sim_params=sim_params)
-
-    cpu_rng_state = torch.get_rng_state().numpy().tobytes()
-    cuda_rng_states = [state.cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()]
-
-    # Black-Scholes parameter bounds (required for SobolSampler)
-    domain_bounds: dict[str, BoundSpec] = {
-        "X0": build_bound_spec(50.0, 150.0).unwrap(),  # Initial spot price
-        "K": build_bound_spec(50.0, 150.0).unwrap(),  # Strike price
-        "T": build_bound_spec(0.1, 2.0).unwrap(),  # Time to maturity
-        "r": build_bound_spec(0.0, 0.1).unwrap(),  # Risk-free rate
-        "d": build_bound_spec(0.0, 0.05).unwrap(),  # Dividend yield
-        "v": build_bound_spec(0.1, 0.5).unwrap(),  # Volatility
-    }
-
-    return GbmCVNNPricerConfig(
-        cfg=bs_config,
-        domain_bounds=domain_bounds,
-        cvnn=model,
-        optimizer_state=None,
+def _make_pricer_config(model: ComplexValuedModel, *, global_step: int = 0) -> GbmCVNNPricerConfig:
+    """Shared GbmCVNNPricerConfig using the standardized training defaults."""
+    return make_gbm_cvnn_config(
+        model,
         global_step=global_step,
-        sobol_skip=0,
-        torch_cpu_rng_state=cpu_rng_state,
-        torch_cuda_rng_states=cuda_rng_states,
+        sim_params=SIM_PARAMS,
+        bs_config=BS_CONFIG,
+        domain_bounds=DOMAIN_BOUNDS,
     )
 
 
@@ -113,15 +63,17 @@ async def test_training_manual_commit_after_training(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
     """Train without commit plan and manually commit afterwards."""
-    model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
-    config = make_test_config(model)
+    model = make_test_cvnn(
+        n_inputs=6,
+        n_outputs=128,
+        seed=42,
+        dtype=torch.float32,
+        add_output_layer=False,
+    )
+    config = _make_pricer_config(model)
     pricer = expect_success(GbmCVNNPricer.create(config))
 
-    training_config = TrainingConfig(
-        num_batches=5,
-        batch_size=16,
-        learning_rate=0.001,
-    )
+    training_config = make_training_config(num_batches=5, batch_size=16, learning_rate=0.001)
 
     # Train with no blockchain integration
     pricer.train(training_config)
@@ -142,15 +94,17 @@ async def test_training_with_commit_interval(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
     """Test training with manual periodic commits (simulating commit_interval behavior)."""
-    model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
-    config = make_test_config(model)
+    model = make_test_cvnn(
+        n_inputs=6,
+        n_outputs=128,
+        seed=42,
+        dtype=torch.float32,
+        add_output_layer=False,
+    )
+    config = _make_pricer_config(model)
     pricer = expect_success(GbmCVNNPricer.create(config))
 
-    training_config = TrainingConfig(
-        num_batches=15,
-        batch_size=16,
-        learning_rate=0.001,
-    )
+    training_config = make_training_config(num_batches=15, batch_size=16, learning_rate=0.001)
 
     # Train without blockchain integration
     pricer.train(training_config)
@@ -171,15 +125,17 @@ async def test_training_without_storage_backward_compat(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
     """Test that training without blockchain_store still works (backward compatibility)."""
-    model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
-    config = make_test_config(model)
+    model = make_test_cvnn(
+        n_inputs=6,
+        n_outputs=128,
+        seed=42,
+        dtype=torch.float32,
+        add_output_layer=False,
+    )
+    config = _make_pricer_config(model)
     pricer = expect_success(GbmCVNNPricer.create(config))
 
-    training_config = TrainingConfig(
-        num_batches=5,
-        batch_size=16,
-        learning_rate=0.001,
-    )
+    training_config = make_training_config(num_batches=5, batch_size=16, learning_rate=0.001)
 
     # Train without any blockchain storage arguments
     pricer.train(training_config)
@@ -194,15 +150,17 @@ async def test_training_validation_commit_plan_requires_store(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
     """Test that commit plan requiring storage fails without blockchain_store."""
-    model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
-    config = make_test_config(model)
+    model = make_test_cvnn(
+        n_inputs=6,
+        n_outputs=128,
+        seed=42,
+        dtype=torch.float32,
+        add_output_layer=False,
+    )
+    config = _make_pricer_config(model)
     pricer = expect_success(GbmCVNNPricer.create(config))
 
-    training_config = TrainingConfig(
-        num_batches=5,
-        batch_size=16,
-        learning_rate=0.001,
-    )
+    training_config = make_training_config(num_batches=5, batch_size=16, learning_rate=0.001)
 
     # Should return Failure with InvalidTrainerConfig
     result = pricer.train(training_config, commit_plan=FinalCommit())
@@ -216,15 +174,17 @@ async def test_training_validation_interval_commit_requires_store(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
     """Test that interval commit plan without blockchain_store raises error."""
-    model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
-    config = make_test_config(model)
+    model = make_test_cvnn(
+        n_inputs=6,
+        n_outputs=128,
+        seed=42,
+        dtype=torch.float32,
+        add_output_layer=False,
+    )
+    config = _make_pricer_config(model)
     pricer = expect_success(GbmCVNNPricer.create(config))
 
-    training_config = TrainingConfig(
-        num_batches=5,
-        batch_size=16,
-        learning_rate=0.001,
-    )
+    training_config = make_training_config(num_batches=5, batch_size=16, learning_rate=0.001)
 
     # Should return Failure with InvalidTrainerConfig
     result = pricer.train(training_config, commit_plan=IntervalCommit(interval=3))
@@ -238,15 +198,17 @@ async def test_training_commit_message_template(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
     """Test that commit message can be formatted with training details."""
-    model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
-    config = make_test_config(model)
+    model = make_test_cvnn(
+        n_inputs=6,
+        n_outputs=128,
+        seed=42,
+        dtype=torch.float32,
+        add_output_layer=False,
+    )
+    config = _make_pricer_config(model)
     pricer = expect_success(GbmCVNNPricer.create(config))
 
-    training_config = TrainingConfig(
-        num_batches=5,
-        batch_size=16,
-        learning_rate=0.001,
-    )
+    training_config = make_training_config(num_batches=5, batch_size=16, learning_rate=0.001)
 
     # Train
     pricer.train(training_config)
@@ -266,15 +228,17 @@ async def test_training_commit_preserves_optimizer_state(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
     """Test that committing after training preserves optimizer state."""
-    model = _make_test_cvnn(6, 128, seed=42, device="cuda", dtype=torch.float32)
-    config = make_test_config(model)
+    model = make_test_cvnn(
+        n_inputs=6,
+        n_outputs=128,
+        seed=42,
+        dtype=torch.float32,
+        add_output_layer=False,
+    )
+    config = _make_pricer_config(model)
     pricer = expect_success(GbmCVNNPricer.create(config))
 
-    training_config = TrainingConfig(
-        num_batches=10,
-        batch_size=16,
-        learning_rate=0.001,
-    )
+    training_config = make_training_config(num_batches=10, batch_size=16, learning_rate=0.001)
 
     # Train
     pricer.train(training_config)

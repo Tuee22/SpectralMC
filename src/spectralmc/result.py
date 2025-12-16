@@ -136,6 +136,19 @@ class Failure(Generic[E]):
 Result = Success[T] | Failure[E]
 
 
+def expect(result: Result[T, E]) -> T:
+    """
+    Unwrap a Result, raising AssertionError on Failure.
+
+    Intended for test/example ergonomics where failures should surface immediately.
+    """
+    match result:
+        case Success(value):
+            return value
+        case Failure(error):
+            raise AssertionError(f"Unexpected failure: {error}")
+
+
 def collect_results(results: list[Result[T, E]]) -> Result[list[T], E]:
     """
     Collect a list of Results into a Result of list.

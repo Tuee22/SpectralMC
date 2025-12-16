@@ -19,17 +19,15 @@ import asyncio
 import torch
 from spectralmc.runtime import get_torch_handle
 
-from spectralmc.gbm import BlackScholes, build_black_scholes_config, build_simulation_params
+from spectralmc.gbm import BlackScholes
 from spectralmc.gbm_trainer import (
     GbmCVNNPricerConfig,
     GbmCVNNPricer,
     FinalAndIntervalCommit,
     TrainingConfig,
 )
-from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import Device
-from spectralmc.result import Success, Failure
-from spectralmc.sobol_sampler import BoundSpec, build_bound_spec
+from spectralmc.testing import default_domain_bounds, make_gbm_cvnn_config, seed_all_rngs
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     InferenceClient,
@@ -57,64 +55,21 @@ def create_simple_cvnn(
 
 def create_training_config() -> GbmCVNNPricerConfig:
     """Create initial training configuration."""
-    # Simulation parameters
-    match build_simulation_params(
-        timesteps=100,
-        network_size=1024,
-        batches_per_mc_run=8,
-        threads_per_block=256,
-        mc_seed=42,
-        buffer_size=10000,
-        skip=0,
-        dtype=Precision.float32,
-    ):
-        case Failure(err):
-            raise RuntimeError(f"Failed to build SimulationParams: {err}")
-        case Success(sim_params):
-            pass
-
-    # Black-Scholes configuration
-    match build_black_scholes_config(
-        sim_params=sim_params,
-        simulate_log_return=True,
-        normalize_forwards=True,
-    ):
-        case Failure(err):
-            raise RuntimeError(f"Failed to build BlackScholesConfig: {err}")
-        case Success(bs_config):
-            pass
-
-    # Create model
     model = create_simple_cvnn().to(device=Device.cuda.to_torch())
-
-    # Domain bounds for option parameters
-    domain_bounds = {
-        "X0": build_bound_spec(80.0, 120.0).unwrap(),
-        "K": build_bound_spec(80.0, 120.0).unwrap(),
-        "T": build_bound_spec(0.1, 2.0).unwrap(),
-        "v": build_bound_spec(0.1, 0.5).unwrap(),
-        "r": build_bound_spec(0.0, 0.1).unwrap(),
-        "d": build_bound_spec(0.0, 0.05).unwrap(),
-    }
-
-    # Get RNG state for reproducibility
-    cpu_rng_state = torch.get_rng_state().numpy().tobytes()
-    cuda_rng_states = [state.cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()]
-
-    return GbmCVNNPricerConfig(
-        cfg=bs_config,
-        domain_bounds=domain_bounds,
-        cvnn=model,
-        optimizer_state=None,
-        global_step=0,
-        sobol_skip=0,
-        torch_cpu_rng_state=cpu_rng_state,
-        torch_cuda_rng_states=cuda_rng_states,
+    bounds = default_domain_bounds(
+        x0=(80.0, 120.0),
+        k=(80.0, 120.0),
+        t=(0.1, 2.0),
+        v=(0.1, 0.5),
+        r=(0.0, 0.1),
+        d=(0.0, 0.05),
     )
+    return make_gbm_cvnn_config(model, domain_bounds=bounds)
 
 
 async def train_with_blockchain() -> None:
     """Train model with automatic blockchain commits."""
+    seed_all_rngs(42)
     print("=" * 80)
     print("Training with Blockchain Storage Integration")
     print("=" * 80)

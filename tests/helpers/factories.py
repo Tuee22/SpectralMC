@@ -11,14 +11,27 @@ from __future__ import annotations
 from typing import Literal
 
 from spectralmc.effects import ForwardNormalization, PathScheme
-from spectralmc.gbm import (
-    BlackScholesConfig,
-    SimulationParams,
-    build_black_scholes_config,
-    build_simulation_params,
+from spectralmc.cvnn_factory import (
+    ActivationCfg,
+    ActivationKind,
+    CVNNConfig,
+    ExplicitWidth,
+    LayerCfg,
+    LinearCfg,
+    build_model,
 )
-from spectralmc.gbm_trainer import GbmCVNNPricerConfig
+from spectralmc.gbm import BlackScholesConfig, SimulationParams
+from spectralmc.gbm_trainer import ComplexValuedModel, GbmCVNNPricerConfig, TrainingConfig
+from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.models.numerical import Precision
+from spectralmc.models.torch import Device, FullPrecisionDType
+from spectralmc.sobol_sampler import BoundSpec
+from spectralmc.testing import (
+    default_domain_bounds,
+    make_gbm_cvnn_config as _make_core_gbm_cvnn_config,
+    make_test_black_scholes_config,
+    make_test_simulation_params,
+)
 import torch
 
 from tests.helpers.constants import (
@@ -32,6 +45,50 @@ from tests.helpers.constants import (
 from tests.helpers.result_utils import expect_success
 
 ThreadsPerBlock = Literal[32, 64, 128, 256, 512, 1024]
+
+
+def make_test_cvnn(
+    *,
+    n_inputs: int,
+    n_outputs: int,
+    seed: int,
+    dtype: torch.dtype,
+    device: torch.device | str = Device.cuda.to_torch(),
+    hidden_width: int = 32,
+    add_output_layer: bool = True,
+) -> ComplexValuedModel:
+    """Create a deterministic CVNN for tests (DRY wrapper around build_model).
+
+    Args:
+        n_inputs: Number of input features
+        n_outputs: Number of output features
+        seed: RNG seed for deterministic weights
+        dtype: Torch dtype (float32/float64)
+        device: Target device (default: cuda:0)
+        hidden_width: Width of the hidden layer (default: 32)
+        add_output_layer: Whether to append an explicit output Linear layer
+
+    Returns:
+        CVNN on the requested device/dtype
+    """
+    enum_dtype = expect_success(FullPrecisionDType.from_torch(dtype))
+    layers: list[LayerCfg] = [
+        LinearCfg(
+            width=ExplicitWidth(value=hidden_width),
+            activation=ActivationCfg(kind=ActivationKind.MOD_RELU),
+        ),
+    ]
+    if add_output_layer:
+        layers.append(LinearCfg(width=ExplicitWidth(value=n_outputs)))
+
+    cfg = CVNNConfig(dtype=enum_dtype, layers=layers, seed=seed)
+    model = expect_success(build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg))
+    return model.to(device, dtype)
+
+
+def make_domain_bounds() -> dict[str, BoundSpec]:
+    """Create default Black-Scholes domain bounds for tests."""
+    return default_domain_bounds()
 
 
 def make_simulation_params(
@@ -69,17 +126,15 @@ def make_simulation_params(
         >>> params = make_simulation_params(timesteps=200, network_size=512)
         >>> assert params.timesteps == 200
     """
-    return expect_success(
-        build_simulation_params(
-            timesteps=timesteps,
-            network_size=network_size,
-            batches_per_mc_run=batches_per_mc_run,
-            threads_per_block=threads_per_block,
-            mc_seed=mc_seed,
-            buffer_size=buffer_size,
-            skip=skip,
-            dtype=dtype,
-        )
+    return make_test_simulation_params(
+        timesteps=timesteps,
+        network_size=network_size,
+        batches_per_mc_run=batches_per_mc_run,
+        threads_per_block=threads_per_block,
+        mc_seed=mc_seed,
+        buffer_size=buffer_size,
+        skip=skip,
+        dtype=dtype,
     )
 
 
@@ -108,23 +163,21 @@ def make_black_scholes_config(
         >>> config = make_black_scholes_config()
         >>> assert config.path_scheme is PathScheme.LOG_EULER
     """
-    if sim_params is None:
-        sim_params = make_simulation_params()
-
-    return expect_success(
-        build_black_scholes_config(
-            sim_params=sim_params,
-            path_scheme=path_scheme,
-            normalization=normalization,
-        )
+    return make_test_black_scholes_config(
+        sim_params=sim_params,
+        path_scheme=path_scheme,
+        normalization=normalization,
     )
 
 
 def make_gbm_cvnn_config(
-    model: torch.nn.Module,
+    model: ComplexValuedModel,
     global_step: int = 0,
     sim_params: SimulationParams | None = None,
     bs_config: BlackScholesConfig | None = None,
+    domain_bounds: dict[str, BoundSpec] | None = None,
+    sobol_skip: int = 0,
+    optimizer_state: AdamOptimizerState | None = None,
 ) -> GbmCVNNPricerConfig:
     """Create GbmCVNNPricerConfig for testing.
 
@@ -153,18 +206,34 @@ def make_gbm_cvnn_config(
         >>> assert config.global_step == 100
         >>> assert config.cvnn is model
     """
-    if bs_config is None:
-        bs_config = make_black_scholes_config(sim_params)
-
-    cpu_rng_state = torch.get_rng_state().numpy().tobytes()
-
-    return GbmCVNNPricerConfig(
-        cfg=bs_config,
-        domain_bounds={},
-        cvnn=model,
-        optimizer_state=None,
+    return _make_core_gbm_cvnn_config(
+        model,
         global_step=global_step,
-        sobol_skip=0,
-        torch_cpu_rng_state=cpu_rng_state,
-        torch_cuda_rng_states=[],
+        sim_params=sim_params,
+        bs_config=bs_config,
+        domain_bounds=domain_bounds or {},
+        sobol_skip=sobol_skip,
+        optimizer_state=optimizer_state,
+    )
+
+
+def make_training_config(
+    *, num_batches: int, batch_size: int, learning_rate: float = 1.0e-2
+) -> TrainingConfig:
+    """Create a small TrainingConfig for deterministic smoke tests."""
+    return TrainingConfig(
+        num_batches=num_batches,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+    )
+
+
+def max_param_diff(a: ComplexValuedModel, b: ComplexValuedModel) -> float:
+    """Return the L∞-norm between two models' parameters."""
+    return max(
+        (
+            float(torch.abs(pa - pb).max().item())
+            for pa, pb in zip(a.parameters(), b.parameters(), strict=True)
+        ),
+        default=0.0,
     )

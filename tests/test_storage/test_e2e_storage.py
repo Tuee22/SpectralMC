@@ -30,7 +30,27 @@ from spectralmc.storage.errors import (
     VersionNotFoundError,
 )
 from spectralmc.storage.gc import ExecuteGC, PreviewGC, run_gc
-from tests.helpers import expect_success, make_black_scholes_config, make_simulation_params
+from tests.helpers import (
+    expect_success,
+    make_black_scholes_config,
+    make_domain_bounds,
+    make_gbm_cvnn_config,
+    make_simulation_params,
+)
+
+
+DOMAIN_BOUNDS = make_domain_bounds()
+SIM_PARAMS = make_simulation_params(
+    timesteps=10,
+    network_size=128,
+    batches_per_mc_run=2,
+    threads_per_block=64,
+    mc_seed=42,
+    buffer_size=1000,
+    skip=0,
+    dtype=Precision.float32,
+)
+BS_CONFIG = make_black_scholes_config(sim_params=SIM_PARAMS)
 
 
 def make_test_snapshot(
@@ -39,28 +59,13 @@ def make_test_snapshot(
     """Create a test snapshot programmatically (CPU-only)."""
     model = torch.nn.Linear(*model_size)
 
-    sim_params = make_simulation_params(
-        timesteps=10,
-        network_size=128,
-        batches_per_mc_run=2,
-        threads_per_block=64,
-        mc_seed=42,
-        buffer_size=1000,
-        skip=0,
-        dtype=Precision.float32,
-    )
-
-    bs_config = make_black_scholes_config(sim_params=sim_params)
-
-    return GbmCVNNPricerConfig(
-        cfg=bs_config,
-        domain_bounds={},
-        cvnn=model,
-        optimizer_state=None,
+    return make_gbm_cvnn_config(
+        model,
         global_step=global_step,
+        sim_params=SIM_PARAMS,
+        bs_config=BS_CONFIG,
+        domain_bounds=DOMAIN_BOUNDS,
         sobol_skip=global_step * 100,
-        torch_cpu_rng_state=torch.get_rng_state().numpy().tobytes(),
-        torch_cuda_rng_states=[],
     )
 
 
@@ -96,15 +101,13 @@ async def test_e2e_complete_lifecycle(async_store: AsyncBlockchainModelStore) ->
     assert loaded_snapshot.sobol_skip == 0
 
     # 3. "Train" (modify) the loaded snapshot
-    loaded_snapshot = GbmCVNNPricerConfig(
-        cfg=loaded_snapshot.cfg,
-        domain_bounds=loaded_snapshot.domain_bounds,
-        cvnn=loaded_snapshot.cvnn,
-        optimizer_state=None,
+    loaded_snapshot = make_gbm_cvnn_config(
+        loaded_snapshot.cvnn,
         global_step=100,
+        sim_params=loaded_snapshot.cfg.sim_params,
+        bs_config=loaded_snapshot.cfg,
+        domain_bounds=loaded_snapshot.domain_bounds,
         sobol_skip=10000,
-        torch_cpu_rng_state=loaded_snapshot.torch_cpu_rng_state,
-        torch_cuda_rng_states=loaded_snapshot.torch_cuda_rng_states,
     )
 
     # 4. Commit updated snapshot
@@ -394,15 +397,19 @@ async def test_e2e_rollback_to_previous_version(
     )
 
     # Modify and commit (this creates v4)
-    snapshot_at_v1 = GbmCVNNPricerConfig(
-        cfg=snapshot_at_v1.cfg,
+    snapshot_at_v1 = make_gbm_cvnn_config(
+        snapshot_at_v1.cvnn,
+        sim_params=snapshot_at_v1.cfg.sim_params,
+        bs_config=snapshot_at_v1.cfg,
         domain_bounds=snapshot_at_v1.domain_bounds,
-        cvnn=snapshot_at_v1.cvnn,
         optimizer_state=None,
         global_step=500,  # Different from v2/v3
         sobol_skip=50000,
-        torch_cpu_rng_state=snapshot_at_v1.torch_cpu_rng_state,
-        torch_cuda_rng_states=snapshot_at_v1.torch_cuda_rng_states,
+    ).model_copy(
+        update={
+            "torch_cpu_rng_state": snapshot_at_v1.torch_cpu_rng_state,
+            "torch_cuda_rng_states": snapshot_at_v1.torch_cuda_rng_states,
+        }
     )
 
     v4 = await commit_snapshot(async_store, snapshot_at_v1, "Rollback branch")
@@ -489,28 +496,14 @@ async def test_e2e_large_model_storage(
     # Create larger model (100 x 100 = 10k parameters)
     large_model = torch.nn.Linear(100, 100)
 
-    sim_params = make_simulation_params(
-        timesteps=10,
-        network_size=128,
-        batches_per_mc_run=2,
-        threads_per_block=64,
-        mc_seed=42,
-        buffer_size=1000,
-        skip=0,
-        dtype=Precision.float32,
-    )
-
-    bs_config = make_black_scholes_config(sim_params=sim_params)
-
-    large_snapshot = GbmCVNNPricerConfig(
-        cfg=bs_config,
-        domain_bounds={},
-        cvnn=large_model,
+    large_snapshot = make_gbm_cvnn_config(
+        large_model,
+        sim_params=SIM_PARAMS,
+        bs_config=BS_CONFIG,
+        domain_bounds=DOMAIN_BOUNDS,
         optimizer_state=None,
         global_step=0,
         sobol_skip=0,
-        torch_cpu_rng_state=torch.get_rng_state().numpy().tobytes(),
-        torch_cuda_rng_states=[],
     )
 
     # Commit large model

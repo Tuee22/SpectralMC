@@ -10,8 +10,6 @@ import pytest
 import torch
 
 
-from spectralmc.effects import ForwardNormalization, PathScheme
-from spectralmc.gbm import build_black_scholes_config, build_simulation_params
 from spectralmc.gbm_trainer import GbmCVNNPricerConfig
 from spectralmc.models.numerical import Precision
 from spectralmc.result import Failure, Success
@@ -25,6 +23,25 @@ from spectralmc.storage import (
     verify_chain_detailed,
 )
 from spectralmc.storage.chain import ModelVersion
+from tests.helpers import (
+    make_black_scholes_config,
+    make_domain_bounds,
+    make_gbm_cvnn_config,
+    make_simulation_params,
+)
+
+DOMAIN_BOUNDS = make_domain_bounds()
+SIM_PARAMS = make_simulation_params(
+    timesteps=100,
+    network_size=1024,
+    batches_per_mc_run=8,
+    threads_per_block=256,
+    mc_seed=42,
+    buffer_size=10000,
+    skip=0,
+    dtype=Precision.float32,
+)
+BS_CONFIG = make_black_scholes_config(sim_params=SIM_PARAMS)
 
 
 def test_content_hash_integrity() -> None:
@@ -164,42 +181,13 @@ def test_hash_length_consistency() -> None:
 
 def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPricerConfig:
     """Factory to create test configurations."""
-    match build_simulation_params(
-        timesteps=100,
-        network_size=1024,
-        batches_per_mc_run=8,
-        threads_per_block=256,
-        mc_seed=42,
-        buffer_size=10000,
-        skip=0,
-        dtype=Precision.float32,
-    ):
-        case Failure(sim_err):
-            pytest.fail(f"SimulationParams creation failed: {sim_err}")
-        case Success(sim_params):
-            pass
-
-    match build_black_scholes_config(
-        sim_params=sim_params,
-        path_scheme=PathScheme.LOG_EULER,
-        normalization=ForwardNormalization.NORMALIZE,
-    ):
-        case Failure(bs_err):
-            pytest.fail(f"BlackScholesConfig creation failed: {bs_err}")
-        case Success(bs_config):
-            pass
-
-    cpu_rng_state = torch.get_rng_state().numpy().tobytes()
-
-    return GbmCVNNPricerConfig(
-        cfg=bs_config,
-        domain_bounds={},
-        cvnn=model,
-        optimizer_state=None,
+    return make_gbm_cvnn_config(
+        model,
         global_step=global_step,
+        sim_params=SIM_PARAMS,
+        bs_config=BS_CONFIG,
+        domain_bounds=DOMAIN_BOUNDS,
         sobol_skip=0,
-        torch_cpu_rng_state=cpu_rng_state,
-        torch_cuda_rng_states=[],
     )
 
 

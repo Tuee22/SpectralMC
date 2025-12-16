@@ -55,8 +55,8 @@ Overlays must link to the canonical doc first, then list overrides only.
 - Snake_case for file names within SpectralMC (e.g., `documentation_standards.md`).
 - Descriptive, unabbreviated names; no version numbers in filenames.
 - Keep prefixes for grouping when needed (e.g., `gpu_`, `cli_`).
-- Explicit exceptions for compatibility: top-level `README.md`, `CLAUDE.md`, and `AGENTS.md`
-  stay uppercase; keep references consistent.
+- Explicit exceptions for compatibility: `README.md`, `CLAUDE.md`, and `AGENTS.md` stay
+  uppercase at any directory level; keep references consistent.
 
 ## 4. Required Header Metadata
 

@@ -123,12 +123,13 @@ Otherwise, prefer global `tests/helpers/` for cross-suite patterns.
 
 ### Canonical Locations
 
-SpectralMC defines **four** canonical locations for shared test code:
+SpectralMC defines **five** canonical locations for shared test code:
 
 1. **tests/helpers/result_utils.py** - Result type unwrapping
-2. **tests/helpers/factories.py** - Config/model builders
+2. **tests/helpers/factories.py** - Config/model builders (mirrored in public `spectralmc.testing`)
 3. **tests/helpers/assertions.py** - Custom assertion helpers
 4. **tests/helpers/constants.py** - Shared test constants
+5. **tests/helpers/seed_all_rngs (re-export)** — RNG seeding helper (also public as `spectralmc.testing.seed_all_rngs`)
 
 ### 1. Result Type Unwrapping (result_utils.py)
 

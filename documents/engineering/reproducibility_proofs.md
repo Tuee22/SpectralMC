@@ -64,6 +64,8 @@ This is **trivially true** for pure functions. The challenge is ensuring all GPU
 Determinism is enforced via a pure runtime probe followed by an explicit configuration effect:
 
 ```python
+# File: src/spectralmc/runtime/torch_runtime.py (pseudocode)
+#
 # Pseudocode
 @dataclass(frozen=True)
 class TorchRuntime:

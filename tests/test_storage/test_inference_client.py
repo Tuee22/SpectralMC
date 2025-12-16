@@ -9,11 +9,6 @@ import pytest
 import torch
 
 
-from spectralmc.effects import ForwardNormalization, PathScheme
-from spectralmc.gbm import build_black_scholes_config, build_simulation_params
-from spectralmc.result import Failure, Success
-from spectralmc.gbm_trainer import GbmCVNNPricerConfig
-from spectralmc.models.numerical import Precision
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     InferenceClient,
@@ -21,47 +16,9 @@ from spectralmc.storage import (
     TrackingMode,
     commit_snapshot,
 )
+from tests.helpers import make_domain_bounds, make_gbm_cvnn_config
 
-
-def make_test_config(model: torch.nn.Module, global_step: int = 0) -> GbmCVNNPricerConfig:
-    """Factory to create test configurations (GbmCVNNPricerConfig is frozen)."""
-    match build_simulation_params(
-        timesteps=100,
-        network_size=1024,
-        batches_per_mc_run=8,
-        threads_per_block=256,
-        mc_seed=42,
-        buffer_size=10000,
-        skip=0,
-        dtype=Precision.float32,
-    ):
-        case Failure(sim_err):
-            pytest.fail(f"SimulationParams creation failed: {sim_err}")
-        case Success(sim_params):
-            pass
-
-    match build_black_scholes_config(
-        sim_params=sim_params,
-        path_scheme=PathScheme.LOG_EULER,
-        normalization=ForwardNormalization.NORMALIZE,
-    ):
-        case Failure(bs_err):
-            pytest.fail(f"BlackScholesConfig creation failed: {bs_err}")
-        case Success(bs_config):
-            pass
-
-    cpu_rng_state = torch.get_rng_state().numpy().tobytes()
-
-    return GbmCVNNPricerConfig(
-        cfg=bs_config,
-        domain_bounds={},
-        cvnn=model,
-        optimizer_state=None,
-        global_step=global_step,
-        sobol_skip=0,
-        torch_cpu_rng_state=cpu_rng_state,
-        torch_cuda_rng_states=[],
-    )
+DOMAIN_BOUNDS = make_domain_bounds()
 
 
 @pytest.mark.asyncio
@@ -69,15 +26,15 @@ async def test_pinned_mode_basic(async_store: AsyncBlockchainModelStore) -> None
     """Test pinned mode loads specific version."""
     # Create 2 versions
     model1 = torch.nn.Linear(5, 5)
-    config1 = make_test_config(model1, global_step=100)
+    config1 = make_gbm_cvnn_config(model1, global_step=100, domain_bounds=DOMAIN_BOUNDS)
     _v1 = await commit_snapshot(async_store, config1, "V1")
 
     model2 = torch.nn.Linear(5, 5)
-    config2 = make_test_config(model2, global_step=200)
+    config2 = make_gbm_cvnn_config(model2, global_step=200, domain_bounds=DOMAIN_BOUNDS)
     _v2 = await commit_snapshot(async_store, config2, "V2")
 
     # Pin to version 0
-    template = make_test_config(torch.nn.Linear(5, 5))
+    template = make_gbm_cvnn_config(torch.nn.Linear(5, 5), domain_bounds=DOMAIN_BOUNDS)
     client = InferenceClient(
         mode=PinnedMode(counter=0),
         poll_interval=0.1,
@@ -101,11 +58,13 @@ async def test_pinned_mode_basic(async_store: AsyncBlockchainModelStore) -> None
 async def test_tracking_mode_basic(async_store: AsyncBlockchainModelStore) -> None:
     """Test tracking mode loads latest version."""
     # Create version 0
-    config = make_test_config(torch.nn.Linear(5, 5), global_step=42)
+    config = make_gbm_cvnn_config(
+        torch.nn.Linear(5, 5), global_step=42, domain_bounds=DOMAIN_BOUNDS
+    )
     await commit_snapshot(async_store, config, "V0")
 
     # Start tracking mode
-    template = make_test_config(torch.nn.Linear(5, 5))
+    template = make_gbm_cvnn_config(torch.nn.Linear(5, 5), domain_bounds=DOMAIN_BOUNDS)
     client = InferenceClient(
         mode=TrackingMode(),
         poll_interval=0.5,
@@ -129,11 +88,11 @@ async def test_tracking_mode_auto_update(
 ) -> None:
     """Test tracking mode automatically updates to new versions."""
     # Create initial version
-    config = make_test_config(torch.nn.Linear(5, 5), global_step=0)
+    config = make_gbm_cvnn_config(torch.nn.Linear(5, 5), global_step=0, domain_bounds=DOMAIN_BOUNDS)
     await commit_snapshot(async_store, config, "V0")
 
     # Start tracking with fast polling
-    template = make_test_config(torch.nn.Linear(5, 5))
+    template = make_gbm_cvnn_config(torch.nn.Linear(5, 5), domain_bounds=DOMAIN_BOUNDS)
     client = InferenceClient(
         mode=TrackingMode(),
         poll_interval=0.1,
@@ -149,7 +108,9 @@ async def test_tracking_mode_auto_update(
         assert version.counter == 0
 
         # Create new version
-        config2 = make_test_config(torch.nn.Linear(5, 5), global_step=100)
+        config2 = make_gbm_cvnn_config(
+            torch.nn.Linear(5, 5), global_step=100, domain_bounds=DOMAIN_BOUNDS
+        )
         await commit_snapshot(async_store, config2, "V1")
 
         # Wait for poll to detect
@@ -165,10 +126,10 @@ async def test_tracking_mode_auto_update(
 @pytest.mark.asyncio
 async def test_get_model_before_start(async_store: AsyncBlockchainModelStore) -> None:
     """Test that get_model() raises error before start."""
-    config = make_test_config(torch.nn.Linear(5, 5))
+    config = make_gbm_cvnn_config(torch.nn.Linear(5, 5), domain_bounds=DOMAIN_BOUNDS)
     await commit_snapshot(async_store, config, "V0")
 
-    template = make_test_config(torch.nn.Linear(5, 5))
+    template = make_gbm_cvnn_config(torch.nn.Linear(5, 5), domain_bounds=DOMAIN_BOUNDS)
     client = InferenceClient(
         mode=PinnedMode(counter=0),
         poll_interval=1.0,
@@ -186,10 +147,10 @@ async def test_context_manager_lifecycle(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
     """Test context manager starts and stops client."""
-    config = make_test_config(torch.nn.Linear(5, 5))
+    config = make_gbm_cvnn_config(torch.nn.Linear(5, 5), domain_bounds=DOMAIN_BOUNDS)
     await commit_snapshot(async_store, config, "V0")
 
-    template = make_test_config(torch.nn.Linear(5, 5))
+    template = make_gbm_cvnn_config(torch.nn.Linear(5, 5), domain_bounds=DOMAIN_BOUNDS)
     client = InferenceClient(
         mode=PinnedMode(counter=0),
         poll_interval=1.0,
@@ -210,10 +171,10 @@ async def test_context_manager_lifecycle(
 @pytest.mark.asyncio
 async def test_manual_start_stop(async_store: AsyncBlockchainModelStore) -> None:
     """Test manual start/stop methods."""
-    config = make_test_config(torch.nn.Linear(5, 5))
+    config = make_gbm_cvnn_config(torch.nn.Linear(5, 5), domain_bounds=DOMAIN_BOUNDS)
     await commit_snapshot(async_store, config, "V0")
 
-    template = make_test_config(torch.nn.Linear(5, 5))
+    template = make_gbm_cvnn_config(torch.nn.Linear(5, 5), domain_bounds=DOMAIN_BOUNDS)
     client = InferenceClient(
         mode=PinnedMode(counter=0),
         poll_interval=1.0,
@@ -234,7 +195,7 @@ async def test_empty_store_tracking_mode(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
     """Test tracking mode fails on empty store."""
-    template = make_test_config(torch.nn.Linear(5, 5))
+    template = make_gbm_cvnn_config(torch.nn.Linear(5, 5), domain_bounds=DOMAIN_BOUNDS)
     client = InferenceClient(
         mode=TrackingMode(),
         poll_interval=1.0,
@@ -253,10 +214,10 @@ async def test_graceful_shutdown_tracking(
     async_store: AsyncBlockchainModelStore,
 ) -> None:
     """Test polling task is cancelled on shutdown."""
-    config = make_test_config(torch.nn.Linear(5, 5))
+    config = make_gbm_cvnn_config(torch.nn.Linear(5, 5), domain_bounds=DOMAIN_BOUNDS)
     await commit_snapshot(async_store, config, "V0")
 
-    template = make_test_config(torch.nn.Linear(5, 5))
+    template = make_gbm_cvnn_config(torch.nn.Linear(5, 5), domain_bounds=DOMAIN_BOUNDS)
     client = InferenceClient(
         mode=TrackingMode(),
         poll_interval=0.1,
