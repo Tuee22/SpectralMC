@@ -2108,7 +2108,6 @@ docker compose -f docker/docker-compose.yml exec spectralmc \
 
 ### Status: Deprecation-Free Codebase
 
-**Last Audit**: 2025-01-09
 
 **SpectralMC Code**:
 - ✅ All DLPack usage migrated to `torch.from_dlpack()`
