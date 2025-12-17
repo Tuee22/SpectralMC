@@ -31,11 +31,14 @@ Both classes pass **``mypy --strict``** without ignores, casts, or Any.
 
 from __future__ import annotations
 
-from typing import Annotated, Generic, TypeVar
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Generic, Iterator, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ValidationError
 from scipy.stats.qmc import Sobol
 
 from spectralmc.errors.sampler import (
@@ -49,7 +52,7 @@ from spectralmc.result import Failure, Result, Success, collect_results
 from spectralmc.validation import validate_model
 
 
-__all__: list[str] = ["BoundSpec", "SobolConfig", "SobolSampler"]
+__all__: list[str] = ["BoundSpec", "DomainBounds", "SobolConfig", "SobolSampler"]
 
 # --------------------------------------------------------------------------- #
 # Type helpers                                                                #
@@ -58,28 +61,16 @@ __all__: list[str] = ["BoundSpec", "SobolConfig", "SobolSampler"]
 PointT = TypeVar("PointT", bound=BaseModel)
 
 
-class SobolConfig(BaseModel):
-    """Configuration for Sobol sampler with validated parameters.
+@dataclass(frozen=True)
+class SobolConfig:
+    """Configuration for Sobol sampler with validated parameters."""
 
-    Attributes
-    ----------
-    seed
-        Non-negative seed for deterministic reproducibility.
-    skip
-        Non-negative number of initial points to discard (default: 0).
-
-    Notes
-    -----
-    Validation is declarative via Pydantic Field constraints.
-    """
-
-    seed: Annotated[int, Field(ge=0, description="Non-negative seed for Sobol engine")]
-    skip: Annotated[int, Field(ge=0, description="Number of initial points to skip")] = 0
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    seed: int
+    skip: int = 0
 
 
-class BoundSpec(BaseModel):
+@dataclass(frozen=True)
+class BoundSpec:
     """Inclusive numeric bounds for a single coordinate axis.
 
     Construct via ``build_bound_spec()`` factory to ensure bounds are valid.
@@ -100,7 +91,38 @@ class BoundSpec(BaseModel):
     lower: float
     upper: float
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+
+@dataclass(frozen=True)
+class DomainBounds(Generic[PointT], Mapping[str, BoundSpec]):
+    """Shape-safe, immutable bounds keyed by model field name."""
+
+    _fields: tuple[str, ...]
+    _bounds: Mapping[str, BoundSpec]
+
+    @property
+    def fields(self) -> tuple[str, ...]:
+        return self._fields
+
+    def __getitem__(self, key: str) -> BoundSpec:
+        return self._bounds[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._bounds)
+
+    def __len__(self) -> int:
+        return len(self._bounds)
+
+
+def build_domain_bounds(
+    pydantic_class: type[PointT], bounds: Mapping[str, BoundSpec]
+) -> Result[DomainBounds[PointT], DimensionMismatch]:
+    """Freeze and validate domain bounds against the model field set."""
+    fields: tuple[str, ...] = tuple(pydantic_class.model_fields)
+    provided_fields = tuple(bounds.keys())
+    if set(provided_fields) != set(fields):
+        return Failure(DimensionMismatch(expected_fields=fields, provided_fields=provided_fields))
+    frozen = MappingProxyType({field: bounds[field] for field in fields})
+    return Success(DomainBounds(_fields=fields, _bounds=frozen))
 
 
 def build_bound_spec(lower: float, upper: float) -> Result[BoundSpec, BoundSpecInvalid]:
@@ -156,30 +178,13 @@ class SobolSampler(Generic[PointT]):
     def create(
         cls,
         pydantic_class: type[PointT],
-        dimensions: dict[str, BoundSpec],
+        dimensions: DomainBounds[PointT],
         *,
         config: SobolConfig,
     ) -> Result[SobolSampler[PointT], DimensionMismatch | InvalidBounds]:
         """Pure factory for SobolSampler."""
 
-        fields: list[str] = list(pydantic_class.model_fields)
-
-        # Validate dimension keys match model fields
-        dimension_check: Result[None, DimensionMismatch] = (
-            Failure(
-                DimensionMismatch(
-                    expected_fields=tuple(fields),
-                    provided_fields=tuple(dimensions.keys()),
-                )
-            )
-            if set(fields) != set(dimensions.keys())
-            else Success(None)
-        )
-        match dimension_check:
-            case Failure() as f:
-                return f
-            case Success(_):
-                pass
+        fields: list[str] = list(dimensions.fields)
 
         try:
             lower = np.array([dimensions[f].lower for f in fields], dtype=np.float64)
@@ -239,3 +244,12 @@ class SobolSampler(Generic[PointT]):
                 return Failure(error)
             case Success(points):
                 return Success(points)
+
+
+def build_sobol_config(*, seed: int, skip: int = 0) -> Result[SobolConfig, ValidationError]:
+    """Result-wrapped constructor for SobolConfig."""
+    if seed < 0:
+        return Failure(ValidationError.from_exception_data("SobolConfig", []))  # minimal
+    if skip < 0:
+        return Failure(ValidationError.from_exception_data("SobolConfig", []))
+    return Success(SobolConfig(seed=seed, skip=skip))

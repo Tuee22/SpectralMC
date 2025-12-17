@@ -136,11 +136,11 @@ async def train_with_auto_commit():
     pricer = GbmCVNNPricer(pricer_config)
 
     # Training configuration
-    training_config = TrainingConfig(
+    training_config = build_training_config(
         num_batches=1000,
         batch_size=32,
         learning_rate=0.001
-    )
+    ).unwrap()
 
     # Train with automatic commit
     async with AsyncBlockchainModelStore("my-model-bucket") as store:
@@ -305,11 +305,11 @@ Standard `TrainingConfig` parameters:
 
 ```python
 # File: examples/training_integration/training_config.py
-training_config = TrainingConfig(
+training_config = build_training_config(
     num_batches=1000,      # Total training batches
     batch_size=32,         # Samples per batch
     learning_rate=0.001    # Adam learning rate
-)
+).unwrap()
 ```
 
 ### Blockchain Storage Parameters
@@ -453,11 +453,11 @@ async def production_training_pipeline():
         pricer = GbmCVNNPricer(config)
 
         # Training config
-        training_config = TrainingConfig(
+        training_config = build_training_config(
             num_batches=10000,
             batch_size=64,
             learning_rate=0.0005
-        )
+        ).unwrap()
 
         # Train with periodic checkpoints every 500 batches
         print("Starting training...")
@@ -504,11 +504,11 @@ async def experiment_tracking():
             config = make_config(model)
             pricer = GbmCVNNPricer(config)
 
-            training_config = TrainingConfig(
+            training_config = build_training_config(
                 num_batches=1000,
                 batch_size=params["batch"],
                 learning_rate=params["lr"]
-            )
+            ).unwrap()
 
             pricer.train(
                 training_config,

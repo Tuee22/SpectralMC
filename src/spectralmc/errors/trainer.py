@@ -31,6 +31,17 @@ class InvalidTrainerConfig:
 
 
 @dataclass(frozen=True)
+class InvalidTrainingConfig:
+    """Training hyperparameters are invalid."""
+
+    num_batches: int
+    batch_size: int
+    learning_rate: float
+    message: str
+    kind: Literal["InvalidTrainingConfig"] = "InvalidTrainingConfig"
+
+
+@dataclass(frozen=True)
 class OptimizerStateSerializationFailed:
     """Serialization failure for optimizer snapshots."""
 
@@ -52,6 +63,7 @@ TrainerError = (
     | NormalsUnavailable
     | NormalsGenerationFailed
     | InvalidTrainerConfig
+    | InvalidTrainingConfig
     | OptimizerStateSerializationFailed
     | PredictionFailed
 )

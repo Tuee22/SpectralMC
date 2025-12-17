@@ -31,16 +31,16 @@ from spectralmc.effects import ForwardNormalization, PathScheme
 from spectralmc.cvnn_factory import (
     ActivationCfg,
     ActivationKind,
-    CVNNConfig,
     ExplicitWidth,
     LinearCfg,
+    build_cvnn_config,
     build_model,
 )
 from spectralmc.gbm import BlackScholes
 from spectralmc.gbm_trainer import (
     ComplexValuedModel,
     GbmCVNNPricer,
-    TrainingConfig,
+    build_training_config,
 )
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import AdamOptimizerState
@@ -101,16 +101,18 @@ def _make_cvnn(
 ) -> ComplexValuedModel:
     """Factory wrapper around :pyfunc:`spectralmc.cvnn_factory.build_model`."""
     enum_dtype = expect_success(FullPrecisionDType.from_torch(dtype))
-    cfg = CVNNConfig(
-        dtype=enum_dtype,
-        layers=[
-            LinearCfg(
-                width=ExplicitWidth(value=32),
-                activation=ActivationCfg(kind=ActivationKind.MOD_RELU),
-            ),
-            LinearCfg(width=ExplicitWidth(value=n_outputs)),
-        ],
-        seed=seed,
+    cfg = expect_success(
+        build_cvnn_config(
+            dtype=enum_dtype,
+            layers=[
+                LinearCfg(
+                    width=ExplicitWidth(value=32),
+                    activation=ActivationCfg(kind=ActivationKind.MOD_RELU),
+                ),
+                LinearCfg(width=ExplicitWidth(value=n_outputs)),
+            ],
+            seed=seed,
+        )
     )
     return expect_success(build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg)).to(
         device, dtype
@@ -183,7 +185,9 @@ def test_lockstep_training(precision: Precision) -> None:
     second = _make_gbm_trainer(precision, seed=43)
 
     for batches in (2, 3, 1):
-        cfg = TrainingConfig(num_batches=batches, batch_size=8, learning_rate=LEARNING_RATE)
+        cfg = expect_success(
+            build_training_config(num_batches=batches, batch_size=8, learning_rate=LEARNING_RATE)
+        )
         first.train(cfg)
         second.train(cfg)
         assert max_param_diff(first._cvnn, second._cvnn) == 0.0
@@ -197,14 +201,20 @@ def test_lockstep_training(precision: Precision) -> None:
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_snapshot_cycle_deterministic(precision: Precision) -> None:
     trainer = _make_gbm_trainer(precision, seed=44)
-    trainer.train(TrainingConfig(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE))
+    trainer.train(
+        expect_success(
+            build_training_config(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE)
+        )
+    )
 
     snap = expect_success(trainer.snapshot()).model_copy(
         update={"cvnn": _clone_model(trainer._cvnn)}
     )
     clone = expect_success(GbmCVNNPricer.create(snap))
 
-    cfg = TrainingConfig(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
+    cfg = expect_success(
+        build_training_config(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
+    )
     trainer.train(cfg)
     clone.train(cfg)
 
@@ -219,7 +229,11 @@ def test_snapshot_cycle_deterministic(precision: Precision) -> None:
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_snapshot_restart_without_optimizer(precision: Precision) -> None:
     trainer = _make_gbm_trainer(precision, seed=45)
-    trainer.train(TrainingConfig(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE))
+    trainer.train(
+        expect_success(
+            build_training_config(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE)
+        )
+    )
 
     snap = expect_success(trainer.snapshot()).model_copy(
         update={"optimizer_state": None, "cvnn": _clone_model(trainer._cvnn)}
@@ -230,7 +244,9 @@ def test_snapshot_restart_without_optimizer(precision: Precision) -> None:
     # (same model state as restarted, but created fresh)
     trainer_without_opt = _make_gbm_trainer(precision, seed=45)
     trainer_without_opt.train(
-        TrainingConfig(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE)
+        expect_success(
+            build_training_config(num_batches=3, batch_size=8, learning_rate=LEARNING_RATE)
+        )
     )
     # Create fresh trainer from same snapshot (no optimizer state)
     snap_for_comparison = expect_success(trainer_without_opt.snapshot()).model_copy(
@@ -238,7 +254,9 @@ def test_snapshot_restart_without_optimizer(precision: Precision) -> None:
     )
     trainer_without_opt = expect_success(GbmCVNNPricer.create(snap_for_comparison))
 
-    cfg = TrainingConfig(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
+    cfg = expect_success(
+        build_training_config(num_batches=2, batch_size=8, learning_rate=LEARNING_RATE)
+    )
     trainer_without_opt.train(cfg)
     restarted.train(cfg)
 
@@ -253,7 +271,11 @@ def test_snapshot_restart_without_optimizer(precision: Precision) -> None:
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_snapshot_optimizer_serialization_roundtrip(precision: Precision) -> None:
     trainer = _make_gbm_trainer(precision, seed=50)
-    trainer.train(TrainingConfig(num_batches=4, batch_size=8, learning_rate=LEARNING_RATE))
+    trainer.train(
+        expect_success(
+            build_training_config(num_batches=4, batch_size=8, learning_rate=LEARNING_RATE)
+        )
+    )
     snap = expect_success(trainer.snapshot())
 
     opt_state = snap.optimizer_state
@@ -280,7 +302,11 @@ def test_snapshot_optimizer_serialization_roundtrip(precision: Precision) -> Non
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_predict_price_smoke(precision: Precision) -> None:
     trainer = _make_gbm_trainer(precision, seed=60)
-    trainer.train(TrainingConfig(num_batches=1, batch_size=4, learning_rate=LEARNING_RATE))
+    trainer.train(
+        expect_success(
+            build_training_config(num_batches=1, batch_size=4, learning_rate=LEARNING_RATE)
+        )
+    )
 
     contracts: Sequence[BlackScholes.Inputs] = [
         BlackScholes.Inputs(X0=100.0, K=100.0, T=1.0, r=0.05, d=0.02, v=0.20),

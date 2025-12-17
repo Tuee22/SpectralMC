@@ -214,18 +214,31 @@ class GPUInterpreter:
             )
             if isinstance(plan_result, Success):
                 plan = plan_result.value
-                self._registry.register_metadata(f"transfer_plan:{transfer.tensor_id}", repr(plan))
+                match self._registry.register_metadata(
+                    f"transfer_plan:{transfer.tensor_id}", repr(plan)
+                ):
+                    case Failure(err):
+                        return Failure(GPUError(message=f"Registry metadata error: {err}"))
+                    case Success(_):
+                        pass
             else:
-                self._registry.register_metadata(
+                match self._registry.register_metadata(
                     f"transfer_plan:{transfer.tensor_id}", f"error:{plan_result.error}"
-                )
+                ):
+                    case Failure(err):
+                        return Failure(GPUError(message=f"Registry metadata error: {err}"))
+                    case Success(_):
+                        pass
 
         match move_tensor_tree(tensor, dest=dest, stage_policy=transfer.stage_policy):
             case Failure(error):
                 return Failure(GPUError(message=str(error)))
             case Success(moved_tensor):
-                self._registry.register_tensor(transfer.tensor_id, moved_tensor)
-                return Success(moved_tensor)
+                match self._registry.register_tensor(transfer.tensor_id, moved_tensor):
+                    case Failure(err):
+                        return Failure(GPUError(message=f"Registry tensor error: {err}"))
+                    case Success(_):
+                        return Success(moved_tensor)
 
     async def _sync_stream(
         self, stream_type: Literal["torch", "cupy", "numba"]
@@ -327,8 +340,11 @@ class GPUInterpreter:
                 )
 
             # Store result in shared registry
-            self._registry.register_tensor(effect.output_tensor_id, transferred)
-            return Success(transferred)
+            match self._registry.register_tensor(effect.output_tensor_id, transferred):
+                case Failure(err):
+                    return Failure(GPUError(message=f"Registry tensor error: {err}"))
+                case Success(_):
+                    return Success(transferred)
         except (RuntimeError, TypeError) as e:
             return Failure(GPUError(message=str(e)))
 
@@ -396,8 +412,11 @@ class TrainingInterpreter:
             if callable(model):
                 output = model(tensor)
                 # Store output in shared registry with specified ID
-                self._registry.register_tensor(effect.output_tensor_id, output)
-                return Success(output)
+                match self._registry.register_tensor(effect.output_tensor_id, output):
+                    case Failure(err):
+                        return Failure(TrainingError(message=f"Registry tensor error: {err}"))
+                    case Success(_):
+                        return Success(output)
             return Failure(TrainingError(message=f"Model {effect.model_id} is not callable"))
         except RuntimeError as e:
             return Failure(TrainingError(message=str(e)))
@@ -481,8 +500,11 @@ class TrainingInterpreter:
                     return Failure(TrainingError(message=f"unsupported_loss_type:{other}"))
 
             # Store loss in shared registry for BackwardPass
-            self._registry.register_tensor(effect.output_tensor_id, loss)
-            return Success(loss)
+            match self._registry.register_tensor(effect.output_tensor_id, loss):
+                case Failure(err):
+                    return Failure(TrainingError(message=f"Registry tensor error: {err}"))
+                case Success(_):
+                    return Success(loss)
         except RuntimeError as e:
             return Failure(TrainingError(message=str(e)))
 
@@ -561,9 +583,11 @@ class MonteCarloInterpreter:
             matrix = rng.standard_normal((effect.rows, effect.cols), dtype=cp.float32)
 
             # Store in shared registry with specified output ID
-            self._registry.register_tensor(effect.output_tensor_id, matrix)
-
-            return Success(matrix)
+            match self._registry.register_tensor(effect.output_tensor_id, matrix):
+                case Failure(err):
+                    return Failure(MonteCarloError(message=f"Registry tensor error: {err}"))
+                case Success(_):
+                    return Success(matrix)
         except RuntimeError as e:
             return Failure(MonteCarloError(message=str(e)))
 
@@ -645,9 +669,11 @@ class MonteCarloInterpreter:
                     assert_never(effect.normalization)
 
             # Store result in shared registry with specified output ID
-            self._registry.register_tensor(effect.output_tensor_id, sims)
-
-            return Success(sims)
+            match self._registry.register_tensor(effect.output_tensor_id, sims):
+                case Failure(err):
+                    return Failure(MonteCarloError(message=f"Registry tensor error: {err}"))
+                case Success(_):
+                    return Success(sims)
         except RuntimeError as e:
             return Failure(MonteCarloError(message=str(e)))
 
@@ -677,9 +703,11 @@ class MonteCarloInterpreter:
             result = cp.fft.fft(tensor, axis=effect.axis)
 
             # Store in shared registry with specified output ID
-            self._registry.register_tensor(effect.output_tensor_id, result)
-
-            return Success(result)
+            match self._registry.register_tensor(effect.output_tensor_id, result):
+                case Failure(err):
+                    return Failure(MonteCarloError(message=f"Registry tensor error: {err}"))
+                case Success(_):
+                    return Success(result)
         except RuntimeError as e:
             return Failure(MonteCarloError(message=str(e)))
 
@@ -737,7 +765,17 @@ class StorageInterpreter:
                     case Success(data):
                         # Store in shared registry with specified output ID
                         if isinstance(data, bytes):
-                            self._registry.register_bytes(effect.output_id, data)
+                            match self._registry.register_bytes(effect.output_id, data):
+                                case Failure(err):
+                                    return Failure(
+                                        StorageError(
+                                            message=f"Registry bytes error: {err}",
+                                            bucket=bucket,
+                                            key=key,
+                                        )
+                                    )
+                                case Success(_):
+                                    pass
                         return Success(data)
                     case Failure(err):
                         return Failure(StorageError(message=str(err), bucket=bucket, key=key))
@@ -867,8 +905,13 @@ class RNGInterpreter:
                     )
 
             # Store in shared registry with specified output ID
-            self._registry.register_bytes(effect.output_id, state)
-            return Success(state)
+            match self._registry.register_bytes(effect.output_id, state):
+                case Failure(err):
+                    return Failure(
+                        RNGError(message=f"Registry bytes error: {err}", rng_type=rng_type)
+                    )
+                case Success(_):
+                    return Success(state)
         except RuntimeError as e:
             return Failure(RNGError(message=str(e), rng_type=rng_type))
 

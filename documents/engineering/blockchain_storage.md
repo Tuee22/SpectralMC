@@ -367,17 +367,17 @@ Automatic blockchain commits during training via `GbmCVNNPricer.train()`.
 
 ```python
 # File: documents/engineering/blockchain_storage.md
-from spectralmc.gbm_trainer import GbmCVNNPricer, TrainingConfig
+from spectralmc.gbm_trainer import GbmCVNNPricer, build_training_config
 from spectralmc.storage import AsyncBlockchainModelStore
 
 async with AsyncBlockchainModelStore("my-model-bucket") as store:
     pricer = GbmCVNNPricer(config)
 
-    training_config = TrainingConfig(
+    training_config = build_training_config(
         num_batches=1000,
         batch_size=32,
         learning_rate=0.001
-    )
+    ).unwrap()
 
     # Train with automatic commit when done
     pricer.train(

@@ -13,9 +13,10 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable, Iterator, Mapping
+from typing import Iterable, Iterator, Mapping, Sequence
 
 import torch
+from typing_extensions import Self
 from spectralmc.runtime import get_torch_handle
 from spectralmc.errors.torch_facade import (
     InvalidAdamState,
@@ -26,6 +27,7 @@ from spectralmc.errors.torch_facade import (
     UnsupportedTorchDType,
 )
 from spectralmc.result import Failure, Result, Success
+from spectralmc.validation import validate_model
 from spectralmc.models.numerical import Precision
 
 get_torch_handle()
@@ -208,7 +210,7 @@ def default_device(dev: torch.device) -> Iterator[None]:
 # --------------------------------------------------------------------------- #
 #  SafeTensor serialization helpers                                           #
 # --------------------------------------------------------------------------- #
-from pydantic import BaseModel, ConfigDict  # noqa: E402
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator  # noqa: E402
 from safetensors.torch import load as _sf_load  # noqa: E402
 from safetensors.torch import save as _sf_save  # noqa: E402
 
@@ -246,7 +248,11 @@ class TensorState(BaseModel):
             else ReducedPrecisionDType(dtype_str)
         )
 
-        return Success(TensorState(data=blob, shape=tuple(t.shape), dtype=dtype))
+        match validate_model(TensorState, data=blob, shape=tuple(t.shape), dtype=dtype):
+            case Success(ts):
+                return Success(ts)
+            case Failure(err):
+                return Failure(TensorStateConversionFailed(message=str(err)))
 
     def to_torch(self) -> TorchFacadeResult[torch.Tensor]:
         tensor_dict: dict[str, torch.Tensor] = _sf_load(self.data)
@@ -297,7 +303,11 @@ class TensorState(BaseModel):
             else ReducedPrecisionDType(dtype_str)
         )
 
-        return Success(TensorState(data=raw, shape=tuple(t.shape), dtype=dtype))
+        match validate_model(TensorState, data=raw, shape=tuple(t.shape), dtype=dtype):
+            case Success(ts):
+                return Success(ts)
+            case Failure(err):
+                return Failure(TensorStateConversionFailed(message=str(err)))
 
 
 # --------------------------------------------------------------------------- #
@@ -450,6 +460,41 @@ class AdamParamState(BaseModel):
         return Success(payload)
 
 
+def build_adam_param_group(data: Mapping[str, object]) -> Result[AdamParamGroup, ValidationError]:
+    """
+    Result-wrapped factory for AdamParamGroup validation.
+
+    Enforces Result-only instantiation pattern for Pydantic model.
+
+    Args:
+        data: Dictionary containing Adam param group configuration
+              Expected keys: params, lr, betas, eps, weight_decay, amsgrad, etc.
+
+    Returns:
+        Success[AdamParamGroup] on valid input
+        Failure[ValidationError] on validation failure
+
+    Example:
+        >>> result = build_adam_param_group({
+        ...     "params": [],
+        ...     "lr": 0.001,
+        ...     "betas": (0.9, 0.999),
+        ...     "eps": 1e-8,
+        ...     "weight_decay": 0.0,
+        ...     "amsgrad": False
+        ... })
+        >>> match result:
+        ...     case Success(group):
+        ...         # Use validated group
+        ...     case Failure(err):
+        ...         # Handle validation error
+    """
+    try:
+        return Success(AdamParamGroup.model_validate(data))
+    except ValidationError as e:
+        return Failure(e)
+
+
 class AdamParamGroup(BaseModel):
     params: list[int]
     lr: float
@@ -467,13 +512,66 @@ class AdamParamGroup(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=False)
 
     @classmethod
-    def from_torch(cls, g: Mapping[str, object]) -> AdamParamGroup:
-        # Pydantic will both validate and populate all known fields
-        return cls.model_validate(g)
+    def from_torch(cls, g: Mapping[str, object]) -> TorchFacadeResult[AdamParamGroup]:
+        """
+        Construct AdamParamGroup from PyTorch param_group dict.
+
+        Returns Result to enforce explicit error handling.
+
+        Args:
+            g: PyTorch parameter group dictionary
+
+        Returns:
+            Success[AdamParamGroup] on valid input
+            Failure[InvalidAdamState] on validation failure
+        """
+        match build_adam_param_group(g):
+            case Success(group):
+                return Success(group)
+            case Failure(err):
+                return Failure(InvalidAdamState(message=f"Invalid AdamParamGroup: {err}"))
 
     def to_torch(self) -> dict[str, object]:
         # Convert the Pydantic model to a Python dict for PyTorch consumption
         return self.model_dump(mode="python")
+
+
+def build_adam_optimizer_state(
+    param_states: dict[int, AdamParamState] | Mapping[int, AdamParamState],
+    param_groups: list[AdamParamGroup] | Sequence[AdamParamGroup],
+) -> Result[AdamOptimizerState, ValidationError]:
+    """
+    Result-wrapped factory for AdamOptimizerState validation.
+
+    Enforces Result-only instantiation pattern for Pydantic model.
+
+    Args:
+        param_states: Mapping from parameter ID to AdamParamState
+        param_groups: Sequence of AdamParamGroup configurations
+
+    Returns:
+        Success[AdamOptimizerState] on valid input
+        Failure[ValidationError] on validation failure
+
+    Example:
+        >>> result = build_adam_optimizer_state(
+        ...     param_states={},
+        ...     param_groups=[]
+        ... )
+        >>> match result:
+        ...     case Success(state):
+        ...         # Use validated optimizer state
+        ...     case Failure(err):
+        ...         # Handle validation error
+    """
+    try:
+        return Success(
+            AdamOptimizerState.model_validate(
+                {"param_states": param_states, "param_groups": param_groups}
+            )
+        )
+    except ValidationError as e:
+        return Failure(e)
 
 
 class AdamOptimizerState(BaseModel):
@@ -485,10 +583,51 @@ class AdamOptimizerState(BaseModel):
     dictionaries.
     """
 
-    param_states: dict[int, AdamParamState]
-    param_groups: list[AdamParamGroup]
+    param_states: Mapping[int, AdamParamState]
+    param_groups: tuple[AdamParamGroup, ...]
 
-    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=False)
+    model_config = ConfigDict(
+        extra="forbid",
+        arbitrary_types_allowed=True,  # Allow MappingProxyType
+        frozen=True,  # Enforce field immutability
+    )
+
+    @model_validator(mode="after")
+    def freeze_collections(self) -> Self:
+        """
+        Freeze mutable collections to enforce immutability doctrine.
+
+        Converts dict -> MappingProxyType and list -> tuple after validation.
+        Ensures AdamOptimizerState cannot be mutated after construction.
+
+        Returns:
+            Self with frozen collections
+        """
+        from types import MappingProxyType
+
+        # Freeze param_states dict -> Mapping (always freeze, idempotent)
+        object.__setattr__(  # immutability-exception: pydantic-frozen-model
+            self,
+            "param_states",
+            (
+                MappingProxyType(dict(self.param_states))
+                if not isinstance(self.param_states, MappingProxyType)
+                else self.param_states
+            ),
+        )
+
+        # Freeze param_groups list -> tuple (always freeze, idempotent)
+        object.__setattr__(  # immutability-exception: pydantic-frozen-model
+            self,
+            "param_groups",
+            (
+                tuple(self.param_groups)
+                if not isinstance(self.param_groups, tuple)
+                else self.param_groups
+            ),
+        )
+
+        return self
 
     # ------------------------------------------------------------------ #
     @classmethod
@@ -526,9 +665,32 @@ class AdamOptimizerState(BaseModel):
             pid: result.value for pid, result in param_state_results if isinstance(result, Success)
         }
 
-        param_groups: list[AdamParamGroup] = [AdamParamGroup.from_torch(pg) for pg in groups_raw]
+        # Build param groups with Result-wrapped from_torch
+        param_group_results: list[TorchFacadeResult[AdamParamGroup]] = [
+            AdamParamGroup.from_torch(pg) for pg in groups_raw
+        ]
 
-        return Success(cls(param_states=param_states, param_groups=param_groups))
+        # Check for first failure
+        first_failure_pg = next(
+            (result for result in param_group_results if isinstance(result, Failure)), None
+        )
+        match first_failure_pg:
+            case None:
+                pass
+            case failure:
+                return failure
+
+        # All conversions succeeded - extract values
+        param_groups: list[AdamParamGroup] = [
+            result.value for result in param_group_results if isinstance(result, Success)
+        ]
+
+        # Use Result-wrapped factory and wrap ValidationError in InvalidAdamState
+        match build_adam_optimizer_state(param_states=param_states, param_groups=param_groups):
+            case Success(state):
+                return Success(state)
+            case Failure(err):
+                return Failure(InvalidAdamState(message=f"Invalid AdamOptimizerState: {err}"))
 
     # ------------------------------------------------------------------ #
     def to_torch(self) -> TorchFacadeResult[Mapping[str, object]]:

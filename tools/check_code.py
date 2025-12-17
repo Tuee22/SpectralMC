@@ -63,6 +63,20 @@ def main() -> int:
 
     print("✅ Immutability audit passed!\n")
 
+    # Step 1b: Run Pydantic construction guard
+    print("🔍 Running Pydantic construction guard...")
+    pydantic_guard_result = subprocess.run(
+        ["poetry", "run", "python", "tools/check_pydantic_construction.py", "--root", "src"],
+        check=False,
+    )
+    if pydantic_guard_result.returncode != 0:
+        print(
+            f"❌ Pydantic construction guard failed with exit code {pydantic_guard_result.returncode}"
+        )
+        return pydantic_guard_result.returncode
+
+    print("✅ Pydantic construction guard passed!\n")
+
     # Step 2: Run Ruff
     print("🔍 Running Ruff linter...")
     ruff_result = subprocess.run(

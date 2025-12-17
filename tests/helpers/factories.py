@@ -14,18 +14,23 @@ from spectralmc.effects import ForwardNormalization, PathScheme
 from spectralmc.cvnn_factory import (
     ActivationCfg,
     ActivationKind,
-    CVNNConfig,
     ExplicitWidth,
     LayerCfg,
     LinearCfg,
+    build_cvnn_config,
     build_model,
 )
-from spectralmc.gbm import BlackScholesConfig, SimulationParams
-from spectralmc.gbm_trainer import ComplexValuedModel, GbmCVNNPricerConfig, TrainingConfig
+from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
+from spectralmc.gbm_trainer import (
+    ComplexValuedModel,
+    GbmCVNNPricerConfig,
+    TrainingConfig,
+    build_training_config,
+)
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.models.numerical import Precision
 from spectralmc.models.torch import Device, FullPrecisionDType
-from spectralmc.sobol_sampler import BoundSpec
+from spectralmc.sobol_sampler import DomainBounds
 from spectralmc.testing import (
     default_domain_bounds,
     make_gbm_cvnn_config as _make_core_gbm_cvnn_config,
@@ -81,12 +86,12 @@ def make_test_cvnn(
     if add_output_layer:
         layers.append(LinearCfg(width=ExplicitWidth(value=n_outputs)))
 
-    cfg = CVNNConfig(dtype=enum_dtype, layers=layers, seed=seed)
+    cfg = expect_success(build_cvnn_config(dtype=enum_dtype, layers=layers, seed=seed))
     model = expect_success(build_model(n_inputs=n_inputs, n_outputs=n_outputs, cfg=cfg))
     return model.to(device, dtype)
 
 
-def make_domain_bounds() -> dict[str, BoundSpec]:
+def make_domain_bounds() -> DomainBounds[BlackScholes.Inputs]:
     """Create default Black-Scholes domain bounds for tests."""
     return default_domain_bounds()
 
@@ -175,7 +180,7 @@ def make_gbm_cvnn_config(
     global_step: int = 0,
     sim_params: SimulationParams | None = None,
     bs_config: BlackScholesConfig | None = None,
-    domain_bounds: dict[str, BoundSpec] | None = None,
+    domain_bounds: DomainBounds[BlackScholes.Inputs] | None = None,
     sobol_skip: int = 0,
     optimizer_state: AdamOptimizerState | None = None,
 ) -> GbmCVNNPricerConfig:
@@ -211,7 +216,7 @@ def make_gbm_cvnn_config(
         global_step=global_step,
         sim_params=sim_params,
         bs_config=bs_config,
-        domain_bounds=domain_bounds or {},
+        domain_bounds=domain_bounds or default_domain_bounds(),
         sobol_skip=sobol_skip,
         optimizer_state=optimizer_state,
     )
@@ -221,10 +226,12 @@ def make_training_config(
     *, num_batches: int, batch_size: int, learning_rate: float = 1.0e-2
 ) -> TrainingConfig:
     """Create a small TrainingConfig for deterministic smoke tests."""
-    return TrainingConfig(
-        num_batches=num_batches,
-        batch_size=batch_size,
-        learning_rate=learning_rate,
+    return expect_success(
+        build_training_config(
+            num_batches=num_batches,
+            batch_size=batch_size,
+            learning_rate=learning_rate,
+        )
     )
 
 

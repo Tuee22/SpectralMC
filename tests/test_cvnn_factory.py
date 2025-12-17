@@ -22,6 +22,7 @@ from spectralmc.cvnn_factory import (
     NaiveBNCfg,
     ResidualCfg,
     SequentialCfg,
+    build_cvnn_config,
     build_model,
 )
 from spectralmc.models.torch import (
@@ -97,31 +98,33 @@ def _example_cfg(
     dtype: FullPrecisionDType = FullPrecisionDType.float32, seed: int = 314159
 ) -> CVNNConfig:
     """A representative, yet compact, CVNN topology."""
-    return CVNNConfig(
-        dtype=dtype,
-        seed=seed,
-        layers=[
-            # Linear → modReLU
-            LinearCfg(
-                width=ExplicitWidth(value=8),
-                bias=True,
-                activation=ActivationCfg(kind=ActivationKind.MOD_RELU),
-            ),
-            # Naive BN
-            NaiveBNCfg(),
-            # Residual (Linear → Cov-BN) + zReLU
-            ResidualCfg(
-                body=SequentialCfg(
-                    layers=[
-                        LinearCfg(width=ExplicitWidth(value=8), bias=False),
-                        CovBNCfg(),
-                    ],
+    return expect_success(
+        build_cvnn_config(
+            dtype=dtype,
+            seed=seed,
+            layers=[
+                # Linear → modReLU
+                LinearCfg(
+                    width=ExplicitWidth(value=8),
+                    bias=True,
+                    activation=ActivationCfg(kind=ActivationKind.MOD_RELU),
                 ),
-                activation=ActivationCfg(kind=ActivationKind.Z_RELU),
-            ),
-        ],
-        # Final activation after (implicit) output projection
-        final_activation=ActivationCfg(kind=ActivationKind.MOD_RELU),
+                # Naive BN
+                NaiveBNCfg(),
+                # Residual (Linear → Cov-BN) + zReLU
+                ResidualCfg(
+                    body=SequentialCfg(
+                        layers=[
+                            LinearCfg(width=ExplicitWidth(value=8), bias=False),
+                            CovBNCfg(),
+                        ],
+                    ),
+                    activation=ActivationCfg(kind=ActivationKind.Z_RELU),
+                ),
+            ],
+            # Final activation after (implicit) output projection
+            final_activation=ActivationCfg(kind=ActivationKind.MOD_RELU),
+        )
     )
 
 

@@ -209,6 +209,8 @@ business logic while preserving Pydantic's rich error messages. Reuse the helper
 for configs as well (e.g., `ConcurrentNormGeneratorConfig.create(...)` calls
 `validate_model` under the hood) so every call site returns `Result[T, ValidationError]`.
 
+**Rule**: Do not instantiate Pydantic models directly in production code; always go through `validate_model` (or a thin wrapper) so construction failures remain in the Result channel.
+
 ### Import-time failures stay fail-fast
 
 Hard dependency imports (e.g., PyTorch/CuPy) may legitimately raise on misconfig.
@@ -322,17 +324,42 @@ config = SimulationConfig.model_validate_json(config_json)
 
 ### Optional Fields with Defaults
 
+For boundary-facing configs that need coercion, Pydantic stays appropriate. For
+internal hot paths, prefer frozen dataclasses plus Result factories:
+
 ```python
 # File: documents/engineering/pydantic_patterns.md
-from typing import Optional
+@dataclass(frozen=True)
+class TrainingConfig:
+    learning_rate: float
+    max_epochs: int
+    early_stopping: bool
+    checkpoint_dir: str | None = None
 
-class TrainingConfig(BaseModel):
-    """Training configuration."""
 
-    learning_rate: float = 0.001  # Default value
-    max_epochs: int = 100
-    early_stopping: bool = True
-    checkpoint_dir: Optional[str] = None  # Optional field
+def build_training_config(
+    learning_rate: float = 0.001,
+    max_epochs: int = 100,
+    early_stopping: bool = True,
+    checkpoint_dir: str | None = None,
+) -> Result[TrainingConfig, InvalidTrainingConfig]:
+    if learning_rate <= 0.0:
+        return Failure(
+            InvalidTrainingConfig(
+                num_batches=0,
+                batch_size=0,
+                learning_rate=learning_rate,
+                message="learning_rate must be positive",
+            )
+        )
+    return Success(
+        TrainingConfig(
+            learning_rate=learning_rate,
+            max_epochs=max_epochs,
+            early_stopping=early_stopping,
+            checkpoint_dir=checkpoint_dir,
+        )
+    )
 ```
 
 ### Computed Fields

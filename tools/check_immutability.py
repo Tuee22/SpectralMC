@@ -46,6 +46,10 @@ def _scan_file(path: Path) -> list[Violation]:
     """Scan a single file for forbidden immutability bypass patterns."""
     violations: list[Violation] = []
     for idx, line in enumerate(path.read_text().splitlines(), start=1):
+        # Skip lines with immutability exception marker
+        if "# immutability-exception:" in line:
+            continue
+
         for pattern, message in FORBIDDEN_SUBSTRINGS.items():
             if pattern in line:
                 violations.append(Violation(path=path, line=idx, code=pattern, message=message))

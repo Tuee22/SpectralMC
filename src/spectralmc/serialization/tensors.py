@@ -7,10 +7,11 @@ from __future__ import annotations
 import numpy as np
 
 import torch
+from pydantic import ValidationError
 from spectralmc.runtime import get_torch_handle
 
 from spectralmc.errors.serialization import InvalidTensorState, SerializationError
-from spectralmc.errors.torch_facade import TorchFacadeError
+from spectralmc.errors.torch_facade import InvalidAdamState, TorchFacadeError
 from spectralmc.models.torch import (
     AdamOptimizerState,
     AdamParamGroup,
@@ -19,6 +20,8 @@ from spectralmc.models.torch import (
     Device,
     FullPrecisionDType,
     ReducedPrecisionDType,
+    build_adam_optimizer_state,
+    build_adam_param_group,
 )
 from spectralmc.proto import tensors_pb2
 from spectralmc.serialization.common import DeviceConverter, DTypeConverter
@@ -358,19 +361,54 @@ class AdamOptimizerStateConverter:
             for param_id, param_state in [result.value]  # Unpack tuple from Success
         }
 
-        param_groups: list[AdamParamGroup] = [
-            AdamParamGroup(
-                params=[],  # Not serialized in proto
-                lr=group_proto.lr,
-                betas=(group_proto.beta1, group_proto.beta2),
-                eps=group_proto.eps,
-                weight_decay=group_proto.weight_decay,
-                amsgrad=group_proto.amsgrad,
+        # Helper to convert ValidationError to InvalidAdamState
+        def _wrap_param_group_result(
+            result: Result[AdamParamGroup, ValidationError],
+        ) -> Result[AdamParamGroup, InvalidAdamState]:
+            match result:
+                case Success(group):
+                    return Success(group)
+                case Failure(err):
+                    return Failure(InvalidAdamState(message=f"Invalid AdamParamGroup: {err}"))
+
+        # Build param groups with Result-wrapped validation and error conversion
+        param_group_results: list[Result[AdamParamGroup, InvalidAdamState]] = [
+            _wrap_param_group_result(
+                build_adam_param_group(
+                    {
+                        "params": [],  # Not serialized in proto
+                        "lr": group_proto.lr,
+                        "betas": (group_proto.beta1, group_proto.beta2),
+                        "eps": group_proto.eps,
+                        "weight_decay": group_proto.weight_decay,
+                        "amsgrad": group_proto.amsgrad,
+                    }
+                )
             )
             for group_proto in proto.param_groups
         ]
 
-        return Success(AdamOptimizerState(param_states=param_states, param_groups=param_groups))
+        # Check for first failure
+        first_param_group_failure: Result[AdamParamGroup, InvalidAdamState] | None = next(
+            (result for result in param_group_results if isinstance(result, Failure)), None
+        )
+        match first_param_group_failure:
+            case None:
+                pass
+            case Failure() as failure:
+                return failure
+
+        # All conversions succeeded - extract values
+        param_groups: list[AdamParamGroup] = [
+            result.value for result in param_group_results if isinstance(result, Success)
+        ]
+
+        # Use Result-wrapped factory and wrap ValidationError in InvalidAdamState
+        match build_adam_optimizer_state(param_states=param_states, param_groups=param_groups):
+            case Success(state):
+                return Success(state)
+            case Failure(err):
+                return Failure(InvalidAdamState(message=f"Invalid AdamOptimizerState: {err}"))
 
 
 class RNGStateConverter:

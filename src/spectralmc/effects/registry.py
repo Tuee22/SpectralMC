@@ -18,7 +18,8 @@ See Also:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from types import MappingProxyType
+from typing import Literal, Mapping
 
 import cupy as cp
 
@@ -62,11 +63,48 @@ class RegistryTypeMismatch:
     actual_type: str = ""
 
 
-RegistryError = RegistryKeyNotFound | RegistryTypeMismatch
+@dataclass(frozen=True)
+class RegistryKeyExists:
+    """Error when attempting to register a duplicate key."""
+
+    key: str
+    expected_type: str
+    kind: Literal["RegistryKeyExists"] = "RegistryKeyExists"
+
+
+RegistryError = RegistryKeyNotFound | RegistryTypeMismatch | RegistryKeyExists
+
+
+@dataclass(frozen=True)
+class FrozenRegistrySnapshot:
+    """
+    Immutable snapshot of SharedRegistry state.
+
+    Provides read-only view of registry contents at a point in time.
+    Prevents accidental mutation while allowing safe sharing across contexts.
+    """
+
+    tensors: Mapping[str, object]
+    bytes_data: Mapping[str, bytes]
+    metadata: Mapping[str, int | float | str]
+    models: Mapping[str, object]
+    optimizers: Mapping[str, object]
+    kernels: Mapping[str, object]
 
 
 class SharedRegistry:
     """Centralized registry for all effect interpreter data.
+
+    **Mutability Warning**: This registry uses mutable internal dictionaries.
+    For immutable snapshots, use `freeze_snapshot()` to obtain a read-only view.
+
+    **Recommended Pattern**:
+    ```python
+    registry = SharedRegistry()
+    # ... perform mutations ...
+    snapshot = registry.freeze_snapshot()
+    # Pass snapshot to contexts requiring immutability guarantee
+    ```
 
     Provides type-safe storage and retrieval of:
     - Tensors (PyTorch tensors, CuPy arrays)
@@ -98,16 +136,59 @@ class SharedRegistry:
         self._optimizers: dict[str, object] = {}
         self._kernels: dict[str, object] = {}
 
+    def freeze_snapshot(self) -> FrozenRegistrySnapshot:
+        """
+        Create immutable snapshot of current registry state.
+
+        Returns frozen view using MappingProxyType to prevent mutation.
+        Snapshot is independent of registry - subsequent mutations don't affect it.
+
+        Returns:
+            FrozenRegistrySnapshot with read-only mappings
+
+        Example:
+            >>> registry = SharedRegistry()
+            >>> registry.register_tensor("t1", torch.tensor([1.0]))
+            >>> snapshot = registry.freeze_snapshot()
+            >>> # snapshot.tensors is immutable - cannot modify
+        """
+        return FrozenRegistrySnapshot(
+            tensors=MappingProxyType(dict(self._tensors)),
+            bytes_data=MappingProxyType(dict(self._bytes)),
+            metadata=MappingProxyType(dict(self._metadata)),
+            models=MappingProxyType(dict(self._models)),
+            optimizers=MappingProxyType(dict(self._optimizers)),
+            kernels=MappingProxyType(dict(self._kernels)),
+        )
+
     # ========== Tensor Operations ==========
 
-    def register_tensor(self, tensor_id: str, tensor: object) -> None:
+    def register_tensor(self, tensor_id: str, tensor: object) -> Result[None, RegistryError]:
         """Register a tensor (PyTorch or CuPy) in the registry.
 
         Args:
             tensor_id: Unique identifier for the tensor.
             tensor: The tensor to store (PyTorch Tensor or CuPy ndarray).
         """
-        self._tensors[tensor_id] = tensor
+        match tensor_id in self._tensors:
+            case True:
+                return Failure(
+                    RegistryKeyExists(key=tensor_id, expected_type="torch.Tensor|cp.ndarray")
+                )
+            case False:
+                pass
+        match tensor:
+            case torch.Tensor() | cp.ndarray():
+                self._tensors[tensor_id] = tensor
+                return Success(None)
+            case value:
+                return Failure(
+                    RegistryTypeMismatch(
+                        key=tensor_id,
+                        expected_type="torch.Tensor|cp.ndarray",
+                        actual_type=type(value).__name__,
+                    )
+                )
 
     def get_tensor(self, tensor_id: str) -> Result[object, RegistryError]:
         """Get a tensor by ID (untyped).
@@ -183,14 +264,28 @@ class SharedRegistry:
 
     # ========== Bytes Operations ==========
 
-    def register_bytes(self, key: str, data: bytes) -> None:
+    def register_bytes(self, key: str, data: object) -> Result[None, RegistryError]:
         """Register bytes content by key.
 
         Args:
             key: Unique identifier for the bytes.
             data: The bytes to store.
         """
-        self._bytes[key] = data
+        match key in self._bytes:
+            case True:
+                return Failure(RegistryKeyExists(key=key, expected_type="bytes"))
+            case False:
+                pass
+        match data:
+            case bytes() | bytearray() | memoryview():
+                self._bytes[key] = bytes(data)
+                return Success(None)
+            case other:
+                return Failure(
+                    RegistryTypeMismatch(
+                        key=key, expected_type="bytes", actual_type=type(other).__name__
+                    )
+                )
 
     def get_bytes(self, key: str) -> Result[bytes, RegistryError]:
         """Get bytes content by key.
@@ -220,14 +315,28 @@ class SharedRegistry:
 
     # ========== Metadata Operations ==========
 
-    def register_metadata(self, key: str, value: int | float | str) -> None:
+    def register_metadata(self, key: str, value: object) -> Result[None, RegistryError]:
         """Register a metadata value.
 
         Args:
             key: Unique identifier for the metadata.
             value: The value to store.
         """
-        self._metadata[key] = value
+        match key in self._metadata:
+            case True:
+                return Failure(RegistryKeyExists(key=key, expected_type="metadata"))
+            case False:
+                pass
+        match value:
+            case int() | float() | str():
+                self._metadata[key] = value
+                return Success(None)
+            case other:
+                return Failure(
+                    RegistryTypeMismatch(
+                        key=key, expected_type="int|float|str", actual_type=type(other).__name__
+                    )
+                )
 
     def get_metadata(self, key: str) -> Result[int | float | str, RegistryError]:
         """Get a metadata value by key.
@@ -304,14 +413,19 @@ class SharedRegistry:
 
     # ========== Model Operations ==========
 
-    def register_model(self, model_id: str, model: object) -> None:
+    def register_model(self, model_id: str, model: object) -> Result[None, RegistryError]:
         """Register a model (PyTorch module).
 
         Args:
             model_id: Unique identifier for the model.
             model: The model to store.
         """
-        self._models[model_id] = model
+        match model_id in self._models:
+            case True:
+                return Failure(RegistryKeyExists(key=model_id, expected_type="model"))
+            case False:
+                self._models[model_id] = model
+                return Success(None)
 
     def get_model(self, model_id: str) -> Result[object, RegistryError]:
         """Get a model by ID.
@@ -341,14 +455,21 @@ class SharedRegistry:
 
     # ========== Optimizer Operations ==========
 
-    def register_optimizer(self, optimizer_id: str, optimizer: object) -> None:
+    def register_optimizer(
+        self, optimizer_id: str, optimizer: object
+    ) -> Result[None, RegistryError]:
         """Register an optimizer.
 
         Args:
             optimizer_id: Unique identifier for the optimizer.
             optimizer: The optimizer to store.
         """
-        self._optimizers[optimizer_id] = optimizer
+        match optimizer_id in self._optimizers:
+            case True:
+                return Failure(RegistryKeyExists(key=optimizer_id, expected_type="optimizer"))
+            case False:
+                self._optimizers[optimizer_id] = optimizer
+                return Success(None)
 
     def get_optimizer(self, optimizer_id: str) -> Result[object, RegistryError]:
         """Get an optimizer by ID.
@@ -378,14 +499,19 @@ class SharedRegistry:
 
     # ========== Kernel Operations ==========
 
-    def register_kernel(self, kernel_name: str, kernel_fn: object) -> None:
+    def register_kernel(self, kernel_name: str, kernel_fn: object) -> Result[None, RegistryError]:
         """Register a kernel function.
 
         Args:
             kernel_name: Unique identifier for the kernel.
             kernel_fn: The kernel function to store.
         """
-        self._kernels[kernel_name] = kernel_fn
+        match kernel_name in self._kernels:
+            case True:
+                return Failure(RegistryKeyExists(key=kernel_name, expected_type="kernel"))
+            case False:
+                self._kernels[kernel_name] = kernel_fn
+                return Success(None)
 
     def get_kernel(self, kernel_name: str) -> Result[object, RegistryError]:
         """Get a kernel by name.

@@ -313,13 +313,18 @@ class BlackScholes:
         self._cp_stream = cp.cuda.Stream(non_blocking=True)
         self._numba_stream = cuda.stream()
 
-        ngen_cfg = ConcurrentNormGeneratorConfig(
+        ngen_cfg_result = ConcurrentNormGeneratorConfig.create(
             rows=self._sp.timesteps,
             cols=self._sp.total_paths(),
             seed=self._sp.mc_seed,
             dtype=self._sp.dtype,
             skips=self._sp.skip,
         )
+        match ngen_cfg_result:
+            case Failure(err):
+                raise AssertionError(f"Invalid norm generator config: {err}")
+            case Success(ngen_cfg):
+                pass
         buffer_cfg = BufferConfig.create(self._sp.buffer_size, ngen_cfg.rows, ngen_cfg.cols)
         self._ngen_result = ConcurrentNormGenerator.create(buffer_cfg, ngen_cfg)
 
@@ -331,13 +336,7 @@ class BlackScholes:
                 return Failure(NormalsUnavailable(error=error))
             case Success(gen):
                 sp = self._sp.model_copy(update={"skip": gen.snapshot().skips}, deep=True)
-                return Success(
-                    BlackScholesConfig(
-                        sim_params=sp,
-                        path_scheme=self._cfg.path_scheme,
-                        normalization=self._cfg.normalization,
-                    )
-                )
+                return Success(self._cfg.model_copy(update={"sim_params": sp}, deep=True))
 
     # ....................................... effect builders .................
     def build_simulation_effects(
@@ -441,7 +440,11 @@ class BlackScholes:
                 pass
 
         self._cp_stream.synchronize()
-        return Success(self.SimResults(times=times, sims=sims, forwards=forwards, df=df))
+        match validate_model(self.SimResults, times=times, sims=sims, forwards=forwards, df=df):
+            case Success(sr):
+                return Success(sr)
+            case Failure(err):
+                raise AssertionError(f"SimResults validation failed: {err}")
 
     # ....................................... pricing .......................
     def price(
@@ -471,15 +474,18 @@ class BlackScholes:
                     call_price = df_last * cp.maximum(terminal - K, 0)
 
                 self._cp_stream.synchronize()
-                return Success(
-                    self.PricingResults(
-                        put_price_intrinsic=put_intr,
-                        call_price_intrinsic=call_intr,
-                        underlying=terminal,
-                        put_price=put_price,
-                        call_price=call_price,
-                    )
-                )
+                match validate_model(
+                    self.PricingResults,
+                    put_price_intrinsic=put_intr,
+                    call_price_intrinsic=call_intr,
+                    underlying=terminal,
+                    put_price=put_price,
+                    call_price=call_price,
+                ):
+                    case Success(pr):
+                        return Success(pr)
+                    case Failure(err):
+                        raise AssertionError(f"PricingResults validation failed: {err}")
 
     # ....................................... host helpers ...................
     def get_host_price(self, pr: PricingResults) -> HostPricingResults:
@@ -491,7 +497,8 @@ class BlackScholes:
             put_price = float(pr.put_price.mean().item())
             call_price = float(pr.call_price.mean().item())
         self._cp_stream.synchronize()
-        return self.HostPricingResults(
+        match validate_model(
+            self.HostPricingResults,
             put_price_intrinsic=put_intr,
             call_price_intrinsic=call_intr,
             underlying=underlying,
@@ -499,7 +506,11 @@ class BlackScholes:
             call_convexity=call_price - call_intr,
             put_price=put_price,
             call_price=call_price,
-        )
+        ):
+            case Success(host):
+                return host
+            case Failure(err):
+                raise AssertionError(f"HostPricingResults validation failed: {err}")
 
     def price_to_host(self, inputs: Inputs) -> Result[HostPricingResults, NormalsError]:
         """Convenience wrapper - GPU price → CPU scalars."""

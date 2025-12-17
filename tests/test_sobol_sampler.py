@@ -22,15 +22,23 @@ The file passes **``mypy --strict``** with no ignores.
 from __future__ import annotations
 
 import math
-from typing import Sequence
+from typing import Sequence, cast
 
 import pytest
 
-from pydantic import BaseModel, ValidationError, model_validator
+from pydantic import BaseModel, model_validator
 
 from spectralmc.errors.sampler import BoundSpecInvalid, DimensionMismatch, SamplerValidationFailed
 from spectralmc.result import Failure, Success
-from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler, build_bound_spec
+from spectralmc.sobol_sampler import (
+    BoundSpec,
+    DomainBounds,
+    SobolConfig,
+    SobolSampler,
+    build_bound_spec,
+    build_domain_bounds,
+    build_sobol_config,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -83,6 +91,16 @@ def _pairs(pts: Sequence[Point]) -> list[tuple[float, float]]:
     return [(p.x, p.y) for p in pts]
 
 
+def _make_domain_bounds(
+    model_cls: type[BaseModel], dims: dict[str, BoundSpec]
+) -> DomainBounds[BaseModel]:
+    match build_domain_bounds(model_cls, dims):
+        case Success(domain_bounds):
+            return domain_bounds
+        case Failure(err):
+            pytest.fail(f"failed to build domain bounds: {err}")
+
+
 # --------------------------------------------------------------------------- #
 # Tests                                                                       #
 # --------------------------------------------------------------------------- #
@@ -91,10 +109,13 @@ def _pairs(pts: Sequence[Point]) -> list[tuple[float, float]]:
 @pytest.mark.parametrize("n_skip, n_check", _SKIP_REPRO)
 def test_skip_repro(n_skip: int, n_check: int) -> None:
     """`skip` must yield a deterministic sequence offset."""
-    dims = {
-        "x": build_bound_spec(0.0, 1.0).unwrap(),
-        "y": build_bound_spec(-1.0, 1.0).unwrap(),
-    }
+    dims = _make_domain_bounds(
+        Point,
+        {
+            "x": build_bound_spec(0.0, 1.0).unwrap(),
+            "y": build_bound_spec(-1.0, 1.0).unwrap(),
+        },
+    )
 
     manual = SobolSampler.create(Point, dims, config=SobolConfig(seed=_SEED))
     match manual:
@@ -124,24 +145,27 @@ def test_skip_repro(n_skip: int, n_check: int) -> None:
         case Failure(fast_err):
             pytest.fail(f"fast sampler failed: {fast_err}")
 
-    assert _pairs(expected) == _pairs(got)
+    assert _pairs(cast(Sequence[Point], expected)) == _pairs(cast(Sequence[Point], got))
 
 
-_BOUND_CASES: tuple[tuple[dict[str, BoundSpec], type[BaseModel]], ...] = (
-    ({"x": build_bound_spec(0.0, 1.0).unwrap()}, OneDim),
+_BOUND_CASES: tuple[tuple[DomainBounds[BaseModel], type[BaseModel]], ...] = (
+    (_make_domain_bounds(OneDim, {"x": build_bound_spec(0.0, 1.0).unwrap()}), OneDim),
     (
-        {
-            "x": build_bound_spec(-3.14, 3.14).unwrap(),
-            "y": build_bound_spec(-1.0, 1.0).unwrap(),
-            "z": build_bound_spec(10.0, 20.0).unwrap(),
-        },
+        _make_domain_bounds(
+            ThreeDim,
+            {
+                "x": build_bound_spec(-3.14, 3.14).unwrap(),
+                "y": build_bound_spec(-1.0, 1.0).unwrap(),
+                "z": build_bound_spec(10.0, 20.0).unwrap(),
+            },
+        ),
         ThreeDim,
     ),
 )
 
 
 @pytest.mark.parametrize(("dims", "model_cls"), _BOUND_CASES)
-def test_bounds(dims: dict[str, BoundSpec], model_cls: type[BaseModel]) -> None:
+def test_bounds(dims: DomainBounds[BaseModel], model_cls: type[BaseModel]) -> None:
     """Every generated coordinate must lie within its declared bounds."""
     sampler = SobolSampler.create(model_cls, dims, config=SobolConfig(seed=_SEED))
     match sampler:
@@ -180,8 +204,7 @@ def test_dim_mismatch() -> None:
         y: float
 
     dims = {"x": build_bound_spec(0.0, 1.0).unwrap()}
-    sampler = SobolSampler.create(XY, dims, config=SobolConfig(seed=_SEED))
-    match sampler:
+    match build_domain_bounds(XY, dims):
         case Failure(err):
             assert isinstance(err, DimensionMismatch)
         case Success(_):
@@ -190,13 +213,12 @@ def test_dim_mismatch() -> None:
 
 @pytest.mark.parametrize("param", ["skip", "seed"])
 def test_negative_args(param: str) -> None:
-    """Negative `skip` or `seed` must raise *ValidationError* via Pydantic."""
+    """Negative `skip` or `seed` must yield Failure via builder."""
     if param == "skip":
-        with pytest.raises(ValidationError):
-            SobolConfig(seed=_SEED, skip=-1)
+        result = build_sobol_config(seed=_SEED, skip=-1)
     else:
-        with pytest.raises(ValidationError):
-            SobolConfig(seed=-1)
+        result = build_sobol_config(seed=-1)
+    assert isinstance(result, Failure)
 
 
 def test_validator_bubbles() -> None:
@@ -209,7 +231,7 @@ def test_validator_bubbles() -> None:
         def _fail(self) -> AlwaysFail:
             raise ValueError("forced failure")
 
-    dims = {"z": build_bound_spec(0.0, 1.0).unwrap()}
+    dims = _make_domain_bounds(AlwaysFail, {"z": build_bound_spec(0.0, 1.0).unwrap()})
     sampler = SobolSampler.create(AlwaysFail, dims, config=SobolConfig(seed=_SEED))
     match sampler:
         case Success(s):
@@ -226,10 +248,13 @@ def test_validator_bubbles() -> None:
 
 def test_smoke_two_dim() -> None:
     """End-to-end sanity check sampling four 2-D points."""
-    dims = {
-        "x": build_bound_spec(0.0, 1.0).unwrap(),
-        "y": build_bound_spec(-1.0, 1.0).unwrap(),
-    }
+    dims = _make_domain_bounds(
+        Point,
+        {
+            "x": build_bound_spec(0.0, 1.0).unwrap(),
+            "y": build_bound_spec(-1.0, 1.0).unwrap(),
+        },
+    )
     sampler = SobolSampler.create(Point, dims, config=SobolConfig(seed=_SEED))
     match sampler:
         case Success(s):
@@ -242,7 +267,7 @@ def test_smoke_two_dim() -> None:
         case Failure(err):
             pytest.fail(f"sampler creation failed: {err}")
 
-    pairs = _pairs(pts)
+    pairs = _pairs(cast(Sequence[Point], pts))
     assert len(set(pairs)) == 4  # uniqueness
     xs, ys = zip(*pairs)
     assert not math.isclose(min(xs), max(xs))

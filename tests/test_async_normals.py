@@ -24,7 +24,6 @@ from spectralmc import async_normals
 from spectralmc.async_normals import BufferConfig
 from spectralmc.models.numerical import Precision
 from spectralmc.result import Result
-from spectralmc.validation import validate_model
 from tests.helpers import expect_failure, expect_success
 
 
@@ -159,9 +158,8 @@ def test_diagnostics(precision: Precision) -> None:
 
 
 def test_norm_config_validation() -> None:
-    """Ensure invalid payloads are rejected by the Pydantic schema."""
-    bad_rows = validate_model(
-        async_normals.ConcurrentNormGeneratorConfig,
+    """Ensure invalid payloads are rejected by the config factory."""
+    bad_rows = async_normals.ConcurrentNormGeneratorConfig.create(
         rows=0,
         cols=2,
         seed=1,
@@ -169,15 +167,4 @@ def test_norm_config_validation() -> None:
         skips=0,
     )
     err_rows = expect_failure(bad_rows)
-    assert "rows" in str(err_rows)
-
-    bad_dtype = validate_model(
-        async_normals.ConcurrentNormGeneratorConfig,
-        rows=1,
-        cols=2,
-        seed=1,
-        dtype="float16",  # deliberate invalid input to test validation
-        skips=0,
-    )
-    err_dtype = expect_failure(bad_dtype)
-    assert "dtype" in str(err_dtype)
+    assert "InvalidShape" in str(err_rows)

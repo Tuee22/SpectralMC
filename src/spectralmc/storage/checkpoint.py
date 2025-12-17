@@ -14,10 +14,14 @@ from spectralmc.effects import (
     WriteObject,
     sequence_effects,
 )
-from spectralmc.errors.serialization import SerializationError
+from spectralmc.errors.serialization import SerializationError, ValidationFailed
 from spectralmc.errors.torch_facade import TorchFacadeError
-from spectralmc.gbm_trainer import ComplexValuedModel, GbmCVNNPricerConfig
-from spectralmc.models.torch import AdamOptimizerState
+from spectralmc.gbm_trainer import (
+    ComplexValuedModel,
+    GbmCVNNPricerConfig,
+    build_gbm_cvnn_pricer_config,
+)
+from spectralmc.models.torch import build_adam_optimizer_state
 from spectralmc.proto import tensors_pb2
 from spectralmc.result import Failure, Result, Success
 from spectralmc.serialization import compute_sha256
@@ -57,8 +61,16 @@ def create_checkpoint_from_snapshot(
     # Get optimizer state (may be None)
     optimizer_state = snapshot.optimizer_state
     if optimizer_state is None:
-        # Create empty optimizer state for serialization
-        optimizer_state = AdamOptimizerState(param_states={}, param_groups=[])
+        # Create empty optimizer state for serialization - use Result-wrapped factory
+        optimizer_state_result = build_adam_optimizer_state(param_states={}, param_groups=[])
+
+        # Pattern match to extract value (empty state should never fail validation)
+        match optimizer_state_result:
+            case Success(state):
+                optimizer_state = state
+            case Failure(err):
+                # This should never happen for empty state, but enforce Result pattern
+                raise RuntimeError(f"Failed to create empty optimizer state: {err}")
 
     # Get RNG states
     cpu_rng_state = snapshot.torch_cpu_rng_state or b""
@@ -161,18 +173,20 @@ async def load_snapshot_from_checkpoint(
     cvnn: ComplexValuedModel = cvnn_template
 
     # Create GbmCVNNPricerConfig
-    return Success(
-        GbmCVNNPricerConfig(
-            cfg=cfg.cfg,  # Use existing BlackScholes config
-            domain_bounds=cfg.domain_bounds,  # Use existing domain bounds
-            cvnn=cvnn,
-            optimizer_state=optimizer_state if optimizer_state.param_states else None,
-            global_step=global_step,
-            sobol_skip=cfg.sobol_skip,  # Use existing sobol skip
-            torch_cpu_rng_state=cpu_rng_state if cpu_rng_state else None,
-            torch_cuda_rng_states=cuda_rng_states if cuda_rng_states else None,
-        )
-    )
+    match build_gbm_cvnn_pricer_config(
+        cfg=cfg.cfg,  # Use existing BlackScholes config
+        domain_bounds=cfg.domain_bounds,  # Use existing domain bounds
+        cvnn=cvnn,
+        optimizer_state=optimizer_state if optimizer_state.param_states else None,
+        global_step=global_step,
+        sobol_skip=cfg.sobol_skip,  # Use existing sobol skip
+        torch_cpu_rng_state=cpu_rng_state if cpu_rng_state else None,
+        torch_cuda_rng_states=cuda_rng_states if cuda_rng_states else None,
+    ):
+        case Success(config):
+            return Success(config)
+        case Failure(err):
+            return Failure(ValidationFailed(error=err))
 
 
 def build_commit_effects(

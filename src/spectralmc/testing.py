@@ -10,6 +10,7 @@ import torch
 
 from spectralmc.effects import ForwardNormalization, PathScheme
 from spectralmc.gbm import (
+    BlackScholes,
     BlackScholesConfig,
     SimulationParams,
     ThreadsPerBlock,
@@ -20,7 +21,13 @@ from spectralmc.gbm_trainer import ComplexValuedModel, GbmCVNNPricerConfig
 from spectralmc.models.torch import AdamOptimizerState
 from spectralmc.models.numerical import Precision
 from spectralmc.result import Failure, Success
-from spectralmc.sobol_sampler import BoundSpec, build_bound_spec
+from spectralmc.sobol_sampler import (
+    BoundSpec,
+    DomainBounds,
+    build_bound_spec,
+    build_domain_bounds,
+)
+from spectralmc.validation import validate_model
 
 _DEFAULT_TIMESTEPS: Final[int] = 100
 _DEFAULT_NETWORK_SIZE: Final[int] = 1024
@@ -47,7 +54,7 @@ def default_domain_bounds(
     r: tuple[float, float] = (-0.20, 0.20),
     d: tuple[float, float] = (-0.20, 0.20),
     v: tuple[float, float] = (0.0, 2.0),
-) -> dict[str, BoundSpec]:
+) -> DomainBounds[BlackScholes.Inputs]:
     """Provide default Sobol bounds for Black-Scholes inputs."""
 
     def _bound(name: str, bounds: tuple[float, float]) -> BoundSpec:
@@ -58,7 +65,7 @@ def default_domain_bounds(
             case Failure(error):
                 raise AssertionError(f"Invalid bounds for {name}: {error}")
 
-    return {
+    bound_map = {
         "X0": _bound("X0", x0),
         "K": _bound("K", k),
         "T": _bound("T", t),
@@ -66,6 +73,11 @@ def default_domain_bounds(
         "d": _bound("d", d),
         "v": _bound("v", v),
     }
+    match build_domain_bounds(BlackScholes.Inputs, bound_map):
+        case Success(domain_bounds):
+            return domain_bounds
+        case Failure(error):
+            raise AssertionError(f"Invalid domain bounds: {error}")
 
 
 def make_test_simulation_params(
@@ -121,7 +133,7 @@ def make_gbm_cvnn_config(
     global_step: int = 0,
     sim_params: SimulationParams | None = None,
     bs_config: BlackScholesConfig | None = None,
-    domain_bounds: dict[str, BoundSpec] | None = None,
+    domain_bounds: DomainBounds[BlackScholes.Inputs] | None = None,
     sobol_skip: int = 0,
     optimizer_state: AdamOptimizerState | None = None,
 ) -> GbmCVNNPricerConfig:
@@ -138,7 +150,8 @@ def make_gbm_cvnn_config(
         else []
     )
 
-    return GbmCVNNPricerConfig(
+    cfg_result = validate_model(
+        GbmCVNNPricerConfig,
         cfg=resolved_bs_config,
         domain_bounds=domain_bounds or default_domain_bounds(),
         cvnn=model,
@@ -148,3 +161,8 @@ def make_gbm_cvnn_config(
         torch_cpu_rng_state=cpu_rng_state,
         torch_cuda_rng_states=cuda_states,
     )
+    match cfg_result:
+        case Success(cfg):
+            return cfg
+        case Failure(error):
+            raise AssertionError(f"Failed to build GbmCVNNPricerConfig: {error}")

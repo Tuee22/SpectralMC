@@ -62,7 +62,7 @@ from typing import (
 import cupy as cp
 import numpy as np
 from cupy.cuda import Stream as CuPyStream
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt
+from pydantic import BaseModel, ConfigDict, PositiveInt, ValidationError
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -72,6 +72,7 @@ from spectralmc.models.torch import (
     AnyDType,
     Device,
     FullPrecisionDType,
+    build_adam_optimizer_state,
 )
 
 from spectralmc.effects import (
@@ -103,6 +104,7 @@ from spectralmc.errors.serialization import SerializationError
 from spectralmc.errors.torch_facade import TorchFacadeError
 from spectralmc.errors.trainer import (
     InvalidTrainerConfig,
+    InvalidTrainingConfig,
     OptimizerStateSerializationFailed,
     PredictionFailed,
     SamplerInitFailed,
@@ -114,7 +116,7 @@ from spectralmc.models.numerical import Precision
 from spectralmc.result import Failure, Result, Success, collect_results, fold_results
 from spectralmc.serialization import compute_sha256
 from spectralmc.serialization.tensors import ModelCheckpointConverter
-from spectralmc.sobol_sampler import BoundSpec, SobolConfig, SobolSampler
+from spectralmc.sobol_sampler import DomainBounds, SobolSampler, build_sobol_config
 from spectralmc.storage.errors import (
     CommitError,
     ConflictError,
@@ -122,6 +124,7 @@ from spectralmc.storage.errors import (
     StorageError,
 )
 from spectralmc.storage.store import AsyncBlockchainModelStore
+from spectralmc.validation import validate_model
 
 get_torch_handle()
 nn = torch.nn
@@ -158,6 +161,7 @@ __all__: tuple[str, ...] = (
     "TensorBoardLogger",
     "GbmCVNNPricer",
     "TrainingConfig",
+    "build_training_config",
     "NoCommit",
     "FinalCommit",
     "IntervalCommit",
@@ -262,21 +266,60 @@ StepLogger = Callable[["StepMetrics"], None]
 """User-supplied callback executed once after every optimiser step."""
 
 
-class TrainingConfig(BaseModel):
+@dataclass(frozen=True)
+class TrainingConfig:
     """Validated training hyperparameters."""
 
-    num_batches: PositiveInt
-    batch_size: PositiveInt
-    learning_rate: float = Field(gt=0.0, lt=1.0)
+    num_batches: int
+    batch_size: int
+    learning_rate: float
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+
+def build_training_config(
+    *, num_batches: int, batch_size: int, learning_rate: float
+) -> Result[TrainingConfig, InvalidTrainingConfig]:
+    """Validate and construct TrainingConfig."""
+    if num_batches <= 0:
+        return Failure(
+            InvalidTrainingConfig(
+                num_batches=num_batches,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                message="num_batches must be > 0",
+            )
+        )
+    if batch_size <= 0:
+        return Failure(
+            InvalidTrainingConfig(
+                num_batches=num_batches,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                message="batch_size must be > 0",
+            )
+        )
+    if not (0.0 < learning_rate < 1.0):
+        return Failure(
+            InvalidTrainingConfig(
+                num_batches=num_batches,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                message="learning_rate must be in (0, 1)",
+            )
+        )
+    return Success(
+        TrainingConfig(
+            num_batches=num_batches,
+            batch_size=batch_size,
+            learning_rate=learning_rate,
+        )
+    )
 
 
 class GbmCVNNPricerConfig(BaseModel):
     """Frozen snapshot used for (de-)serialising a trainer."""
 
     cfg: BlackScholesConfig
-    domain_bounds: dict[str, BoundSpec]
+    domain_bounds: DomainBounds[BlackScholes.Inputs]
     cvnn: ComplexValuedModel
     optimizer_state: AdamOptimizerState | None = None
     global_step: int = 0
@@ -307,7 +350,8 @@ class _BatchState:
         )
 
 
-class StepMetrics(BaseModel):
+@dataclass(frozen=True)
+class StepMetrics:
     """Scalar diagnostics emitted at the end of every optimiser step."""
 
     step: int
@@ -318,10 +362,9 @@ class StepMetrics(BaseModel):
     optimizer: optim.Optimizer
     model: ComplexValuedModel
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra="forbid")
 
-
-class TrainingResult(BaseModel):
+@dataclass(frozen=True)
+class TrainingResult:
     """Immutable outcome of a training run.
 
     Note: blockchain_version field intentionally omitted as _commit_to_blockchain
@@ -334,7 +377,11 @@ class TrainingResult(BaseModel):
     total_batches: int
     final_grad_norm: float
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra="forbid")
+
+def build_gbm_cvnn_pricer_config(
+    **kwargs: object,
+) -> Result[GbmCVNNPricerConfig, ValidationError]:
+    return validate_model(GbmCVNNPricerConfig, **kwargs)
 
 
 # =============================================================================
@@ -637,7 +684,7 @@ class GbmCVNNPricer:
         # User payload -------------------------------------------------- #
         self._sim_params: SimulationParams = cfg.cfg.sim_params
         self._cvnn: ComplexValuedModel = cfg.cvnn
-        self._domain_bounds: dict[str, BoundSpec] = cfg.domain_bounds
+        self._domain_bounds: DomainBounds[BlackScholes.Inputs] = cfg.domain_bounds
         self._optimizer_state: AdamOptimizerState | None = cfg.optimizer_state
         self._global_step: int = cfg.global_step
         self._sobol_skip: int = cfg.sobol_skip
@@ -670,13 +717,13 @@ class GbmCVNNPricer:
             mc_engine=BlackScholes(cfg.cfg),
             device=self._device,
         )
+        sobol_cfg = build_sobol_config(
+            seed=self._sim_params.mc_seed, skip=self._sobol_skip
+        ).unwrap()
         sampler_result = SobolSampler.create(
             pydantic_class=BlackScholes.Inputs,
             dimensions=self._domain_bounds,
-            config=SobolConfig(
-                seed=self._sim_params.mc_seed,
-                skip=self._sobol_skip,
-            ),
+            config=sobol_cfg,
         )
         self._sampler_result = sampler_result
 
@@ -754,18 +801,20 @@ class GbmCVNNPricer:
             case Failure(error):
                 return Failure(error)
             case Success(cfg):
-                return Success(
-                    GbmCVNNPricerConfig(
-                        cfg=cfg,
-                        domain_bounds=self._domain_bounds,
-                        cvnn=self._cvnn,
-                        optimizer_state=self._optimizer_state,
-                        global_step=self._global_step,
-                        sobol_skip=self._sobol_skip,
-                        torch_cpu_rng_state=torch_cpu_rng,
-                        torch_cuda_rng_states=torch_cuda_rng,
-                    )
-                )
+                match build_gbm_cvnn_pricer_config(
+                    cfg=cfg,
+                    domain_bounds=self._domain_bounds,
+                    cvnn=self._cvnn,
+                    optimizer_state=self._optimizer_state,
+                    global_step=self._global_step,
+                    sobol_skip=self._sobol_skip,
+                    torch_cpu_rng_state=torch_cpu_rng,
+                    torch_cuda_rng_states=torch_cuda_rng,
+                ):
+                    case Success(snapshot_cfg):
+                        return Success(snapshot_cfg)
+                    case Failure(err):
+                        raise AssertionError(f"GbmCVNNPricerConfig validation failed: {err}")
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                   #
@@ -1121,9 +1170,18 @@ class GbmCVNNPricer:
         Returns:
             Result containing (checkpoint_bytes, content_hash) or SerializationError/TorchFacadeError
         """
-        optimizer_state = snapshot.optimizer_state or AdamOptimizerState(
-            param_states={}, param_groups=[]
-        )
+        # Use Result-wrapped factory for fallback case
+        if snapshot.optimizer_state is not None:
+            optimizer_state = snapshot.optimizer_state
+        else:
+            # Create empty optimizer state with Result pattern
+            optimizer_state_result = build_adam_optimizer_state(param_states={}, param_groups=[])
+            match optimizer_state_result:
+                case Success(state):
+                    optimizer_state = state
+                case Failure(err):
+                    # Empty state should never fail validation
+                    raise RuntimeError(f"Failed to create empty optimizer state: {err}")
         checkpoint_result = ModelCheckpointConverter.to_proto(
             model_state_dict=snapshot.cvnn.state_dict(),
             optimizer_state=optimizer_state,
@@ -1747,7 +1805,8 @@ class GbmCVNNPricer:
                 forward = contract.X0 * math.exp((contract.r - contract.d) * contract.T)
                 put_price = real_val
                 call_price = put_price + forward - contract.K * discount
-                return BlackScholes.HostPricingResults(
+                match validate_model(
+                    BlackScholes.HostPricingResults,
                     underlying=forward,
                     put_price=put_price,
                     call_price=call_price,
@@ -1755,7 +1814,11 @@ class GbmCVNNPricer:
                     call_price_intrinsic=discount * max(forward - contract.K, 0.0),
                     put_convexity=put_price - discount * max(contract.K - forward, 0.0),
                     call_convexity=call_price - discount * max(forward - contract.K, 0.0),
-                )
+                ):
+                    case Success(host):
+                        return host
+                    case Failure(err):
+                        raise AssertionError(f"HostPricingResults validation failed: {err}")
 
             return Success(list(map(_price_contract, zip(avg_ifft, inputs, strict=True))))
         except Exception as exc:

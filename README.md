@@ -157,40 +157,54 @@ Train models with automatic blockchain commits:
 
 ```python
 # File: README.md
+import asyncio
+import torch
 from spectralmc.gbm_trainer import (
     FinalAndIntervalCommit,
     FinalCommit,
     GbmCVNNPricer,
     TrainingConfig,
+    build_training_config,
 )
+from spectralmc.result import Failure, Success
 from spectralmc.storage import AsyncBlockchainModelStore
+from spectralmc.testing import make_gbm_cvnn_config
 
-async with AsyncBlockchainModelStore("my-model-bucket") as store:
-    pricer = GbmCVNNPricer(config)
+assert torch.cuda.is_available(), "CUDA required for training"
+config = make_gbm_cvnn_config(torch.nn.Linear(5, 100).to("cuda"))
 
-    training_config = TrainingConfig(
-        num_batches=1000,
-        batch_size=32,
-        learning_rate=0.001
-    )
+# Auto-commit only works when train() is called from a synchronous context
+store = asyncio.run(AsyncBlockchainModelStore("my-model-bucket").__aenter__())
+try:
+    match GbmCVNNPricer.create(config):
+        case Success(pricer):
+            training_config = build_training_config(
+                num_batches=1000,
+                batch_size=32,
+                learning_rate=0.001,
+            ).unwrap()
 
-    # Auto-commit after training completes
-    pricer.train(
-        training_config,
-        blockchain_store=store,
-        commit_plan=FinalCommit(
-            commit_message_template="Final: step={step}, loss={loss:.4f}"
-        ),
-    )
+            # Auto-commit after training completes
+            pricer.train(
+                training_config,
+                blockchain_store=store,
+                commit_plan=FinalCommit(
+                    commit_message_template="Final: step={step}, loss={loss:.4f}"
+                ),
+            )
 
-    # Or commit every 100 batches during training
-    pricer.train(
-        training_config,
-        blockchain_store=store,
-        commit_plan=FinalAndIntervalCommit(
-            interval=100, commit_message_template="Checkpoint step={step}"
-        ),
-    )
+            # Or commit every 100 batches during training
+            pricer.train(
+                training_config,
+                blockchain_store=store,
+                commit_plan=FinalAndIntervalCommit(
+                    interval=100, commit_message_template="Checkpoint step={step}"
+                ),
+            )
+        case Failure(error):
+            raise RuntimeError(f"Failed to create pricer: {error}")
+finally:
+    asyncio.run(store.__aexit__(None, None, None))
 ```
 
 ### Manual Model Commits
@@ -199,18 +213,31 @@ async with AsyncBlockchainModelStore("my-model-bucket") as store:
 # File: README.md
 import torch
 from spectralmc.runtime import get_torch_handle
+from spectralmc.gbm_trainer import GbmCVNNPricer
 from spectralmc.storage import AsyncBlockchainModelStore, commit_snapshot
+from spectralmc.testing import make_gbm_cvnn_config
+from spectralmc.result import Failure, Success
 
 get_torch_handle()
-model = torch.nn.Linear(5, 5)
-config = make_config(model)  # Create GbmCVNNPricerConfig
+model = torch.nn.Linear(5, 5).to("cuda")
+config = make_gbm_cvnn_config(model)
+
+match GbmCVNNPricer.create(config):
+    case Failure(error):
+        raise RuntimeError(f"Failed to create pricer: {error}")
+    case Success(pricer):
+        match pricer.snapshot():
+            case Failure(error):
+                raise RuntimeError(f"Failed to snapshot pricer: {error}")
+            case Success(snapshot):
+                pass  # Deterministic GbmCVNNPricerConfig
 
 # Commit to blockchain storage
 async with AsyncBlockchainModelStore("my-model-bucket") as store:
     version = await commit_snapshot(
         store,
-        config,
-        message="Trained for 1000 epochs, loss=0.001"
+        snapshot,
+        message="Trained for 1000 epochs, loss=0.001",
     )
     print(f"Committed version {version.counter}")
 ```
@@ -219,18 +246,43 @@ async with AsyncBlockchainModelStore("my-model-bucket") as store:
 
 ```python
 # File: README.md
-from spectralmc.storage import InferenceClient
+import torch
+from spectralmc.storage import (
+    AsyncBlockchainModelStore,
+    InferenceClient,
+    TrackingMode,
+    pinned_mode,
+)
+from spectralmc.result import Success
+from spectralmc.testing import make_gbm_cvnn_config
 
-# Pinned mode: Always serve version 42 (production stability)
-async with InferenceClient(
-    version_counter=42,
-    poll_interval=60.0,
-    store=store,
-    model_template=model,
-    config_template=config
-) as client:
-    snapshot = client.get_model()
-    # Run inference with snapshot.cvnn
+model_template = torch.nn.Linear(5, 100).to("cuda")
+config_template = make_gbm_cvnn_config(model_template)
+
+async with AsyncBlockchainModelStore("my-model-bucket") as store:
+    # Pinned mode: Always serve version 42 (production stability)
+    match pinned_mode(42):
+        case Success(mode):
+            async with InferenceClient(
+                mode=mode,
+                poll_interval=60.0,
+                store=store,
+                model_template=model_template,
+                config_template=config_template,
+            ) as client:
+                snapshot = client.get_model()
+                # Run inference with snapshot.cvnn
+
+    # Tracking mode: follow latest version automatically
+    async with InferenceClient(
+        mode=TrackingMode(),
+        poll_interval=30.0,
+        store=store,
+        model_template=model_template,
+        config_template=config_template,
+    ) as client:
+        latest_snapshot = client.get_model()
+        # Run inference with latest_snapshot.cvnn
 ```
 
 ### CLI Tools
@@ -248,7 +300,7 @@ python -m spectralmc.storage gc-run my-model-bucket 10 --yes
 
 # Log to TensorBoard
 python -m spectralmc.storage tensorboard-log my-model-bucket
-tensorboard --logdir=runs/
+tensorboard --logdir=runs/blockchain_models
 ```
 
 For complete documentation, see [CLAUDE.md](CLAUDE.md).
@@ -337,14 +389,3 @@ Author: matt@resolvefintech.com
 
 
 Send any questions or suggestions to this email address.
-
-## To-do:
--Genaralize the library to be a server via asynciohttp (spectralmc server)
--Generalize pricers to take instances of async_normals from a shared instance 
--create an abstract interface for queueing requests and referencing market data
-    - there will be a market data class topology (spots, fixings, curves, surfaces) and an abstract server. queries will be based on (valuation_namespace, val_datetime, data_asof). For absolute reproducibility, any valuation request must uniquely identify a dataset.
-    If spectralmc is being used for intermediate processing of data (eg turning raw quotes into a surface), it
-    will store the (valuation_namespace, val_datetime, data_asof) that was used for creating it. it will have
-    the same (valuation_namespace, val_datetime) but a later data_asof.
-    -There will be something declarative for running real-time jobs, eg one per second
--every class that allocates GPU memory has a hard cap (to manage shared memory across pricers)

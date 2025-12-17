@@ -529,6 +529,85 @@ def use_bounds(lower: float, upper: float) -> Result[float, InvalidBoundsError]:
             return Failure(error)
 ```
 
+## Shape-Safe Mappings
+
+When a mapping must cover an exact field set, wrap it so incomplete/extra keys cannot exist.
+
+```python
+# File: src/spectralmc/sobol_sampler.py
+@dataclass(frozen=True)
+class DomainBounds(Mapping[str, BoundSpec]):
+    _fields: tuple[str, ...]
+    _bounds: Mapping[str, BoundSpec]
+
+def build_domain_bounds(
+    pydantic_class: type[BaseModel], bounds: Mapping[str, BoundSpec]
+) -> Result[DomainBounds, DimensionMismatch]:
+    if set(bounds) != set(pydantic_class.model_fields):
+        return Failure(
+            DimensionMismatch(
+                expected_fields=tuple(pydantic_class.model_fields),
+                provided_fields=tuple(bounds),
+            )
+        )
+    return Success(
+        DomainBounds(
+            _fields=tuple(pydantic_class.model_fields),
+            _bounds=MappingProxyType(dict(bounds)),
+        )
+    )
+
+# Usage: impossible to hold partial/excess bounds after this point
+domain_bounds = build_domain_bounds(BlackScholes.Inputs, raw_bounds).unwrap()
+sampler = SobolSampler.create(BlackScholes.Inputs, domain_bounds, config=cfg)
+```
+
+## Registry Validation via Result
+
+Registry operations must not throw for expected validation failures. Use Result-returning
+registrations so interpreter code can propagate errors explicitly:
+
+```python
+# File: src/spectralmc/effects/registry.py
+@dataclass(frozen=True)
+class RegistryKeyExists:
+    key: str
+    expected_type: str
+    kind: Literal["RegistryKeyExists"] = "RegistryKeyExists"
+
+
+class SharedRegistry:
+    def register_tensor(self, tensor_id: str, tensor: object) -> Result[None, RegistryError]:
+        match tensor_id in self._tensors:
+            case True:
+                return Failure(RegistryKeyExists(key=tensor_id, expected_type="torch.Tensor|cp.ndarray"))
+            case False:
+                pass
+        match tensor:
+            case torch.Tensor() | cp.ndarray():
+                self._tensors[tensor_id] = tensor
+                return Success(None)
+            case value:
+                return Failure(
+                    RegistryTypeMismatch(
+                        key=tensor_id,
+                        expected_type="torch.Tensor|cp.ndarray",
+                        actual_type=type(value).__name__,
+                    )
+                )
+```
+
+Interpreter calls must handle these Results, keeping control flow pure and avoiding
+exceptions for expected error states.
+
+## Pydantic Construction Guard
+
+Direct `BaseModel(...)` calls in production code are forbidden. All Pydantic construction
+must go through a Result-returning helper (e.g., `validate_model`, `build_*`). A tooling
+guard (`tools/check_pydantic_construction.py`) scans `src/` and fails `check-code` if it
+finds direct construction outside allowlisted builders/tests. This keeps validation in the
+Result channel and preserves purity in interpreters and business logic.
+
 ---
 
 ## Purity Summary Table

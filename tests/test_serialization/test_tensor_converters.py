@@ -134,7 +134,7 @@ def test_adam_optimizer_state_round_trip() -> None:
         ),
     }
 
-    param_groups = [
+    param_groups = (
         AdamParamGroup(
             params=[0, 1],
             lr=0.001,
@@ -142,8 +142,8 @@ def test_adam_optimizer_state_round_trip() -> None:
             eps=1e-8,
             weight_decay=0.0,
             amsgrad=False,
-        )
-    ]
+        ),
+    )
 
     original = AdamOptimizerState(param_states=param_states, param_groups=param_groups)
 
@@ -266,7 +266,7 @@ def test_model_checkpoint_round_trip() -> None:
         ),
     }
 
-    param_groups = [
+    param_groups = (
         AdamParamGroup(
             params=[0, 1],
             lr=0.001,
@@ -274,8 +274,8 @@ def test_model_checkpoint_round_trip() -> None:
             eps=1e-8,
             weight_decay=0.0,
             amsgrad=False,
-        )
-    ]
+        ),
+    )
 
     optimizer_state = AdamOptimizerState(param_states=param_states, param_groups=param_groups)
 

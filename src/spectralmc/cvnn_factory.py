@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TypeAlias
 
-from pydantic import BaseModel, ConfigDict, PositiveInt
+from pydantic import BaseModel, ConfigDict, PositiveInt, ValidationError
 
 from spectralmc.cvnn import (
     ComplexLinear,
@@ -29,7 +29,8 @@ from spectralmc.models.torch import (
     default_device,
     default_dtype,
 )
-from spectralmc.result import Failure, Success, collect_results, fold_results
+from spectralmc.result import Failure, Result, Success, collect_results, fold_results
+from spectralmc.validation import validate_model
 import torch
 from spectralmc.runtime import get_torch_handle
 
@@ -44,6 +45,7 @@ __all__: tuple[str, ...] = (
     "PreserveWidth",
     "ExplicitWidth",
     "CVNNConfig",
+    "build_cvnn_config",
     "build_model",
     "load_model",
     "get_safetensors",
@@ -152,6 +154,23 @@ class CVNNConfig(BaseModel):
     final_activation: ActivationCfg | None = None
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+def build_cvnn_config(
+    *,
+    dtype: AnyDType,
+    layers: list[LayerCfg],
+    seed: int,
+    final_activation: ActivationCfg | None = None,
+) -> Result[CVNNConfig, ValidationError]:
+    """Result-wrapped constructor for CVNNConfig."""
+    return validate_model(
+        CVNNConfig,
+        dtype=dtype,
+        layers=layers,
+        seed=seed,
+        final_activation=final_activation,
+    )
 
 
 # ─────────────────────────── builder helpers ───────────────────────────────
@@ -338,11 +357,12 @@ def build_model(*, n_inputs: int, n_outputs: int, cfg: CVNNConfig) -> CVNNFactor
     with torch.random.fork_rng(), default_device(cpu_dev), default_dtype(torch_dtype):
         torch.manual_seed(cfg.seed)  # deterministic but local to this block
 
-        match _build_from_cfg(SequentialCfg(layers=cfg.layers), n_inputs):
+        match _build_layer_sequence(cfg.layers, n_inputs):
             case Failure(error):
                 return Failure(error)
-            case Success((body, width)):
-                body, width = _maybe_project(body, width, n_outputs)
+            case Success((mods, width)):
+                seq_mod = _seq(*mods)
+                body, width = _maybe_project(seq_mod, width, n_outputs)
                 net = _maybe_activate(body, cfg.final_activation, width)
         return Success(net)
 

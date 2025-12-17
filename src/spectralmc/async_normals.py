@@ -54,11 +54,10 @@ from __future__ import annotations
 
 from itertools import cycle
 from time import time
-from typing import Annotated
 
 import cupy as cp
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from dataclasses import dataclass
 
 from spectralmc.effects import (
     CaptureRNGState,
@@ -70,7 +69,6 @@ from spectralmc.effects import (
 from spectralmc.errors import InvalidDType, InvalidShape, QueueBusy, QueueEmpty, SeedOutOfRange
 from spectralmc.models.numerical import Precision
 from spectralmc.result import Failure, Result, Success, collect_results
-from spectralmc.validation import validate_model
 
 
 __all__: list[str] = [
@@ -104,12 +102,11 @@ def _validate_cupy_dtype(dtype: cp.dtype) -> Result[cp.dtype, InvalidDType]:
 # --------------------------------------------------------------------------- #
 
 
-class BufferConfig(BaseModel):
+@dataclass(frozen=True)
+class BufferConfig:
     """Buffer size configuration with validation against matrix dimensions."""
 
-    size: Annotated[int, Field(gt=0, description="Number of concurrent worker streams")]
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    size: int
 
     @classmethod
     def create(
@@ -123,12 +120,13 @@ class BufferConfig(BaseModel):
                     cols=matrix_cols,
                 )
             )
-            if size > max_size or min(matrix_rows, matrix_cols) <= 0
+            if size > max_size or min(matrix_rows, matrix_cols) <= 0 or size <= 0
             else Success(cls(size=size))
         )
 
 
-class ConcurrentNormGeneratorConfig(BaseModel):
+@dataclass(frozen=True)
+class ConcurrentNormGeneratorConfig:
     """Immutable serialisable snapshot of the global RNG state.
 
     Attributes
@@ -148,19 +146,23 @@ class ConcurrentNormGeneratorConfig(BaseModel):
         the NumPy RNG when restoring from a checkpoint.
     """
 
-    rows: int = Field(..., gt=0)
-    cols: int = Field(..., gt=0)
-    seed: int = Field(..., gt=0)
+    rows: int
+    cols: int
+    seed: int
     dtype: Precision
-    skips: int = Field(0, ge=0)
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    skips: int = 0
 
     @classmethod
     def create(
         cls, *, rows: int, cols: int, seed: int, dtype: Precision, skips: int = 0
-    ) -> Result["ConcurrentNormGeneratorConfig", ValidationError]:
-        return validate_model(cls, rows=rows, cols=cols, seed=seed, dtype=dtype, skips=skips)
+    ) -> Result["ConcurrentNormGeneratorConfig", InvalidShape | SeedOutOfRange]:
+        if rows <= 0 or cols <= 0:
+            return Failure(InvalidShape(rows=rows, cols=cols))
+        if seed <= 0:
+            return Failure(SeedOutOfRange(seed=seed))
+        if skips < 0:
+            return Failure(SeedOutOfRange(seed=skips))
+        return Success(cls(rows=rows, cols=cols, seed=seed, dtype=dtype, skips=skips))
 
 
 # --------------------------------------------------------------------------- #
@@ -397,13 +399,18 @@ class ConcurrentNormGenerator:
 
     def snapshot(self) -> ConcurrentNormGeneratorConfig:
         """Produce a deterministic checkpoint of the current state."""
-        return ConcurrentNormGeneratorConfig(
+        cfg_result = ConcurrentNormGeneratorConfig.create(
             rows=self._rows,
             cols=self._cols,
             seed=self._base_seed,
             dtype=Precision.from_cupy(self._dtype).unwrap(),
             skips=self._served,
         )
+        match cfg_result:
+            case Success(cfg):
+                return cfg
+            case Failure(err):
+                raise AssertionError(f"Invalid ConcurrentNormGeneratorConfig snapshot: {err}")
 
     def build_generation_effects(self) -> EffectSequence[list[object]]:
         """Build pure effect sequence describing normal matrix generation.

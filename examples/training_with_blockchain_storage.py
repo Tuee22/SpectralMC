@@ -25,6 +25,7 @@ from spectralmc.gbm_trainer import (
     GbmCVNNPricer,
     FinalAndIntervalCommit,
     TrainingConfig,
+    build_training_config,
 )
 from spectralmc.models.torch import Device
 from spectralmc.testing import default_domain_bounds, make_gbm_cvnn_config, seed_all_rngs
@@ -88,11 +89,11 @@ async def train_with_blockchain() -> None:
         pricer = GbmCVNNPricer(config)
 
         # Training configuration
-        training_config = TrainingConfig(
+        training_config = build_training_config(
             num_batches=50,  # Small number for demo
             batch_size=32,
             learning_rate=0.001,
-        )
+        ).unwrap()
 
         print(f"\n4. Starting training:")
         print(f"   - Batches: {training_config.num_batches}")

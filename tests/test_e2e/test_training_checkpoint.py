@@ -66,7 +66,7 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
 
     param_states = {0: param_state_0}
 
-    param_groups = [
+    param_groups = (
         AdamParamGroup(
             params=[0],
             lr=0.001,
@@ -74,8 +74,8 @@ async def test_checkpoint_simple_model(async_store: AsyncBlockchainModelStore) -
             eps=1e-8,
             weight_decay=0.0,
             amsgrad=False,
-        )
-    ]
+        ),
+    )
 
     optimizer_state = AdamOptimizerState(param_states=param_states, param_groups=param_groups)
 
