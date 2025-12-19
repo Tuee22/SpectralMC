@@ -30,7 +30,7 @@ class VersionNotFoundError:
     """Requested version not found in store."""
 
     counter: int
-    available_versions: list[int]
+    available_versions: tuple[int, ...]
     kind: Literal["VersionNotFoundError"] = "VersionNotFoundError"
 
 

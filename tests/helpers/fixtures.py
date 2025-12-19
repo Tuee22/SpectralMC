@@ -17,9 +17,7 @@ from spectralmc.models.torch import FullPrecisionDType, default_dtype
 from spectralmc.models.numerical import Precision
 
 
-@pytest.fixture(
-    params=[FullPrecisionDType.float32, FullPrecisionDType.float64], ids=["f32", "f64"]
-)
+@pytest.fixture(params=[FullPrecisionDType.float32, FullPrecisionDType.float64], ids=["f32", "f64"])
 def full_dtype(request: pytest.FixtureRequest) -> Iterator[torch.dtype]:
     """Parametrize PyTorch tests across float32/float64 with default_dtype context.
 
@@ -46,9 +44,7 @@ def full_dtype(request: pytest.FixtureRequest) -> Iterator[torch.dtype]:
         yield enum.to_torch()
 
 
-@pytest.fixture(
-    params=[FullPrecisionDType.float32, FullPrecisionDType.float64], ids=["f32", "f64"]
-)
+@pytest.fixture(params=[FullPrecisionDType.float32, FullPrecisionDType.float64], ids=["f32", "f64"])
 def full_dtype_enum(request: pytest.FixtureRequest) -> FullPrecisionDType:
     """Parametrize tests across FullPrecisionDType enum values (no context manager).
 
@@ -73,7 +69,9 @@ def full_dtype_enum(request: pytest.FixtureRequest) -> FullPrecisionDType:
     Returns:
         FullPrecisionDType: The enum variant (float32 or float64)
     """
-    return request.param
+    # pytest.FixtureRequest.param is typed as Any; type safety enforced by
+    # @pytest.fixture(params=...) decorator above
+    return request.param  # type: ignore[no-any-return]
 
 
 @pytest.fixture(params=[Precision.float32, Precision.float64], ids=["f32", "f64"])
@@ -97,7 +95,9 @@ def precision(request: pytest.FixtureRequest) -> Precision:
     Returns:
         Precision: The enum variant (Precision.float32 or Precision.float64)
     """
-    return request.param
+    # pytest.FixtureRequest.param is typed as Any; type safety enforced by
+    # @pytest.fixture(params=...) decorator above
+    return request.param  # type: ignore[no-any-return]
 
 
 __all__ = [

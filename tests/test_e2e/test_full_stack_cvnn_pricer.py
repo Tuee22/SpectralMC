@@ -10,7 +10,6 @@ Reading this test in order walks through the major subsystems:
 from __future__ import annotations
 
 import math
-from typing import cast
 
 import pytest
 import torch
@@ -100,14 +99,11 @@ async def test_full_stack_cvnn_pricer_workflow(
     assert version.commit_message == "full-stack demo checkpoint"
 
     # Reload snapshot from blockchain into a fresh CVNN template
-    cvnn_template = cast(
-        torch.nn.Module,
-        make_test_cvnn(
-            n_inputs=6,
-            n_outputs=SIM_PARAMS.network_size,
-            seed=999,  # Different seed to prove weights come from checkpoint
-            dtype=torch.float32,
-        ),
+    cvnn_template = make_test_cvnn(
+        n_inputs=6,
+        n_outputs=SIM_PARAMS.network_size,
+        seed=999,  # Different seed to prove weights come from checkpoint
+        dtype=torch.float32,
     )
     reloaded_snapshot = expect_success(
         await load_snapshot_from_checkpoint(

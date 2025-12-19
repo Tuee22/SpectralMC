@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from typing import TypeVar
 
-import torch
 from spectralmc.runtime import get_torch_handle
 from spectralmc.effects import (
     CommitVersion,
@@ -130,7 +129,7 @@ async def commit_snapshot(
 async def load_snapshot_from_checkpoint(
     store: AsyncBlockchainModelStore,
     version: ModelVersion,
-    cvnn_template: torch.nn.Module,
+    cvnn_template: ComplexValuedModel,
     cfg: GbmCVNNPricerConfig,
 ) -> Result[GbmCVNNPricerConfig, SerializationError | TorchFacadeError]:
     """

@@ -475,8 +475,8 @@ async def test_e2e_empty_chain_operations(
 
     # GC on empty chain
     report = expect_success(await run_gc(async_store, keep_versions=10, mode=PreviewGC()))
-    assert report.deleted_versions == []
-    assert report.protected_versions == []
+    assert report.deleted_versions == ()
+    assert report.protected_versions == ()
     assert report.bytes_freed == 0
 
     # Load from empty chain should fail

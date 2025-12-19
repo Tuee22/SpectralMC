@@ -7,14 +7,13 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
-import torch
 from spectralmc.runtime import get_torch_handle
 from ..errors.storage import (
     StartError,
     ValidationError as StorageValidationError,
     VersionNotFoundError as StorageVersionNotFoundError,
 )
-from ..gbm_trainer import GbmCVNNPricerConfig
+from ..gbm_trainer import ComplexValuedModel, GbmCVNNPricerConfig
 from ..result import Failure, Result, Success
 from .chain import ModelVersion
 from .checkpoint import load_snapshot_from_checkpoint
@@ -154,7 +153,7 @@ class InferenceClient:
         mode: InferenceMode,
         poll_interval: float,
         store: AsyncBlockchainModelStore,
-        model_template: torch.nn.Module,
+        model_template: ComplexValuedModel,
         config_template: GbmCVNNPricerConfig,
         max_consecutive_failures: int = 5,
     ) -> None:
@@ -443,7 +442,7 @@ class InferenceClient:
                 if counter == head.counter:
                     return Success(head)
             case Failure():
-                return Failure(StorageVersionNotFoundError(counter=counter, available_versions=[]))
+                return Failure(StorageVersionNotFoundError(counter=counter, available_versions=()))
 
         # Otherwise, fetch by version ID
         # Version ID format: v{counter:010d}

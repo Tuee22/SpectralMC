@@ -13,11 +13,15 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
+from types import MappingProxyType
 from typing import Iterable, Iterator, Mapping, Sequence
 
 import torch
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from safetensors.torch import load as _sf_load
+from safetensors.torch import save as _sf_save
 from typing_extensions import Self
-from spectralmc.runtime import get_torch_handle
+
 from spectralmc.errors.torch_facade import (
     InvalidAdamState,
     TensorStateConversionFailed,
@@ -26,9 +30,10 @@ from spectralmc.errors.torch_facade import (
     UnsupportedTorchDevice,
     UnsupportedTorchDType,
 )
-from spectralmc.result import Failure, Result, Success
-from spectralmc.validation import validate_model
 from spectralmc.models.numerical import Precision
+from spectralmc.result import Failure, Result, Success
+from spectralmc.runtime import get_torch_handle
+from spectralmc.validation import validate_model
 
 get_torch_handle()
 _MAIN_THREAD_ID: int = threading.get_ident()
@@ -210,9 +215,6 @@ def default_device(dev: torch.device) -> Iterator[None]:
 # --------------------------------------------------------------------------- #
 #  SafeTensor serialization helpers                                           #
 # --------------------------------------------------------------------------- #
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator  # noqa: E402
-from safetensors.torch import load as _sf_load  # noqa: E402
-from safetensors.torch import save as _sf_save  # noqa: E402
 
 
 class TensorState(BaseModel):
@@ -603,8 +605,6 @@ class AdamOptimizerState(BaseModel):
         Returns:
             Self with frozen collections
         """
-        from types import MappingProxyType
-
         # Freeze param_states dict -> Mapping (always freeze, idempotent)
         object.__setattr__(  # immutability-exception: pydantic-frozen-model
             self,

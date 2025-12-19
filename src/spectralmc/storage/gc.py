@@ -25,12 +25,14 @@ class RetentionPolicy:
     Attributes:
         keep_versions: Number of most recent versions to keep (None = keep all)
         keep_min_versions: Minimum versions to always keep (protects against accidents)
-        protect_tags: List of version counters to always protect (e.g., production releases)
+        protect_tags: Tuple of version counters to always protect (e.g., production releases)
     """
 
     keep_versions: int | None = None  # None = keep all
     keep_min_versions: int = 3  # Always keep at least this many
-    protect_tags: list[int] = field(default_factory=list)  # Always protect these version counters
+    protect_tags: tuple[int, ...] = field(
+        default_factory=tuple
+    )  # Always protect these version counters
 
 
 @dataclass(frozen=True)
@@ -38,14 +40,14 @@ class GCReport:
     """Garbage collection execution report.
 
     Attributes:
-        deleted_versions: List of deleted version counters
-        protected_versions: List of protected version counters
+        deleted_versions: Tuple of deleted version counters
+        protected_versions: Tuple of protected version counters
         bytes_freed: Approximate bytes freed (sum of checkpoint sizes)
         dry_run: Whether this was a dry run
     """
 
-    deleted_versions: list[int]
-    protected_versions: list[int]
+    deleted_versions: tuple[int, ...]
+    protected_versions: tuple[int, ...]
     bytes_freed: int
     dry_run: bool
 
@@ -127,8 +129,8 @@ class GarbageCollector:
                 # Empty chain, nothing to collect
                 return Success(
                     GCReport(
-                        deleted_versions=[],
-                        protected_versions=[],
+                        deleted_versions=(),
+                        protected_versions=(),
                         bytes_freed=0,
                         dry_run=dry_run,
                     )
@@ -173,8 +175,8 @@ class GarbageCollector:
 
         return Success(
             GCReport(
-                deleted_versions=[v.counter for v in to_delete],
-                protected_versions=[v.counter for v in protected],
+                deleted_versions=tuple(v.counter for v in to_delete),
+                protected_versions=tuple(v.counter for v in protected),
                 bytes_freed=bytes_freed,
                 dry_run=dry_run,
             )
@@ -349,7 +351,7 @@ async def run_gc(
     policy = RetentionPolicy(
         keep_versions=keep_versions,
         keep_min_versions=keep_min_versions,
-        protect_tags=list(protect_tags) if protect_tags else [],
+        protect_tags=tuple(protect_tags) if protect_tags else (),
     )
 
     gc = GarbageCollector(store, policy)

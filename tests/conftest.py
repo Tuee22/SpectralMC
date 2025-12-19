@@ -36,6 +36,9 @@ GPU_DEV: torch.device = Device.cuda.to_torch()
 TORCH_HANDLE: ModuleType = get_torch_handle()
 DEFAULT_TEST_TIMEOUT_SECONDS = 60.0
 
+# Register fixtures from tests.helpers.fixtures (full_dtype, full_dtype_enum, precision)
+pytest_plugins = ["tests.helpers.fixtures"]
+
 
 @pytest.fixture(scope="session")
 def torch_handle() -> ModuleType:

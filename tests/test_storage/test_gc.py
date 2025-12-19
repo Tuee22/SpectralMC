@@ -121,7 +121,7 @@ async def test_gc_genesis_always_protected(
     # Deleted: v1
     assert 0 in report.protected_versions
     assert 2 in report.protected_versions
-    assert report.deleted_versions == [1]
+    assert report.deleted_versions == (1,)
 
 
 @pytest.mark.asyncio
@@ -137,7 +137,7 @@ async def test_gc_protected_tags(async_store: AsyncBlockchainModelStore) -> None
         await commit_snapshot(async_store, config, f"V{i}")
 
     # Keep last 3 versions + protect v3 and v5 (e.g., production releases)
-    policy = RetentionPolicy(keep_versions=3, protect_tags=[3, 5])
+    policy = RetentionPolicy(keep_versions=3, protect_tags=(3, 5))
     gc = GarbageCollector(async_store, policy)
 
     report = expect_success(await gc.collect(mode=PreviewGC()))
@@ -278,7 +278,7 @@ async def test_gc_single_version_chain(async_store: AsyncBlockchainModelStore) -
 
     # Nothing to delete, only v0 (genesis)
     assert len(report.deleted_versions) == 0
-    assert report.protected_versions == [0]
+    assert report.protected_versions == (0,)
 
 
 @pytest.mark.asyncio
@@ -343,7 +343,7 @@ async def test_gc_all_versions_protected_by_tags(
         await commit_snapshot(async_store, config, f"V{i}")
 
     # Protect all versions via tags
-    policy = RetentionPolicy(keep_versions=1, protect_tags=[0, 1, 2, 3, 4])
+    policy = RetentionPolicy(keep_versions=1, protect_tags=(0, 1, 2, 3, 4))
     gc = GarbageCollector(async_store, policy)
 
     report = expect_success(await gc.collect(mode=PreviewGC()))

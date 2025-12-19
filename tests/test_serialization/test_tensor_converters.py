@@ -14,7 +14,9 @@ from spectralmc.models.torch import (
     AdamOptimizerState,
     AdamParamGroup,
     AdamParamState,
+    FullPrecisionDType,
     TensorState,
+    default_dtype,
 )
 from spectralmc.serialization.tensors import (
     AdamOptimizerStateConverter,
@@ -87,26 +89,30 @@ def test_tensor_state_round_trip_complex128() -> None:
     assert recovered.dtype == torch.complex128
 
 
-def test_tensor_state_requires_grad() -> None:
-    """Test TensorStateConverter preserves requires_grad."""
+def test_tensor_state_requires_grad(full_dtype_enum: FullPrecisionDType) -> None:
+    """Test TensorStateConverter preserves requires_grad (mixed precision)."""
     _reset_seeds()
-    original = torch.randn(3, 3, dtype=torch.float32, requires_grad=True)
+    dtype = full_dtype_enum.to_torch()
+    original = torch.randn(3, 3, dtype=dtype, requires_grad=True)
 
     proto = expect_success(TensorStateConverter.to_proto(original))
     recovered = expect_success(TensorStateConverter.from_proto(proto))
 
     assert recovered.requires_grad is True
+    assert recovered.dtype == dtype  # Verify dtype preserved across serialization
 
 
-def test_tensor_state_no_requires_grad() -> None:
-    """Test TensorStateConverter with requires_grad=False."""
+def test_tensor_state_no_requires_grad(full_dtype_enum: FullPrecisionDType) -> None:
+    """Test TensorStateConverter with requires_grad=False (mixed precision)."""
     _reset_seeds()
-    original = torch.randn(3, 3, dtype=torch.float32, requires_grad=False)
+    dtype = full_dtype_enum.to_torch()
+    original = torch.randn(3, 3, dtype=dtype, requires_grad=False)
 
     proto = expect_success(TensorStateConverter.to_proto(original))
     recovered = expect_success(TensorStateConverter.from_proto(proto))
 
     assert recovered.requires_grad is False
+    assert recovered.dtype == dtype  # Verify dtype preserved across serialization
 
 
 def test_adam_optimizer_state_round_trip() -> None:
@@ -199,107 +205,122 @@ def test_rng_state_round_trip() -> None:
     assert rec_cuda == cuda_states
 
 
-def test_tensor_empty() -> None:
-    """Test TensorStateConverter with empty tensor."""
-    original = torch.tensor([], dtype=torch.float32)
+def test_tensor_empty(full_dtype_enum: FullPrecisionDType) -> None:
+    """Test TensorStateConverter with empty tensor (mixed precision)."""
+    dtype = full_dtype_enum.to_torch()
+    original = torch.tensor([], dtype=dtype)
 
     proto = expect_success(TensorStateConverter.to_proto(original))
     recovered = expect_success(TensorStateConverter.from_proto(proto))
 
     assert recovered.shape == original.shape
-    assert recovered.dtype == original.dtype
+    assert recovered.dtype == dtype  # Verify dtype preserved for empty tensor
 
 
-def test_tensor_scalar() -> None:
-    """Test TensorStateConverter with scalar tensor."""
-    original = torch.tensor(42.0, dtype=torch.float32)
+def test_tensor_scalar(full_dtype_enum: FullPrecisionDType) -> None:
+    """Test TensorStateConverter with scalar tensor (mixed precision)."""
+    dtype = full_dtype_enum.to_torch()
+    original = torch.tensor(42.0, dtype=dtype)
 
     proto = expect_success(TensorStateConverter.to_proto(original))
     recovered = expect_success(TensorStateConverter.from_proto(proto))
 
     assert torch.allclose(original, recovered)
     assert recovered.shape == original.shape
+    assert recovered.dtype == dtype  # Verify dtype preserved for scalar
 
 
-def test_tensor_large() -> None:
-    """Test TensorStateConverter with large tensor."""
+def test_tensor_large(full_dtype_enum: FullPrecisionDType) -> None:
+    """Test TensorStateConverter with large tensor (mixed precision)."""
     _reset_seeds()
-    original = torch.randn(100, 100, 100, dtype=torch.float32)
+    dtype = full_dtype_enum.to_torch()
+    original = torch.randn(100, 100, 100, dtype=dtype)
 
     proto = expect_success(TensorStateConverter.to_proto(original))
     recovered = expect_success(TensorStateConverter.from_proto(proto))
 
-    assert torch.allclose(original, recovered, rtol=1e-6, atol=1e-9)
+    # Use precision-appropriate tolerances
+    rtol = 1e-6 if dtype == torch.float32 else 1e-12
+    atol = 1e-9 if dtype == torch.float32 else 1e-15
+    assert torch.allclose(original, recovered, rtol=rtol, atol=atol)
     assert recovered.shape == original.shape
+    assert recovered.dtype == dtype  # Verify dtype preserved for large tensor
 
 
-def test_model_checkpoint_round_trip() -> None:
-    """Test ModelCheckpointConverter with complete checkpoint."""
+def test_model_checkpoint_round_trip(full_dtype_enum: FullPrecisionDType) -> None:
+    """Test ModelCheckpointConverter with complete checkpoint (mixed precision)."""
     _reset_seeds()
-    # Create sample model state dict
-    model_state_dict = {
-        "layer1.weight": torch.randn(10, 5),
-        "layer1.bias": torch.randn(10),
-        "layer2.weight": torch.randn(5, 10),
-        "layer2.bias": torch.randn(5),
-    }
+    dtype = full_dtype_enum.to_torch()
 
-    # Create optimizer state
-    param_states = {
-        0: expect_success(
-            AdamParamState.from_torch(
-                {
-                    "step": 100,
-                    "exp_avg": torch.randn(10, 5),
-                    "exp_avg_sq": torch.randn(10, 5),
-                }
-            )
-        ),
-        1: expect_success(
-            AdamParamState.from_torch(
-                {
-                    "step": 100,
-                    "exp_avg": torch.randn(10),
-                    "exp_avg_sq": torch.randn(10),
-                }
-            )
-        ),
-    }
+    # Use precision-appropriate tolerances
+    rtol = 1e-6 if dtype == torch.float32 else 1e-12
+    atol = 1e-9 if dtype == torch.float32 else 1e-15
 
-    param_groups = (
-        AdamParamGroup(
-            params=[0, 1],
-            lr=0.001,
-            betas=(0.9, 0.999),
-            eps=1e-8,
-            weight_decay=0.0,
-            amsgrad=False,
-        ),
-    )
+    with default_dtype(dtype):
+        # Create sample model state dict
+        model_state_dict = {
+            "layer1.weight": torch.randn(10, 5),
+            "layer1.bias": torch.randn(10),
+            "layer2.weight": torch.randn(5, 10),
+            "layer2.bias": torch.randn(5),
+        }
 
-    optimizer_state = AdamOptimizerState(param_states=param_states, param_groups=param_groups)
+        # Create optimizer state
+        param_states = {
+            0: expect_success(
+                AdamParamState.from_torch(
+                    {
+                        "step": 100,
+                        "exp_avg": torch.randn(10, 5),
+                        "exp_avg_sq": torch.randn(10, 5),
+                    }
+                )
+            ),
+            1: expect_success(
+                AdamParamState.from_torch(
+                    {
+                        "step": 100,
+                        "exp_avg": torch.randn(10),
+                        "exp_avg_sq": torch.randn(10),
+                    }
+                )
+            ),
+        }
 
-    # RNG states
-    cpu_rng = torch.get_rng_state().numpy().tobytes()
-    cuda_rngs: list[bytes] = []
-
-    global_step = 1000
-
-    # Round trip
-    proto = expect_success(
-        ModelCheckpointConverter.to_proto(
-            model_state_dict, optimizer_state, cpu_rng, cuda_rngs, global_step
+        param_groups = (
+            AdamParamGroup(
+                params=[0, 1],
+                lr=0.001,
+                betas=(0.9, 0.999),
+                eps=1e-8,
+                weight_decay=0.0,
+                amsgrad=False,
+            ),
         )
-    )
 
-    rec_model, rec_opt, rec_cpu_rng, rec_cuda_rngs, rec_step = expect_success(
-        ModelCheckpointConverter.from_proto(proto)
-    )
+        optimizer_state = AdamOptimizerState(param_states=param_states, param_groups=param_groups)
 
-    # Verify model state dict
-    assert set(rec_model.keys()) == set(model_state_dict.keys())
-    for name in model_state_dict:
-        assert torch.allclose(rec_model[name], model_state_dict[name], rtol=1e-6, atol=1e-9)
+        # RNG states
+        cpu_rng = torch.get_rng_state().numpy().tobytes()
+        cuda_rngs: list[bytes] = []
+
+        global_step = 1000
+
+        # Round trip
+        proto = expect_success(
+            ModelCheckpointConverter.to_proto(
+                model_state_dict, optimizer_state, cpu_rng, cuda_rngs, global_step
+            )
+        )
+
+        rec_model, rec_opt, rec_cpu_rng, rec_cuda_rngs, rec_step = expect_success(
+            ModelCheckpointConverter.from_proto(proto)
+        )
+
+        # Verify model state dict
+        assert set(rec_model.keys()) == set(model_state_dict.keys())
+        for name in model_state_dict:
+            assert torch.allclose(rec_model[name], model_state_dict[name], rtol=rtol, atol=atol)
 
     # Verify optimizer state
     assert len(rec_opt.param_states) == len(optimizer_state.param_states)

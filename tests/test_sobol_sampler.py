@@ -22,10 +22,8 @@ The file passes **``mypy --strict``** with no ignores.
 from __future__ import annotations
 
 import math
-from typing import Sequence, cast
 
 import pytest
-
 from pydantic import BaseModel, model_validator
 
 from spectralmc.errors.sampler import BoundSpecInvalid, DimensionMismatch, SamplerValidationFailed
@@ -86,8 +84,8 @@ class ThreeDim(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-def _pairs(pts: Sequence[Point]) -> list[tuple[float, float]]:
-    """Convert a sequence of :class:`Point` to ``[(x, y), …]`` tuples."""
+def _pairs(pts: list[Point]) -> list[tuple[float, float]]:
+    """Convert a list of :class:`Point` to ``[(x, y), …]`` tuples."""
     return [(p.x, p.y) for p in pts]
 
 
@@ -118,6 +116,7 @@ def test_skip_repro(n_skip: int, n_check: int) -> None:
     )
 
     manual = SobolSampler.create(Point, dims, config=SobolConfig(seed=_SEED))
+    expected: list[Point]
     match manual:
         case Success(m):
             burn = m.sample(n_skip)
@@ -126,26 +125,29 @@ def test_skip_repro(n_skip: int, n_check: int) -> None:
                     pytest.fail(f"burn-in failed: {burn_err}")
             expected_result = m.sample(n_check)
             match expected_result:
-                case Success(expected):
-                    pass
+                case Success(exp):
+                    assert isinstance(exp[0], Point) if exp else True
+                    expected = exp  # type: ignore[assignment]
                 case Failure(expected_err):
                     pytest.fail(f"expected sample failed: {expected_err}")
         case Failure(manual_err):
             pytest.fail(f"manual sampler failed: {manual_err}")
 
     fast = SobolSampler.create(Point, dims, config=SobolConfig(seed=_SEED, skip=n_skip))
+    got: list[Point]
     match fast:
         case Success(fast_sampler):
             got_result = fast_sampler.sample(n_check)
             match got_result:
-                case Success(got):
-                    pass
+                case Success(g):
+                    assert isinstance(g[0], Point) if g else True
+                    got = g  # type: ignore[assignment]
                 case Failure(got_err):
                     pytest.fail(f"fast sample failed: {got_err}")
         case Failure(fast_err):
             pytest.fail(f"fast sampler failed: {fast_err}")
 
-    assert _pairs(cast(Sequence[Point], expected)) == _pairs(cast(Sequence[Point], got))
+    assert _pairs(expected) == _pairs(got)
 
 
 _BOUND_CASES: tuple[tuple[DomainBounds[BaseModel], type[BaseModel]], ...] = (
@@ -256,18 +258,20 @@ def test_smoke_two_dim() -> None:
         },
     )
     sampler = SobolSampler.create(Point, dims, config=SobolConfig(seed=_SEED))
+    pts: list[Point]
     match sampler:
         case Success(s):
             pts_result = s.sample(4)
             match pts_result:
-                case Success(pts):
-                    pass
+                case Success(p):
+                    assert isinstance(p[0], Point) if p else True
+                    pts = p  # type: ignore[assignment]
                 case Failure(err):
                     pytest.fail(f"sampling failed: {err}")
         case Failure(err):
             pytest.fail(f"sampler creation failed: {err}")
 
-    pairs = _pairs(cast(Sequence[Point], pts))
+    pairs = _pairs(pts)
     assert len(set(pairs)) == 4  # uniqueness
     xs, ys = zip(*pairs)
     assert not math.isclose(min(xs), max(xs))
