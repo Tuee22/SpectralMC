@@ -3,7 +3,7 @@
 
 **Status**: Authoritative source
 **Supersedes**: None (primary testing standards document)
-**Referenced by**: documents/documentation_standards.md, documents/engineering/testing.md, documents/engineering/testing_architecture.md
+**Referenced by**: documents/documentation_standards.md, documents/engineering/testing.md, documents/engineering/testing_architecture.md, warnings_policy.md
 
 > **Purpose**: SSoT for SpectralMC testing expectations, determinism, and GPU constraints.
 
@@ -11,6 +11,7 @@
 - [Testing Architecture](testing_architecture.md) — DRY patterns, helper consolidation, fixture organization
 - [Purity Doctrine](purity_doctrine.md)
 - [Coding Standards](coding_standards.md)
+- [Warnings Policy](warnings_policy.md) — Zero-tolerance warning enforcement
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)
 - [Torch Runtime (facade removed)](pytorch_facade.md)
 - [Documentation Standards](../documentation_standards.md)

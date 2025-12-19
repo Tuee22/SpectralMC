@@ -3,7 +3,7 @@
 
 **Status**: Authoritative source  
 **Supersedes**: Prior coding standards drafts  
-**Referenced by**: documents/documentation_standards.md
+**Referenced by**: documents/documentation_standards.md, warnings_policy.md
 
 > **Purpose**: SSoT for SpectralMC coding standards covering formatting, typing, and stubs.
 
@@ -1946,16 +1946,21 @@ def train_model(model: Model, data: Data) -> Result[TrainSuccess, TrainDivergenc
 
 Note: Production training loops use the Effect Interpreter pattern. See [Effect Interpreter](./effect_interpreter.md) for the complete training loop architecture and [Purity Doctrine](./purity_doctrine.md) for purity requirements.
 
-### 3. Ignoring Numerical Warnings
+### 3. Numerical Warnings
 
-**Problem**: Treating warnings as noise instead of signals
+See [Warnings Policy](warnings_policy.md#runtime-warnings) for the complete policy on numerical warnings.
 
-- ❌ Suppressing "divide by zero" warnings
-- ❌ Ignoring "invalid value encountered" from NumPy/PyTorch
-- ❌ Filtering out all warnings with `warnings.filterwarnings("ignore")`
-- ✅ Investigate and fix root cause of warnings
-- ✅ Only filter specific expected warnings (e.g., QuantLib deprecation warnings)
-- ✅ Convert warnings to errors during testing: `warnings.simplefilter("error")`
+**TL;DR**: Never suppress RuntimeWarning for divide by zero, overflow, or invalid values. Fix the root cause.
+
+**Quick Reference:**
+```python
+# File: documents/engineering/coding_standards.md
+# ❌ WRONG - Suppressing warnings
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+# ✅ CORRECT - Fix the math
+result = torch.where(b != 0, a / b, torch.zeros_like(a))
+```
 
 ### 4. Mutable Default Arguments
 
@@ -1985,139 +1990,13 @@ Note: Production training loops use the Effect Interpreter pattern. See [Effect 
 
 ## Dependency Deprecation Management
 
-SpectralMC enforces a **zero-tolerance policy** for deprecated APIs in production code to ensure long-term maintainability and compatibility.
+See [Warnings Policy](warnings_policy.md#deprecation-warnings) for the complete deprecation policy.
 
-### Zero-Tolerance Policy
-
-**Prohibited**:
-- ❌ NO deprecated APIs in `src/spectralmc/` code
-- ❌ NO suppressing deprecation warnings without documented upstream issue
-- ❌ NO using `# type: ignore` or similar to hide deprecation warnings
-
-**Required**:
-- ✅ All deprecations must have migration plan within 1 sprint
-- ✅ Use modern, non-deprecated APIs for all new code
-- ✅ Fix deprecation warnings immediately when they appear
-
-### Allowed Exceptions
-
-Only third-party library internals may use deprecated code if:
-1. **Upstream issue tracked**: Must have link to library's GitHub issue
-2. **Pytest filter documented**: Must add filter in `pyproject.toml` with explanation
-3. **Monthly review**: Must check for fixes in dependency updates
-
-**Example** (current exceptions):
-```toml
-# File: documents/engineering/coding_standards.md
-[tool.pytest.ini_options]
-filterwarnings = [
-    # Botocore datetime.utcnow() - AWS SDK internal (boto/botocore#3201)
-    "ignore::DeprecationWarning:botocore.*",
-    # QuantLib SWIG bindings - unfixable (generated code)
-    "ignore::DeprecationWarning:.*QuantLib.*",
-]
-```
-
-### Monthly Review Checklist
-
-Run these checks on the 1st of each month:
-
-```bash
-# File: documents/engineering/coding_standards.md
-# 1. Check for dependency updates
-docker compose -f docker/docker-compose.yml exec spectralmc poetry show --outdated
-
-# 2. Check botocore for datetime.utcnow fix (currently pending)
-# Visit: https://github.com/boto/botocore/releases
-
-# 3. Check for new deprecation warnings in tests
-docker compose -f docker/docker-compose.yml exec spectralmc \
-  poetry run test-all -W default::DeprecationWarning > /tmp/warnings.txt 2>&1
-grep "DeprecationWarning" /tmp/warnings.txt | grep -v "botocore\|QuantLib"
-
-# 4. Review PyTorch/NumPy/CuPy changelogs for upcoming deprecations
-# - PyTorch: https://github.com/pytorch/pytorch/releases
-# - NumPy: https://numpy.org/news/
-# - CuPy: https://github.com/cupy/cupy/releases
-```
-
-### Code Review Checklist
-
-Block merge if ANY of these are present:
-
-- [ ] Uses `torch.utils.dlpack.from_dlpack()` instead of `torch.from_dlpack()`
-- [ ] Uses `cupy_array.toDlpack()` instead of direct `torch.from_dlpack()`
-- [ ] Uses removed NumPy aliases (`np.float`, `np.int`, `np.complex_`, `np.bool`)
-- [ ] Adds `@pytest.mark.skip()` without upstream issue link
-- [ ] Suppresses `DeprecationWarning` in production code without explanation
-- [ ] Ignores deprecation warnings in function/method implementations
-
-### Migration Examples
-
-**DLPack API (COMPLETED)**:
-```python
-# File: documents/engineering/coding_standards.md
-# ❌ DEPRECATED (removed in CuPy 14+)
-capsule = cupy_array.toDlpack()
-torch_tensor = torch.utils.dlpack.from_dlpack(capsule)
-
-# ✅ MODERN (PyTorch 1.10+, CuPy 9.0+)
-torch_tensor = torch.from_dlpack(cupy_array)
-```
-
-**NumPy Type Aliases (already correct)**:
-```python
-# File: documents/engineering/coding_standards.md
-# ❌ REMOVED in NumPy 2.0
-Type[np.float]    # Don't use
-Type[np.int]      # Don't use
-Type[np.complex_] # Don't use
-
-# ✅ CORRECT (NumPy 2.0+)
-Type[np.float64]
-Type[np.int64]
-Type[np.complex128]
-```
-
-### Dependency Update Protocol
-
-When updating major dependencies (PyTorch, NumPy, CuPy):
-
-1. **Read migration guide FIRST**
-   - PyTorch: Check release notes "Breaking Changes" section
-   - NumPy: https://numpy.org/doc/stable/numpy_2_0_migration_guide.html
-   - CuPy: Check changelog "Backward Incompatible Changes"
-
-2. **Test in isolation**
-   ```bash
-   # File: documents/engineering/coding_standards.md
-   git checkout -b deps/pytorch-upgrade
-   poetry update torch  # ONE dependency at a time
-   docker compose -f docker/docker-compose.yml exec spectralmc \
-     poetry run test-all > /tmp/test_upgrade.txt 2>&1
-   ```
-
-3. **Verify no new deprecations**
-   ```bash
-# File: documents/engineering/coding_standards.md
-docker compose -f docker/docker-compose.yml exec spectralmc \
-  poetry run test-all -W error::DeprecationWarning
-```text
-# File: documents/engineering/coding_standards.md
-```
-
-### Status: Deprecation-Free Codebase
-
-
-**SpectralMC Code**:
-- ✅ All DLPack usage migrated to `torch.from_dlpack()`
-- ✅ All NumPy types using explicit precision (`np.float64`, not `np.float`)
-- ✅ All PyTorch APIs using non-deprecated methods
-- ✅ Zero deprecation warnings from `src/spectralmc/`
-
-**Third-Party Dependencies**:
-- ⏳ `botocore 1.36.1`: Waiting for `datetime.utcnow()` fix (tracked: boto/botocore#3201)
-- ⏸️ `QuantLib 1.37`: SWIG deprecations unfixable (accepted as permanent exception)
+**TL;DR**:
+- Zero-tolerance for deprecated APIs in `src/spectralmc/`
+- Monthly review on 1st of month
+- Immediate migration when deprecations appear
+- See warnings policy for current exceptions and review checklist
 
 ---
 

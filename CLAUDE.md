@@ -242,6 +242,46 @@ When you encounter test failures or bugs:
 10. **Profile if slow** - don't guess at bottlenecks
 11. **Run purity checker** - `docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-purity`
 
+## Warnings Policy
+
+SpectralMC enforces zero warnings across all tools and environments.
+
+**For complete documentation**, see [Warnings Policy](documents/engineering/warnings_policy.md).
+
+### Key Points
+
+- ❌ NO warnings in test output
+- ❌ NO deprecation warnings in production code
+- ❌ NO suppressing warnings without documented exception
+- ✅ Fix root causes immediately
+- ✅ Monthly review on 1st of month
+
+### Success Criteria
+
+Zero warnings in all of the following:
+
+```bash
+# File: CLAUDE.md
+# Code quality check
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-code
+
+# Test suite (redirect to file for complete output)
+docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all > /tmp/test-all.txt 2>&1
+
+# Docker build
+docker compose -f docker/docker-compose.yml up --build -d
+```
+
+### Current Exceptions
+
+Four documented exceptions in pyproject.binary.toml:
+1. **botocore** datetime.utcnow() - AWS SDK internal (pending upstream fix)
+2. **QuantLib** SWIG deprecations - unfixable generated code (permanent)
+3. **IFFT** imaginary component - expected for untrained models (test-only)
+4. **Numba** grid size - expected for small test datasets (test-only)
+
+See [Warnings Policy](documents/engineering/warnings_policy.md#exceptions-rare) for details.
+
 ## When to Rebuild Docker Images
 
 > **📖 Authoritative Reference**: [Docker Build Philosophy](documents/engineering/docker_build_philosophy.md#entry-point-script-management)

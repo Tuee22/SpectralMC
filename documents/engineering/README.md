@@ -64,6 +64,7 @@ flowchart TB
 - **[Build Artifact Management](build_artifact_management.md)** — Lockfile policy, `/opt` containment, verification.
 - **[Observability](observability.md)** — Metrics scope tailored to SpectralMC (GPU + storage).
 - **[Monitoring & Alerting](monitoring_and_alerting.md)** — Retired; centralized monitoring is out of scope.
+- **[Warnings Policy](warnings_policy.md)** — Zero-tolerance warning enforcement across Python, PyTorch, Docker.
 
 ## Domain-Specific Standards
 
