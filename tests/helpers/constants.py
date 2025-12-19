@@ -34,20 +34,55 @@ DEFAULT_BUFFER_SIZE = 10000
 """Default buffer size for asynchronous normal distribution generation."""
 
 # ============================================================================
-# Numerical Tolerances
+# Numerical Tolerances (Precision-Specific)
 # ============================================================================
 
-RTOL_FLOAT32 = 1e-5
-"""Relative tolerance for float32 comparisons."""
-
-RTOL_FLOAT64 = 1e-8
-"""Relative tolerance for float64 comparisons."""
-
+# Absolute tolerances (atol)
 ATOL_FLOAT32 = 1e-8
-"""Absolute tolerance for float32 comparisons."""
+"""Absolute tolerance for float32 comparisons.
+
+Use with torch.allclose or assert_tensors_close for float32 numerical tests.
+This value balances precision and robustness for single-precision arithmetic.
+"""
 
 ATOL_FLOAT64 = 1e-10
-"""Absolute tolerance for float64 comparisons."""
+"""Absolute tolerance for float64 comparisons.
+
+Use with torch.allclose or assert_tensors_close for float64 numerical tests.
+This tighter tolerance leverages double-precision accuracy.
+"""
+
+# Relative tolerances (rtol)
+RTOL_FLOAT32 = 1e-5
+"""Relative tolerance for float32 comparisons.
+
+Use with torch.allclose or assert_tensors_close for float32 numerical tests.
+Relative tolerance scales with magnitude of values being compared.
+"""
+
+RTOL_FLOAT64 = 1e-8
+"""Relative tolerance for float64 comparisons.
+
+Use with torch.allclose or assert_tensors_close for float64 numerical tests.
+Relative tolerance scales with magnitude of values being compared.
+"""
+
+# Epsilon values (machine precision)
+EPS_FLOAT32 = 1.192092896e-07
+"""Machine epsilon for float32 (torch.finfo(torch.float32).eps).
+
+Use for numerical stability tests or when checking if values are "close to zero"
+relative to single-precision floating point limits. This is the smallest value
+such that 1.0 + eps != 1.0 in float32 arithmetic.
+"""
+
+EPS_FLOAT64 = 2.220446049250313e-16
+"""Machine epsilon for float64 (torch.finfo(torch.float64).eps).
+
+Use for numerical stability tests or when checking if values are "close to zero"
+relative to double-precision floating point limits. This is the smallest value
+such that 1.0 + eps != 1.0 in float64 arithmetic.
+"""
 
 # ============================================================================
 # Training Parameters

@@ -297,6 +297,226 @@ def test_numerical_computation() -> None:
 
 ---
 
+## Mixed Precision Testing Policy
+
+**CRITICAL POLICY**: All numerical tests involving floating-point computation MUST validate behavior across both float32 and float64 precisions.
+
+### When Mixed Precision Testing is Required
+
+✅ **REQUIRED for**:
+- Neural network forward/backward passes
+- Gradient computation and optimization
+- Monte Carlo simulations
+- Numerical algorithms (FFT, matrix operations, etc.)
+- Loss functions and convergence criteria
+- Statistical computations (mean, variance, etc.)
+- Any test that creates tensors with dtype parameter
+
+❌ **NOT REQUIRED for**:
+- Boolean/integer operations
+- Device placement tests (dtype-agnostic)
+- String/enum serialization tests
+- File I/O tests (format-agnostic)
+- S3/storage operations (dtype not relevant)
+
+### DRY Enforcement Pattern
+
+SpectralMC provides shared fixtures for mixed precision testing. Use these instead of defining local dtype fixtures:
+
+#### Pattern 1: PyTorch Model Tests (Fixture-Based)
+
+For PyTorch model tests, use the `full_dtype` fixture:
+
+```python
+# File: tests/test_example.py
+def test_model_forward(full_dtype: torch.dtype) -> None:
+    """Test runs twice: float32 and float64."""
+    model = MyModel()  # Uses full_dtype as default via context manager
+    x = torch.randn(10)  # Automatically uses full_dtype
+    y = model(x)
+    assert y.dtype == full_dtype
+```
+
+**Benefits**:
+- `default_dtype` context manager ensures all torch operations use correct precision
+- No manual dtype conversion needed
+- Test automatically runs twice (f32, f64)
+
+#### Pattern 2: Explicit Dtype Control (Enum Fixture)
+
+When you need the enum itself or explicit dtype conversion:
+
+```python
+# File: tests/test_example.py
+def test_dtype_roundtrip(full_dtype_enum: FullPrecisionDType) -> None:
+    """Test with explicit enum control."""
+    torch_dt = full_dtype_enum.to_torch()
+    result = process_with_dtype(torch_dt)
+    assert result.dtype == torch_dt
+```
+
+#### Pattern 3: Numerical Simulation Tests
+
+For non-PyTorch numerical tests, use the `precision` fixture:
+
+```python
+# File: tests/test_example.py
+def test_simulation(precision: Precision) -> None:
+    """Test Monte Carlo simulation across precisions."""
+    params = make_simulation_params(dtype=precision)
+    result = run_simulation(params)
+    assert_no_nan_inf(result)
+```
+
+#### Pattern 4: Decorator-Based Parametrization
+
+For tests needing decorator parametrization:
+
+```python
+# File: tests/test_example.py
+from tests.helpers import FULL_PRECISION_DTYPES
+
+@pytest.mark.parametrize("dtype", FULL_PRECISION_DTYPES)
+def test_device_placement(dtype: FullPrecisionDType) -> None:
+    """Test with decorator parametrization."""
+    model = create_model(dtype=dtype)
+    for p in model.parameters():
+        assert p.dtype == dtype.to_torch()
+```
+
+### Shared Fixtures Location
+
+All dtype/precision fixtures are in `tests/helpers/fixtures.py`:
+- `full_dtype` - PyTorch dtype with default_dtype context manager
+- `full_dtype_enum` - FullPrecisionDType enum without context manager
+- `precision` - Numerical Precision enum
+
+All dtype constants are in `tests/helpers/dtype_constants.py`:
+- `FULL_PRECISION_DTYPES` - (float32, float64) for PyTorch
+- `PRECISIONS` - (float32, float64) for numerical simulations
+- `TORCH_DTYPES` - (torch.float32, torch.float64)
+
+### Precision-Specific Tolerances
+
+Use precision-specific tolerances from `tests/helpers/constants`:
+
+```python
+# File: tests/test_example.py
+from tests.helpers import RTOL_FLOAT32, ATOL_FLOAT32, RTOL_FLOAT64, ATOL_FLOAT64
+
+def test_convergence(full_dtype: torch.dtype) -> None:
+    """Use precision-appropriate tolerances."""
+    result = compute(full_dtype)
+    expected = ground_truth(full_dtype)
+
+    # Select tolerance based on dtype
+    rtol = RTOL_FLOAT32 if full_dtype == torch.float32 else RTOL_FLOAT64
+    atol = ATOL_FLOAT32 if full_dtype == torch.float32 else ATOL_FLOAT64
+
+    assert torch.allclose(result, expected, rtol=rtol, atol=atol)
+```
+
+Or use the `assert_tensors_close` helper:
+
+```python
+# File: tests/test_example.py
+from tests.helpers import assert_tensors_close
+
+def test_convergence(full_dtype: torch.dtype) -> None:
+    """Helper auto-selects precision-appropriate tolerances."""
+    result = compute(full_dtype)
+    expected = ground_truth(full_dtype)
+    assert_tensors_close(result, expected)
+```
+
+### Anti-Pattern: Local Dtype Fixtures
+
+❌ **FORBIDDEN** - Do NOT define local dtype fixtures:
+
+```python
+# File: tests/test_example.py
+# ❌ WRONG - Duplicate fixture definition
+@pytest.fixture(params=[torch.float32, torch.float64])
+def my_dtype(request):
+    return request.param
+```
+
+✅ **CORRECT** - Use shared fixture:
+
+```python
+# File: tests/test_example.py
+# ✅ RIGHT - Import shared fixture
+def test_something(full_dtype: torch.dtype) -> None:
+    ...
+```
+
+### Anti-Pattern: Hardcoded Dtype
+
+❌ **FORBIDDEN** - Do NOT hardcode dtype in numerical tests:
+
+```python
+# File: tests/test_example.py
+# ❌ WRONG - Only tests float32
+def test_gradient() -> None:
+    x = torch.randn(10, dtype=torch.float32)
+    y = model(x)
+    loss = criterion(y)
+    loss.backward()
+```
+
+✅ **CORRECT** - Parametrize over dtypes:
+
+```python
+# File: tests/test_example.py
+# ✅ RIGHT - Tests both float32 and float64
+def test_gradient(full_dtype: torch.dtype) -> None:
+    x = torch.randn(10)  # Uses full_dtype from context
+    y = model(x)
+    loss = criterion(y)
+    loss.backward()
+```
+
+### Enforcement
+
+**Manual Review Required**:
+- Code reviews MUST check that numerical tests use mixed precision fixtures
+- Grep for hardcoded `dtype=torch.float32` in test files
+- Verify no local dtype fixture definitions
+
+**Validation Commands**:
+
+```bash
+# File: documents/engineering/testing_requirements.md
+# Check for hardcoded float32 in tests (should be minimal)
+docker compose -f docker/docker-compose.yml exec spectralmc \
+  grep -r "dtype=torch.float32\|dtype=_dt.float32" tests/ --exclude-dir=test_storage
+
+# Check for local dtype fixtures (should find none except in helpers/)
+docker compose -f docker/docker-compose.yml exec spectralmc \
+  grep -r "@pytest.fixture.*dtype\|@pytest.fixture.*precision" tests/ --exclude=tests/helpers/
+
+# Check for duplicate DTYPES/PRECISIONS constants
+docker compose -f docker/docker-compose.yml exec spectralmc \
+  grep -r "_DTYPES\|PRECISIONS.*=" tests/ --exclude=tests/helpers/dtype_constants.py
+```
+
+### Migration from Legacy Patterns
+
+**Step 1**: Remove local fixture definitions
+**Step 2**: Import shared fixtures from `tests.helpers`
+**Step 3**: Update constant imports to use `dtype_constants`
+**Step 4**: Verify tests still pass:
+
+```bash
+# File: documents/engineering/testing_requirements.md
+docker compose -f docker/docker-compose.yml exec spectralmc \
+  poetry run test-all tests/test_yourfile.py > /tmp/test-output.txt 2>&1
+```
+
+See [Testing Architecture](testing_architecture.md#parametrized-fixtures) for fixture composition patterns.
+
+---
+
 ## Test Fixtures
 
 Use pytest fixtures for common test setup. **Never use conditional device fallback in fixtures.**

@@ -369,19 +369,33 @@ flowchart TB
 
 **Use for**: Testing behavior across different configurations
 
-```python
-# File: tests/test_cvnn.py
-@pytest.fixture(params=[torch.float32, torch.float64], ids=["f32", "f64"])
-def dtype(request: pytest.FixtureRequest) -> torch.dtype:
-    """Parametrize tests across float32 and float64."""
-    return request.param
+#### Mixed Precision Testing (Canonical Pattern)
 
-def test_complex_linear_forward(dtype: torch.dtype) -> None:
+SpectralMC enforces mixed precision testing for all numerical tests. See [Testing Requirements: Mixed Precision Testing Policy](testing_requirements.md#mixed-precision-testing-policy) for the complete policy.
+
+**Shared dtype fixtures** (defined in `tests/helpers/fixtures.py`):
+
+```python
+# File: tests/test_example.py
+# PyTorch model tests - use full_dtype fixture
+def test_complex_linear_forward(full_dtype: torch.dtype) -> None:
     """Test runs twice: once for f32, once for f64."""
-    with default_dtype(dtype):
-        layer = ComplexLinear(in_features=4, out_features=2)
-        # ... rest of test
+    layer = ComplexLinear(in_features=4, out_features=2)
+    real_input = torch.randn(3, 4)  # Uses full_dtype via context manager
+    imag_input = torch.randn(3, 4)
+
+    real_output, imag_output = layer(real_input, imag_input)
+
+    assert real_output.shape == (3, 2)
+    assert real_output.dtype == full_dtype
 ```
+
+**When to use each fixture**:
+- `full_dtype` - PyTorch model tests, automatic default_dtype context
+- `full_dtype_enum` - Need FullPrecisionDType enum, explicit dtype control
+- `precision` - Numerical simulation tests (non-PyTorch)
+
+See [Testing Requirements](testing_requirements.md#mixed-precision-testing-policy) for complete examples and anti-patterns.
 
 **Prefer over**: For loops inside tests (parametrization gives better test isolation and failure reporting)
 

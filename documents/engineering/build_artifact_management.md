@@ -21,13 +21,36 @@ Only source-of-truth inputs are versioned. Anything produced by a build step is 
 ### Locations
 - Container-only outputs: `/opt/**` (wheels, compiled kernels, **protobuf-generated Python code**), `.venv` if created transiently in builds.
 - Lockfiles: regenerated during `poetry install` in Docker builds; excluded from git and Docker context.
-- Caches/binaries: `__pycache__/`, `.mypy_cache/`, `.pytest_cache/`, `dist/`, `build/`, `*.egg-info/`.
+- Caches/binaries: `__pycache__/`, `.mypy_cache/`, `.pytest_cache/`, `.ruff_cache/`, `.black_cache/`, `dist/`, `build/`, `*.egg-info/`.
+- **Code checker caches**: mypy (`.mypy_cache/`), black (`.black_cache/`), ruff (`.ruff_cache/`), and Python bytecode (`__pycache__/`) are configured to live in `/opt/` inside containers to avoid bind mount pollution.
 - **Protobuf-generated code**: `*_pb2.py`, `*_pb2.pyi`, `*_pb2_grpc.py` files generated from `.proto` sources; stored in `/opt/spectralmc_proto/` inside containers, referenced but never committed.
 
 ### Rationale
 1. Reproducibility across binary vs source builds without stale locks.
 2. Smaller Docker contexts and faster rebuilds.
 3. Avoid leaking compiled outputs or cache churn into reviews.
+
+### Code Checker Cache Policy
+
+Code quality tools (mypy, black, ruff) and Python's bytecode compiler generate cache artifacts that must not pollute the host filesystem or participate in bind mounts.
+
+**Cache types and locations**:
+- **Mypy cache** (`.mypy_cache/`): Type checking incremental state
+- **Black cache** (`.black_cache/`): Code formatter metadata (if enabled)
+- **Ruff cache** (`.ruff_cache/`): Linter incremental analysis (if enabled)
+- **Python bytecode** (`__pycache__/`): Compiled `.pyc` files
+
+**Policy**:
+- All code checker caches MUST live under `/opt/` inside containers
+- Caches MUST NOT exist in `/spectralmc/` (the bind-mounted app directory)
+- Configuration via environment variables: `MYPY_CACHE_DIR=/opt/.mypy_cache`, `RUFF_CACHE_DIR=/opt/.ruff_cache`, `PYTHONPYCACHEPREFIX=/opt/__pycache__`
+- Black does not support cache_dir configuration (uses default location, ignored via `.dockerignore`)
+
+**Rationale**:
+1. **Host isolation**: Prevents cache pollution on the developer's host filesystem
+2. **Performance**: Avoids bind mount overhead for frequently-written cache files
+3. **Consistency**: Cache invalidation across container rebuilds without host state interference
+4. **Cleanliness**: Git status remains clean without spurious cache directories
 
 ## What Is Versioned (Sources)
 - `pyproject.binary.toml`, `pyproject.source.toml`, `poetry.toml`, source code (including `.proto` files), stubs, scripts, docs.
@@ -63,12 +86,12 @@ See [Docker Build Philosophy - Dual-Pyproject Architecture](docker_build_philoso
 ## What Is Not Versioned (Artifacts)
 - `poetry.lock`, `package-lock.json`.
 - Build outputs under `/opt/**`, `dist/`, `build/`, `*.egg-info/`.
-- Python caches: `__pycache__/`, `.mypy_cache/`, `.pytest_cache/`.
+- Python caches: `__pycache__/`, `.mypy_cache/`, `.pytest_cache/`, `.ruff_cache/`, `.black_cache/` (configured to live in `/opt/` inside containers).
 - **Protobuf-generated code**: `*_pb2.py`, `*_pb2.pyi`, `*_pb2_grpc.py` files (generated from `.proto` sources during container build).
 
 ## Ignore Policy
 
-- `.gitignore`: exclude lockfiles and build/caches with comments describing why/how to regenerate.
+- `.gitignore`: exclude lockfiles and build/caches with comments describing why/how to regenerate. Code checker caches are configured to live in `/opt/` inside containers and do not appear on host.
 - `.dockerignore`: exclude the same artifacts to keep build context minimal.
 - See [Documentation Standards](../documentation_standards.md) for file naming and comment formatting conventions.
 

@@ -167,6 +167,37 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all 
 - **No fallbacks**: Silent CPU fallbacks are forbidden - `pytest.skip("CUDA not available")` is not allowed
 - **Fixtures**: Global GPU memory cleanup in `tests/conftest.py`
 
+### Mixed Precision Testing
+
+SpectralMC REQUIRES mixed precision testing for all numerical tests.
+
+**Quick Start**:
+```python
+# File: tests/test_example.py
+# PyTorch model tests - use full_dtype fixture
+def test_model(full_dtype: torch.dtype) -> None:
+    model = MyModel()  # Auto-uses full_dtype
+    x = torch.randn(10)  # Auto-uses full_dtype
+    assert x.dtype == full_dtype
+
+# Numerical simulation tests - use precision fixture
+def test_simulation(precision: Precision) -> None:
+    params = make_simulation_params(dtype=precision)
+    result = run_simulation(params)
+```
+
+**Shared Fixtures** (from `tests.helpers`):
+- `full_dtype` - PyTorch dtype with context manager
+- `full_dtype_enum` - FullPrecisionDType enum
+- `precision` - Numerical Precision enum
+
+**Shared Constants** (from `tests.helpers`):
+- `FULL_PRECISION_DTYPES` - (float32, float64) tuple
+- `PRECISIONS` - (Precision.float32, Precision.float64) tuple
+- `RTOL_FLOAT32`, `RTOL_FLOAT64` - Precision-specific tolerances
+
+**For complete policy**, see [Testing Requirements: Mixed Precision Testing Policy](documents/engineering/testing_requirements.md#mixed-precision-testing-policy).
+
 ## Anti-Patterns - Quick Reference
 
 SpectralMC enforces strict standards to prevent common errors in testing and implementation.

@@ -41,11 +41,25 @@ from tests.helpers.constants import (
     DEFAULT_NETWORK_SIZE,
     DEFAULT_THREADS_PER_BLOCK,
     DEFAULT_TIMESTEPS,
+    EPS_FLOAT32,
+    EPS_FLOAT64,
     LARGE_MODEL_SIZE,
     MEDIUM_MODEL_SIZE,
     RTOL_FLOAT32,
     RTOL_FLOAT64,
     SMALL_MODEL_SIZE,
+)
+from tests.helpers.dtype_constants import (
+    FULL_PRECISION_COMPLEX_DTYPES,
+    FULL_PRECISION_DTYPES,
+    PRECISION_COMPLEX,
+    PRECISIONS,
+    TORCH_DTYPES,
+)
+from tests.helpers.fixtures import (
+    full_dtype,
+    full_dtype_enum,
+    precision,
 )
 from spectralmc.gbm import ThreadsPerBlock
 from spectralmc.testing import seed_all_rngs
@@ -80,6 +94,16 @@ __all__ = [
     "assert_tensors_close",
     "assert_no_nan_inf",
     "assert_converged",
+    # Mixed precision fixtures
+    "full_dtype",
+    "full_dtype_enum",
+    "precision",
+    # Dtype/precision constants
+    "FULL_PRECISION_DTYPES",
+    "TORCH_DTYPES",
+    "PRECISIONS",
+    "FULL_PRECISION_COMPLEX_DTYPES",
+    "PRECISION_COMPLEX",
     # Simulation constants
     "DEFAULT_TIMESTEPS",
     "DEFAULT_NETWORK_SIZE",
@@ -92,6 +116,8 @@ __all__ = [
     "RTOL_FLOAT64",
     "ATOL_FLOAT32",
     "ATOL_FLOAT64",
+    "EPS_FLOAT32",
+    "EPS_FLOAT64",
     # Training constants
     "DEFAULT_LEARNING_RATE",
     "DEFAULT_MAX_ITERATIONS",
