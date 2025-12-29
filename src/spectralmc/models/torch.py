@@ -17,7 +17,7 @@ from types import MappingProxyType
 from typing import Iterable, Iterator, Mapping, Sequence
 
 import torch
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_serializer, model_validator
 from safetensors.torch import load as _sf_load
 from safetensors.torch import save as _sf_save
 from typing_extensions import Self
@@ -628,6 +628,20 @@ class AdamOptimizerState(BaseModel):
         )
 
         return self
+
+    @field_serializer("param_states", when_used="always")
+    def serialize_param_states(
+        self, value: Mapping[int, AdamParamState]
+    ) -> dict[int, AdamParamState]:
+        """Convert MappingProxyType to dict for serialization.
+
+        Pydantic expects dict[int, AdamParamState] but runtime value is
+        MappingProxyType after freeze_collections validator. Convert back
+        to dict for serialization to avoid PydanticSerializationUnexpectedValue.
+
+        See: warnings_policy.md#serialization-warnings (lines 106-145)
+        """
+        return dict(value)
 
     # ------------------------------------------------------------------ #
     @classmethod
