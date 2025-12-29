@@ -104,7 +104,10 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run check-code
 ```
 
-**For complete Docker workflows**, see [Docker Build Philosophy](documents/engineering/docker_build_philosophy.md).
+**For complete Docker documentation**, see:
+- [Docker & Environment Variables](documents/engineering/docker.md) - Environment variable documentation and SSoT policy
+- [Docker Build Philosophy](documents/engineering/docker_build_philosophy.md) - Dual-build strategy and entry point scripts
+- [Docker Workflow](documents/engineering/docker_workflow.md) - Daily development patterns
 
 ## 🎮 GPU Support
 

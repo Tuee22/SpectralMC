@@ -19,12 +19,25 @@ FROM nvidia/cuda:12.8.1-devel-ubuntu22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG BUILD_FROM_SOURCE=false
-ENV PATH="/root/.local/bin:/usr/local/bin:$PATH"
 
-# these are needed to ensure cupy works with newer gen GPUs
-# (will jit for the local architecture if we need it)
-ENV CUPY_COMPILE_WITH_PTX=1
-ENV CUPY_NVCC_GENERATE_CODE=current
+# Environment configuration (single source of truth)
+ENV PATH="/root/.local/bin:/usr/local/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH="/spectralmc" \
+    PYTHONPYCACHEPREFIX="/opt/pycache" \
+    CUPY_COMPILE_WITH_PTX=1 \
+    CUPY_NVCC_GENERATE_CODE=current \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_HOME=/usr/local \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    XDG_CACHE_HOME="/opt/spectralmc/cache" \
+    MYPY_CACHE_DIR=/opt/spectralmc/mypy_cache \
+    RUFF_CACHE_DIR=/opt/spectralmc/ruff_cache \
+    PYTEST_CACHE_DIR=/opt/spectralmc/pytest_cache \
+    DOCKER_CONTAINER=1 \
+    CI=false
 
 # 1) Update and install base tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -94,6 +107,14 @@ RUN if [ "$BUILD_FROM_SOURCE" = "true" ]; then \
     poetry install --no-interaction --with dev; \
   fi
 
+# 9.25) Create cache directories
+RUN mkdir -p \
+    /opt/spectralmc/cache \
+    /opt/spectralmc/mypy_cache \
+    /opt/spectralmc/pytest_cache \
+    /opt/spectralmc/ruff_cache \
+    /opt/pycache
+
 # 9.5) Generate protobuf code into /opt/spectralmc_proto
 RUN mkdir -p /opt/spectralmc_proto && \
     protoc \
@@ -107,19 +128,7 @@ RUN mkdir -p /opt/spectralmc_proto && \
 # Verify protobuf generation
 RUN PYTHONPATH=/opt:${PYTHONPATH:-} python -c "import spectralmc_proto.common_pb2; print('✓ Loaded protobuf modules')" || { echo "Failed to load protobuf"; exit 1; }
 
-# 10) Enforce CLAUDE.md testing policies: Block direct pytest and timeout commands
-# Block direct pytest command (python -m pytest still works for Poetry scripts)
-# Poetry installs to /usr/local/bin, so we override that location
-RUN if [ -f /usr/local/bin/pytest ]; then mv /usr/local/bin/pytest /usr/local/bin/pytest.real; fi && \
-    echo '#!/bin/sh\necho "❌ ERROR: Direct pytest forbidden per CLAUDE.md"\necho "✅ USE: poetry run test-all [pytest-args]"\necho "📖 Examples:"\necho "  poetry run test-all              # Run all tests"\necho "  poetry run test-all -v           # Verbose output"\necho "  poetry run test-all -m gpu       # GPU tests only"\necho "📖 Reference: CLAUDE.md testing policies"\nexit 1' > /usr/local/bin/pytest && \
-    chmod +x /usr/local/bin/pytest
-
-# Also block /usr/bin/pytest in case it exists
-RUN if [ -f /usr/bin/pytest ]; then mv /usr/bin/pytest /usr/bin/pytest.real; fi && \
-    echo '#!/bin/sh\necho "❌ ERROR: Direct pytest forbidden per CLAUDE.md"\necho "✅ USE: poetry run test-all [pytest-args]"\necho "📖 Reference: CLAUDE.md testing policies"\nexit 1' > /usr/bin/pytest && \
-    chmod +x /usr/bin/pytest
-
-# Block timeout usage with test commands but allow other timeout usage
+# 10) Block timeout usage with test commands but allow other timeout usage
 RUN if [ -f /usr/bin/timeout ]; then mv /usr/bin/timeout /usr/bin/timeout.real; fi && \
     echo '#!/bin/sh\nif echo "$*" | grep -qE "(pytest|test-|test_)"; then\n  echo "❌ ERROR: Timeout commands with tests forbidden per CLAUDE.md"\n  echo "✅ USE: poetry run test-all [pytest-args]"\n  echo "📖 Tests complete when they complete - patience required"\n  exit 1\nfi\nexec /usr/bin/timeout.real "$@"' > /usr/bin/timeout && \
     chmod +x /usr/bin/timeout

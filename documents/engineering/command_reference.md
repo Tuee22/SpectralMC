@@ -1,11 +1,11 @@
 # File: documents/engineering/command_reference.md
 # Command Reference
 
-**Status**: Authoritative source  
-**Supersedes**: Ad-hoc command snippets  
-**Referenced by**: engineering/README.md; docker_workflow.md; development_workflow.md; testing.md
+**Status**: Authoritative source
+**Supersedes**: Ad-hoc command snippets
+**Referenced by**: engineering/README.md; docker_workflow.md; docker.md; development_workflow.md; testing.md
 
-> **Purpose**: Canonical commands for SpectralMC development, testing, and validation inside Docker. Aligns naming with effectful’s reference while keeping SpectralMC’s `test-all` runner.
+> **Purpose**: Canonical commands for SpectralMC development, testing, and validation inside Docker. Aligns naming with effectful's reference while keeping SpectralMC's `test-all` runner.
 
 ## SSoT Link Map
 
@@ -54,6 +54,7 @@ flowchart TB
 
 ## Cross-References
 
+- [Docker & Environment Variables](docker.md)
 - [Docker Workflow](docker_workflow.md)
 - [Development Workflow](development_workflow.md)
 - [Testing](testing.md)

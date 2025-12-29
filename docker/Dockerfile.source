@@ -17,14 +17,32 @@
 
 FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 ARG DEBIAN_FRONTEND=noninteractive
-ENV PATH="/root/.local/bin:/usr/local/bin:$PATH"
-# Set UTF-8 locale for proper Unicode handling in CLI output
-ENV LANG=C.UTF-8
-ENV LC_ALL=C.UTF-8
 
-# CuPy JIT compilation settings (for runtime optimization)
-ENV CUPY_COMPILE_WITH_PTX=1
-ENV CUPY_NVCC_GENERATE_CODE=current
+# Environment configuration (single source of truth)
+ENV PATH="/root/.local/bin:/usr/local/bin:$PATH" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH="/spectralmc" \
+    PYTHONPYCACHEPREFIX="/opt/pycache" \
+    CUPY_COMPILE_WITH_PTX=1 \
+    CUPY_NVCC_GENERATE_CODE=current \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_HOME=/usr/local \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    CCACHE_DIR=/root/.ccache \
+    CMAKE_CXX_COMPILER_LAUNCHER=ccache \
+    CMAKE_CUDA_COMPILER_LAUNCHER=ccache \
+    PIP_FIND_LINKS=/opt/pytorch-wheel \
+    PIP_CONSTRAINT=/tmp/constraints-source.txt \
+    XDG_CACHE_HOME="/opt/spectralmc/cache" \
+    MYPY_CACHE_DIR=/opt/spectralmc/mypy_cache \
+    RUFF_CACHE_DIR=/opt/spectralmc/ruff_cache \
+    PYTEST_CACHE_DIR=/opt/spectralmc/pytest_cache \
+    DOCKER_CONTAINER=1 \
+    CI=false
 
 # ============================================================================
 # LAYER 1: System Dependencies (changes: never)
@@ -78,6 +96,13 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
     update-alternatives --set python /usr/bin/python3.12
 
 # ============================================================================
+# LAYER 2.5: Copy Constraints File (needed by pip installation)
+# ============================================================================
+# Must come before pip installation because PIP_CONSTRAINT env var is already set
+
+COPY docker/constraints-source.txt /tmp/constraints-source.txt
+
+# ============================================================================
 # LAYER 3: pip and Poetry Installation (single command per doctrine)
 # ============================================================================
 # Poetry virtual environment config is handled by poetry.toml (virtualenvs.create = false)
@@ -91,15 +116,6 @@ RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 && \
 
 WORKDIR /spectralmc
 
-ENV CCACHE_DIR=/root/.ccache
-ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache
-ENV CMAKE_CUDA_COMPILER_LAUNCHER=ccache
-ENV PIP_FIND_LINKS=/opt/pytorch-wheel
-ENV PIP_CONSTRAINT=/tmp/constraints-source.txt
-
-# Make constraints available before the source build step uses pip
-COPY docker/constraints-source.txt /tmp/constraints-source.txt
-
 # ============================================================================
 # LAYER 5: BUILD_FROM_SOURCE Inline Build (tools + long compile up front)
 # ============================================================================
@@ -111,7 +127,10 @@ RUN /bin/bash -c "set -euo pipefail; \
     echo '=== [0/3] Preparing source build toolchain and cache ==='; \
     apt-get update && apt-get install -y --no-install-recommends cmake ninja-build ccache libopenblas-dev liblapack-dev && rm -rf /var/lib/apt/lists/*; \
     ccache --max-size=20G && ccache --zero-stats; \
-    mkdir -p /opt/pytorch-wheel /opt/pytorch /opt/cupy; \
+    mkdir -p /opt/pytorch-wheel /opt/pytorch /opt/cupy \
+        /opt/spectralmc/cache /opt/spectralmc/mypy_cache \
+        /opt/spectralmc/pytest_cache /opt/spectralmc/ruff_cache \
+        /opt/pycache; \
     nvcc --version; python --version | grep '3.12'; \
   "
 
@@ -177,14 +196,6 @@ RUN PYTHONPATH=/opt/pytorch:/opt/cupy:/opt:${PYTHONPATH:-} python -c "import spe
 # ============================================================================
 # LAYER 8: Enforce CLAUDE.md Testing Policies
 # ============================================================================
-
-RUN if [ -f /usr/local/bin/pytest ]; then mv /usr/local/bin/pytest /usr/local/bin/pytest.real; fi && \
-    echo '#!/bin/sh\necho "❌ ERROR: Direct pytest forbidden per CLAUDE.md"\necho "✅ USE: poetry run test-all [pytest-args]"\necho "📖 Examples:"\necho "  poetry run test-all              # Run all tests"\necho "  poetry run test-all -v           # Verbose output"\necho "  poetry run test-all -m gpu       # GPU tests only"\necho "📖 Reference: CLAUDE.md testing policies"\nexit 1' > /usr/local/bin/pytest && \
-    chmod +x /usr/local/bin/pytest
-
-RUN if [ -f /usr/bin/pytest ]; then mv /usr/bin/pytest /usr/bin/pytest.real; fi && \
-    echo '#!/bin/sh\necho "❌ ERROR: Direct pytest forbidden per CLAUDE.md"\necho "✅ USE: poetry run test-all [pytest-args]"\necho "📖 Reference: CLAUDE.md testing policies"\nexit 1' > /usr/bin/pytest && \
-    chmod +x /usr/bin/pytest
 
 RUN if [ -f /usr/bin/timeout ]; then mv /usr/bin/timeout /usr/bin/timeout.real; fi && \
     echo '#!/bin/sh\nif echo "$*" | grep -qE "(pytest|test-|test_)"; then\n  echo "❌ ERROR: Timeout commands with tests forbidden per CLAUDE.md"\n  echo "✅ USE: poetry run test-all [pytest-args]"\n  echo "📖 Tests complete when they complete - patience required"\n  exit 1\nfi\nexec /usr/bin/timeout.real "$@"' > /usr/bin/timeout && \

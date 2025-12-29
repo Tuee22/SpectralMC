@@ -3,11 +3,12 @@
 
 **Status**: Authoritative source
 **Supersedes**: Prior docker build philosophy drafts
-**Referenced by**: CLAUDE.md, docker_workflow.md, documentation_standards.md
+**Referenced by**: CLAUDE.md, docker_workflow.md, docker.md, documentation_standards.md
 
 > **Purpose**: Define the dual-mode Docker build approach for SpectralMC across GPU generations, Poetry-first dependency management, and entry point script policies.
 
 ## Cross-References
+- [Docker & Environment Variables](docker.md) - Complete environment variable documentation and SSoT policy
 - [Docker Workflow](docker_workflow.md) - Development workflow and command patterns
 - [GPU Build Guide](gpu_build.md) - Legacy GPU build instructions
 - [Coding Standards](coding_standards.md) - Code quality standards

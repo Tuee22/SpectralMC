@@ -1,11 +1,11 @@
 # File: documents/engineering/docker_workflow.md
 # Docker Development Workflow
 
-**Status**: Authoritative source  
-**Supersedes**: docker_build_philosophy.md for workflow guidance (build doc still SSoT for images)  
-**Referenced by**: engineering/README.md; command_reference.md; development_workflow.md; documentation_standards.md
+**Status**: Authoritative source
+**Supersedes**: docker_build_philosophy.md for workflow guidance (build doc still SSoT for images)
+**Referenced by**: engineering/README.md; command_reference.md; development_workflow.md; documentation_standards.md; docker.md
 
-> **Purpose**: Docker-only development contract for SpectralMC. Aligns naming with effectful while retaining SpectralMC’s GPU stack and `poetry run test-all` requirements.
+> **Purpose**: Docker-only development contract for SpectralMC. Aligns naming with effectful while retaining SpectralMC's GPU stack and `poetry run test-all` requirements.
 
 ## SSoT Link Map
 
@@ -18,6 +18,7 @@ flowchart TB
   GPU[GPU Build Guide]
   Test[Testing]
   Docs[Documentation Standards]
+  DockerEnv[Docker & Environment Variables]
 
   Docker --> Cmds
   Docker --> Dev
@@ -25,11 +26,13 @@ flowchart TB
   Docker --> GPU
   Docker --> Test
   Docker --> Docs
+  Docker --> DockerEnv
   Test --> Cmds
 ```
 
 | Need | Link |
 |------|------|
+| Environment variable documentation | [Docker & Environment Variables](docker.md) |
 | Daily dev loop | [Development Workflow](development_workflow.md) |
 | Exact commands | [Command Reference](command_reference.md) |
 | Build modes (binary/source) | [Docker Build Philosophy](docker_build_philosophy.md) |
@@ -99,6 +102,7 @@ See [Docker Build Philosophy - Entry Point Script Management](docker_build_philo
 
 ## Cross-References
 
+- [Docker & Environment Variables](docker.md) - Complete environment variable documentation and SSoT policy
 - [Docker Build Philosophy](docker_build_philosophy.md) - Image layout, lockfile policy, and entry point script management
 - [GPU Build Guide](gpu_build.md) - Legacy GPUs (source build path)
 - [Command Reference](command_reference.md) - Canonical commands

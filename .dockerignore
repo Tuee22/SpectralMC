@@ -73,12 +73,10 @@ logs
 **/*.ipynb_checkpoints
 *.ipynb
 
-# Docker - avoid recursive copying
-docker/
+# Docker metadata (not needed in build context)
 Dockerfile*
 docker-compose*.yml
 .dockerignore
-!docker/constraints-source.txt
 
 # CI/CD
 .github
