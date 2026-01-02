@@ -168,7 +168,7 @@ from spectralmc.gbm_trainer import (
 )
 from spectralmc.result import Failure, Success
 from spectralmc.storage import AsyncBlockchainModelStore
-from spectralmc.testing import make_gbm_cvnn_config
+from tests.helpers import make_gbm_cvnn_config  # Helper for quick start
 
 assert torch.cuda.is_available(), "CUDA required for training"
 config = make_gbm_cvnn_config(torch.nn.Linear(5, 100).to("cuda"))
@@ -215,7 +215,7 @@ import torch
 from spectralmc.runtime import get_torch_handle
 from spectralmc.gbm_trainer import GbmCVNNPricer
 from spectralmc.storage import AsyncBlockchainModelStore, commit_snapshot
-from spectralmc.testing import make_gbm_cvnn_config
+from tests.helpers import make_gbm_cvnn_config  # Helper for quick start
 from spectralmc.result import Failure, Success
 
 get_torch_handle()
@@ -254,7 +254,7 @@ from spectralmc.storage import (
     pinned_mode,
 )
 from spectralmc.result import Success
-from spectralmc.testing import make_gbm_cvnn_config
+from tests.helpers import make_gbm_cvnn_config  # Helper for quick start
 
 model_template = torch.nn.Linear(5, 100).to("cuda")
 config_template = make_gbm_cvnn_config(model_template)

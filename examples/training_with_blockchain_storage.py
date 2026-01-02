@@ -19,22 +19,15 @@ import asyncio
 import torch
 from spectralmc.runtime import get_torch_handle
 
-from spectralmc.gbm import BlackScholes
-from spectralmc.gbm_trainer import (
-    GbmCVNNPricerConfig,
-    GbmCVNNPricer,
-    FinalAndIntervalCommit,
-    TrainingConfig,
-    build_training_config,
-)
 from spectralmc.models.torch import Device
-from spectralmc.testing import default_domain_bounds, make_gbm_cvnn_config, seed_all_rngs
+from spectralmc.result import Failure, Success
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     InferenceClient,
     TrackingMode,
     load_snapshot_from_checkpoint,
 )
+from tests.helpers import make_gbm_cvnn_config, seed_all_rngs
 
 get_torch_handle()
 nn = torch.nn
@@ -54,10 +47,12 @@ def create_simple_cvnn(
     )
 
 
-def create_training_config() -> GbmCVNNPricerConfig:
+def create_training_config():
     """Create initial training configuration."""
+    from tests.helpers import make_domain_bounds
+
     model = create_simple_cvnn().to(device=Device.cuda.to_torch())
-    bounds = default_domain_bounds(
+    bounds = make_domain_bounds(
         x0=(80.0, 120.0),
         k=(80.0, 120.0),
         t=(0.1, 2.0),
@@ -70,6 +65,14 @@ def create_training_config() -> GbmCVNNPricerConfig:
 
 async def train_with_blockchain() -> None:
     """Train model with automatic blockchain commits."""
+    # Import here to avoid circular import at module level
+    from spectralmc.gbm import BlackScholes
+    from spectralmc.gbm_trainer import (
+        GbmCVNNPricer,
+        FinalAndIntervalCommit,
+        build_training_config,
+    )
+
     seed_all_rngs(42)
     print("=" * 80)
     print("Training with Blockchain Storage Integration")
@@ -173,6 +176,10 @@ async def train_with_blockchain() -> None:
 
 async def demonstrate_inference_client() -> None:
     """Demonstrate InferenceClient with the trained model."""
+    # Import here to avoid circular import at module level
+    from spectralmc.gbm import BlackScholes
+    from spectralmc.gbm_trainer import GbmCVNNPricer
+
     print("\n" + "=" * 80)
     print("Demonstrating InferenceClient (Tracking Mode)")
     print("=" * 80)

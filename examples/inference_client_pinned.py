@@ -12,9 +12,9 @@ import asyncio
 import torch
 from spectralmc.runtime import get_torch_handle
 
-from spectralmc.storage import AsyncBlockchainModelStore, InferenceClient, PinnedMode
-from spectralmc.testing import make_gbm_cvnn_config, make_test_simulation_params, seed_all_rngs
 from spectralmc.result import Success, Failure
+from spectralmc.storage import AsyncBlockchainModelStore, InferenceClient, PinnedMode
+from tests.helpers import make_gbm_cvnn_config, seed_all_rngs
 
 get_torch_handle()
 
@@ -42,7 +42,7 @@ async def main() -> None:
                 print(f"   Please ensure blockchain storage is initialized.")
                 return
 
-        # 3. Create model template for loading
+        # 3. Create model and config templates
         print("\n3. Creating model template")
         # Note: This should match the architecture of stored models
         model_template = torch.nn.Sequential(
@@ -52,13 +52,7 @@ async def main() -> None:
         )
 
         # 4. Create config template
-        sim_params = make_test_simulation_params()
-        config_template = make_gbm_cvnn_config(
-            model_template,
-            global_step=0,
-            sim_params=sim_params,
-            domain_bounds={},
-        )
+        config_template = make_gbm_cvnn_config(model_template, global_step=0, domain_bounds={})
 
         # 5. Create InferenceClient in PINNED mode
         # Pin to version 0 (genesis) for maximum stability

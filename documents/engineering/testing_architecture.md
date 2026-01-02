@@ -126,10 +126,20 @@ Otherwise, prefer global `tests/helpers/` for cross-suite patterns.
 SpectralMC defines **five** canonical locations for shared test code:
 
 1. **tests/helpers/result_utils.py** - Result type unwrapping
-2. **tests/helpers/factories.py** - Config/model builders (mirrored in public `spectralmc.testing`)
+2. **tests/helpers/factories.py** - Config/model builders (test-only utilities)
 3. **tests/helpers/assertions.py** - Custom assertion helpers
 4. **tests/helpers/constants.py** - Shared test constants
-5. **tests/helpers/seed_all_rngs (re-export)** — RNG seeding helper (also public as `spectralmc.testing.seed_all_rngs`)
+5. **tests/helpers/seed_all_rngs** — RNG seeding helper for deterministic tests
+
+### Important: Test-Only Utilities
+
+All utilities in `tests/helpers/` are **test infrastructure only**:
+- ❌ NOT part of the public API
+- ❌ NOT importable in production code (`src/spectralmc/`)
+- ✅ Used by test suite (`tests/`)
+- ✅ Used by examples (`examples/`) for demonstration purposes
+
+Production code and examples should use the production builder functions (`build_simulation_params`, `build_black_scholes_config`, etc.) with explicit Result matching
 
 ### 1. Result Type Unwrapping (result_utils.py)
 

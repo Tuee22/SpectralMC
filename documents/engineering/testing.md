@@ -22,8 +22,8 @@
 
 - **GPU-only**: global guard asserts CUDA availability; no per-test `torch.cuda.is_available()` checks, no CPU fallbacks/skips. Use `spectralmc.models.torch.Device` rather than raw `torch.device("cuda:0")`.
 - **Runner**: `docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all` (arguments allowed); never run `pytest` directly.
-- **Determinism**: seed via shared helper (`tests.helpers.seed_all_rngs` or `spectralmc.testing.seed_all_rngs`) where randomness appears; respect the 60s per-test timeout; preserve full logs (no shell timeouts).
-- **DRY helpers**: reuse `tests/helpers` (or public `spectralmc.testing`) for simulation/config builders (`make_simulation_params`, `make_black_scholes_config`, `make_gbm_cvnn_config`), bounds, param diff, assertions. Avoid inlined RNG capture/config duplication in tests/examples.
+- **Determinism**: seed via shared helper (`tests.helpers.seed_all_rngs`) where randomness appears; respect the 60s per-test timeout; preserve full logs (no shell timeouts).
+- **DRY helpers**: reuse `tests/helpers` for simulation/config builders (`make_simulation_params`, `make_black_scholes_config`, `make_gbm_cvnn_config`), bounds, param diff, assertions. Avoid inlined RNG capture/config duplication in tests/examples.
 - **Type safety/purity**: tests are fully typed, mypy-strict-clean, and obey purity rules for code under test.
 
 **Related Documentation:**

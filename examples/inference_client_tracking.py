@@ -12,9 +12,9 @@ import asyncio
 import torch
 from spectralmc.runtime import get_torch_handle
 
-from spectralmc.storage import AsyncBlockchainModelStore, InferenceClient, TrackingMode
-from spectralmc.testing import make_gbm_cvnn_config, make_test_simulation_params, seed_all_rngs
 from spectralmc.result import Success, Failure
+from spectralmc.storage import AsyncBlockchainModelStore, InferenceClient, TrackingMode
+from tests.helpers import make_gbm_cvnn_config, make_simulation_params, seed_all_rngs
 
 get_torch_handle()
 
@@ -50,7 +50,7 @@ async def main() -> None:
         )
 
         # 4. Create config template
-        sim_params = make_test_simulation_params()
+        sim_params = make_simulation_params()
         config_template = make_gbm_cvnn_config(
             model_template,
             global_step=0,

@@ -13,20 +13,18 @@ Demonstrates the complete workflow:
 from __future__ import annotations
 
 import asyncio
+
 import torch
 from spectralmc.runtime import get_torch_handle
+
 from spectralmc.models.torch import AdamOptimizerState, AdamParamGroup, AdamParamState
-from spectralmc.testing import (
-    make_gbm_cvnn_config,
-    make_test_simulation_params,
-    seed_all_rngs,
-)
+from spectralmc.result import Success, Failure
 from spectralmc.storage import (
     AsyncBlockchainModelStore,
     commit_snapshot,
     load_snapshot_from_checkpoint,
 )
-
+from tests.helpers import make_gbm_cvnn_config, seed_all_rngs
 
 get_torch_handle()
 
@@ -52,15 +50,20 @@ async def main() -> None:
             param.data = torch.randn_like(param)
 
     # Create optimizer state (in practice, from actual Adam optimizer)
-    param_states = {
-        0: AdamParamState.from_torch(
-            {
-                "step": 100,
-                "exp_avg": torch.randn(20, 10),
-                "exp_avg_sq": torch.randn(20, 10),
-            }
-        ),
-    }
+    param_state_result = AdamParamState.from_torch(
+        {
+            "step": 100,
+            "exp_avg": torch.randn(20, 10),
+            "exp_avg_sq": torch.randn(20, 10),
+        }
+    )
+
+    match param_state_result:
+        case Success(param_state):
+            param_states = {0: param_state}
+        case Failure(error):
+            print(f"Failed to create parameter state: {error}")
+            return
 
     param_groups = [
         AdamParamGroup(
@@ -77,13 +80,13 @@ async def main() -> None:
         param_states=param_states, param_groups=param_groups
     )
 
-    sim_params = make_test_simulation_params()
+    # Build config using test helpers
     snapshot = make_gbm_cvnn_config(
         model,
-        global_step=100,
-        sim_params=sim_params,
-        domain_bounds={},
         optimizer_state=optimizer_state,
+        global_step=100,
+        sobol_skip=0,
+        domain_bounds={},
     )
 
     print(
@@ -132,15 +135,12 @@ async def main() -> None:
                     for param in model.parameters():
                         param.add_(0.1)
 
-                snapshot2 = GbmCVNNPricerConfig(
-                    cfg=bs_config,
-                    domain_bounds={},
-                    cvnn=model,
+                snapshot2 = make_gbm_cvnn_config(
+                    model,
                     optimizer_state=optimizer_state,
                     global_step=200,
                     sobol_skip=0,
-                    torch_cpu_rng_state=torch.get_rng_state().numpy().tobytes(),
-                    torch_cuda_rng_states=[],
+                    domain_bounds={},
                 )
 
                 version2 = await commit_snapshot(
@@ -165,40 +165,45 @@ async def main() -> None:
                     torch.nn.Linear(20, 10),
                 )
 
-                loaded_snapshot = await load_snapshot_from_checkpoint(
+                loaded_result = await load_snapshot_from_checkpoint(
                     store, version, new_model, snapshot
                 )
 
-                print(f"   Loaded version: {version.version_id}")
-                print(f"   Global step: {loaded_snapshot.global_step}")
+                match loaded_result:
+                    case Success(loaded_snapshot):
+                        print(f"   Loaded version: {version.version_id}")
+                        print(f"   Global step: {loaded_snapshot.global_step}")
 
-                # Verify parameters match the original checkpoint (before modification in step 4)
-                loaded_state_dict = loaded_snapshot.cvnn.state_dict()
+                        # Verify parameters match the original checkpoint (before modification in step 4)
+                        loaded_state_dict = loaded_snapshot.cvnn.state_dict()
 
-                all_match = all(
-                    torch.allclose(
-                        original_state_dict[key],
-                        loaded_state_dict[key],
-                        rtol=1e-6,
-                        atol=1e-9,
-                    )
-                    for key in original_state_dict.keys()
-                )
+                        all_match = all(
+                            torch.allclose(
+                                original_state_dict[key],
+                                loaded_state_dict[key],
+                                rtol=1e-6,
+                                atol=1e-9,
+                            )
+                            for key in original_state_dict.keys()
+                        )
 
-                print(f"   Parameters match original checkpoint: {all_match}")
+                        print(f"   Parameters match original checkpoint: {all_match}")
 
-                # Show that current model is different (modified in step 4)
-                current_state_dict = model.state_dict()
-                current_different = not all(
-                    torch.allclose(
-                        original_state_dict[key],
-                        current_state_dict[key],
-                        rtol=1e-6,
-                        atol=1e-9,
-                    )
-                    for key in original_state_dict.keys()
-                )
-                print(f"   Current model differs from checkpoint: {current_different}")
+                        # Show that current model is different (modified in step 4)
+                        current_state_dict = model.state_dict()
+                        current_different = not all(
+                            torch.allclose(
+                                original_state_dict[key],
+                                current_state_dict[key],
+                                rtol=1e-6,
+                                atol=1e-9,
+                            )
+                            for key in original_state_dict.keys()
+                        )
+                        print(f"   Current model differs from checkpoint: {current_different}")
+                    case Failure(error):
+                        print(f"   Failed to load checkpoint: {error}")
+                        return
             case Failure(error):
                 print(f"   Error retrieving HEAD: {error}")
                 print("Cannot verify blockchain integrity. Aborting.")

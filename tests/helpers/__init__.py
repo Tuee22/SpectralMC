@@ -62,7 +62,6 @@ from tests.helpers.fixtures import (
     precision,
 )
 from spectralmc.gbm import ThreadsPerBlock
-from spectralmc.testing import seed_all_rngs
 from tests.helpers.factories import (
     make_domain_bounds,
     make_black_scholes_config,
@@ -71,6 +70,7 @@ from tests.helpers.factories import (
     make_test_cvnn,
     make_training_config,
     max_param_diff,
+    seed_all_rngs,
 )
 from tests.helpers.result_utils import E, T, expect_failure, expect_success
 

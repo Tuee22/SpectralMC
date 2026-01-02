@@ -5,6 +5,15 @@ CuPy is imported unconditionally-if it is not installed the test session
 will fail immediately, making the missing dependency obvious.
 
 All tests require GPU - missing GPU is a hard failure, not a skip.
+This is enforced by the module-level CUDA assertion at line 33 (see
+testing_requirements.md§GPU Requirements for policy details).
+
+CUDA Availability Assertions:
+- Line 33: Module-level hard assertion (centralizing guard for entire suite)
+- Line 131: Conditional in cleanup_gpu fixture (defensive exception handling)
+
+The module-level assertion ensures all tests fail immediately and loudly if
+CUDA is unavailable. Individual test modules should NOT add redundant checks.
 """
 
 from __future__ import annotations
@@ -29,7 +38,10 @@ from spectralmc.runtime import get_torch_handle
 from spectralmc.models.torch import Device
 
 
-# Module-level GPU requirement - test suite fails immediately without GPU
+# Module-level GPU requirement - test suite fails immediately without GPU.
+# This is the single, centralized assertion for the entire test suite.
+# Do NOT add similar assertions to individual test modules (DRY principle).
+# See testing_requirements.md§GPU Requirements for policy details.
 assert torch.cuda.is_available(), "CUDA required for SpectralMC tests"
 
 GPU_DEV: torch.device = Device.cuda.to_torch()

@@ -50,9 +50,6 @@ SIM_PARAMS = make_simulation_params(
 )
 BS_CONFIG = make_black_scholes_config(sim_params=SIM_PARAMS)
 
-# Module-level GPU requirement for this end-to-end workflow
-assert torch.cuda.is_available(), "CUDA required for full-stack CVNN pricer test"
-
 
 def _make_pricer_config(model: ComplexValuedModel, *, global_step: int = 0) -> GbmCVNNPricerConfig:
     """Standardized pricer config for this guided walkthrough."""

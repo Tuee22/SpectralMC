@@ -24,8 +24,12 @@ from spectralmc.gbm import (
 from spectralmc.models.numerical import Precision
 from spectralmc.quantlib import bs_price_quantlib
 from spectralmc.sobol_sampler import SobolConfig, SobolSampler
-from spectralmc.testing import default_domain_bounds
-from tests.helpers import expect_success, make_black_scholes_config, make_simulation_params
+from tests.helpers import (
+    expect_success,
+    make_black_scholes_config,
+    make_domain_bounds,
+    make_simulation_params,
+)
 
 
 # ─────────────────────────────── type aliases ───────────────────────────────
@@ -33,7 +37,7 @@ Inputs: TypeAlias = BlackScholes.Inputs
 HostPriceResults: TypeAlias = BlackScholes.HostPricingResults
 
 # ──────────────────────────────── constants ─────────────────────────────────
-_BS_DIMENSIONS = default_domain_bounds(
+_BS_DIMENSIONS = make_domain_bounds(
     x0=(0.001, 10_000),
     k=(0.001, 20_000),
     t=(0.0, 10.0),
