@@ -116,6 +116,10 @@ check-purity = "tools.check_purity:main"
 # Protobuf code generation
 regen-proto = "tools.regen_proto:main"
 
+# TLA+ model checking (TLC)
+# Usage: poetry run tla-check --spec <path> [--config <path>]
+tla-check = "tools.run_tla:main"
+
 # --------------------------------------------------------------------------- #
 #                               B U I L D                                     #
 # --------------------------------------------------------------------------- #

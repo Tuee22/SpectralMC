@@ -40,6 +40,7 @@ flowchart TB
 | Deterministic PyTorch runtime/device | [Torch Runtime (facade removed)](pytorch_facade.md) |
 | CPU init → GPU compute rules | [CPU GPU Compute Policy](cpu_gpu_compute_policy.md) |
 | Determinism proofs | [Reproducibility Proofs](reproducibility_proofs.md) |
+| Formal reproducibility proofs (TLA+) | [TLA+ Reproducibility Proofs](tla.md) |
 | Testing gates | [Testing](testing.md) |
 
 ## Cross-References
@@ -50,6 +51,7 @@ flowchart TB
 - [Testing Requirements](testing_requirements.md) — GPU-first test contracts and timeouts.
 - [Effect Interpreter Doctrine](effect_interpreter.md) — Execution boundaries and side-effect isolation.
 - [Total Pure Modelling](total_pure_modelling.md) — Source of total ADTs that keep models aligned to reality.
+- [TLA+ Reproducibility Proofs](tla.md) — Formal model checking workflow for reproducibility.
 
 ## Doctrines
 
@@ -59,6 +61,7 @@ flowchart TB
 - **Effects as data**: Programs yield effect ADTs; interpreters execute. No direct infrastructure calls inside programs or models.
 - **GPU determinism**: CPU-only initialization + explicit device transfer; TorchRuntime ADT + configuration effect applies deterministic settings and thread affinity before GPU work.
 - **Reproducibility**: RNG state is explicit; checkpoint/restore semantics prove equivalence. See reproducibility proofs for invariants.
+- **Formal proof workflow**: Use the TLA+ workflow for model checking of reproducibility invariants (see [tla.md](tla.md)).
 - **Guard → decision → effect**: Follow [total_pure_modelling.md](total_pure_modelling.md#core-principles-for-spectralmc) for torch runtime, device moves, and storage transitions. Make impossible states unrepresentable, then interpret effects.
 
 ## Anti-Pattern Routing

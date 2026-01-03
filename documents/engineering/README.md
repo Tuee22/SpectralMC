@@ -77,6 +77,7 @@ flowchart TB
 - **[Torch Runtime (facade removed)](pytorch_facade.md)** — Pure runtime ADT plus deterministic configuration effect for torch.
 - **[Effect Interpreter Doctrine](effect_interpreter.md)** — Effect ADTs and interpreter isolation.
 - **[Reproducibility Proofs](reproducibility_proofs.md)** — Formal guarantees for determinism and checkpointing.
+- **[TLA+ Reproducibility Proofs](tla.md)** — Formal model-checking workflow for reproducibility.
 - **[Total Pure Modelling](total_pure_modelling.md)** — Total ADTs for device placement, retries, and storage ownership.
 - **[Blockchain Model Versioning](blockchain_storage.md)** — Storage CAS protocol and integrity checks.
 - **[Pydantic Best Practices](pydantic_patterns.md)** — Config and validation patterns.
@@ -107,7 +108,7 @@ All engineering decisions flow from this principle. Every standard, pattern, and
 
 ## Document Status
 
-**Total**: 29 engineering documents (12 core + 17 domain-specific/guides)
+**Total**: 30 engineering documents (12 core + 18 domain-specific/guides)
 **Lines of Documentation**: ~15,000+ lines of engineering documentation
 
 **Core Documents** (12):
@@ -129,6 +130,7 @@ All engineering decisions flow from this principle. Every standard, pattern, and
 - Torch Runtime (facade removed)
 - Effect Interpreter Doctrine
 - Reproducibility Proofs
+- TLA+ Reproducibility Proofs
 - Total Pure Modelling
 - Blockchain Model Versioning
 - Pydantic Best Practices

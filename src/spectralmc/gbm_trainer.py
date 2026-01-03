@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import asyncio
 import math
-import time
 import warnings
 from collections import deque
 from dataclasses import dataclass
@@ -134,23 +133,6 @@ LOGGER_NAME = __name__
 LogLevel = Literal["debug", "info", "warning", "error", "critical"]
 
 S = TypeVar("S")
-
-
-def _consume_log_task_exception(task: asyncio.Task[object]) -> None:
-    """Consume logging task exceptions with specific handling.
-
-    Handles expected exceptions from optional TensorBoard logging.
-    Logging failures are intentionally non-fatal and should not crash training.
-    """
-    try:
-        task.exception()
-    except asyncio.CancelledError:
-        # Expected during shutdown
-        return
-    except (ImportError, RuntimeError, IOError, OSError):
-        # Expected exceptions from TensorBoard operations
-        # Silently consume - logging is optional and should not crash training
-        return
 
 
 __all__: tuple[str, ...] = (
@@ -882,8 +864,7 @@ class GbmCVNNPricer:
             asyncio.run(self._logging_interpreter.interpret(effect))
             return
 
-        task = loop.create_task(self._logging_interpreter.interpret(effect))
-        task.add_done_callback(_consume_log_task_exception)
+        loop.create_task(self._logging_interpreter.interpret(effect))
 
     async def _log_async_internal(
         self,
@@ -1427,34 +1408,6 @@ class GbmCVNNPricer:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _maybe_log_metrics(
-        logger: StepLogger | None,
-        step: int,
-        batch_time: float,
-        loss: float,
-        grad_norm: float,
-        lr: float,
-        optimizer: optim.Optimizer,
-        model: ComplexValuedModel,
-    ) -> None:
-        """Log metrics if logger is provided. No-op if logger is None."""
-        match logger:
-            case None:
-                pass
-            case log_fn:
-                log_fn(
-                    StepMetrics(
-                        step=step,
-                        batch_time=batch_time,
-                        loss=loss,
-                        grad_norm=grad_norm,
-                        lr=lr,
-                        optimizer=optimizer,
-                        model=model,
-                    )
-                )
-
-    @staticmethod
     def _should_commit_now(
         blockchain_store: AsyncBlockchainModelStore | None,
         commit_plan: CommitPlan,
@@ -1579,8 +1532,6 @@ class GbmCVNNPricer:
         def _run_batch(state: _BatchState, batch_idx: int) -> Result[_BatchState, TrainerError]:
             sobol_skip = state.sobol_skip
             global_step = state.global_step
-            tic = time.perf_counter()
-
             match self._sampler_result:
                 case Failure(sampler_err):
                     return Failure(SamplerInitFailed(error=sampler_err))
@@ -1613,16 +1564,6 @@ class GbmCVNNPricer:
 
             updated_loss = loss.item()
             updated_grad_norm = grad_norm
-            self._maybe_log_metrics(
-                logger=logger,
-                step=global_step,
-                batch_time=time.perf_counter() - tic,
-                loss=updated_loss,
-                grad_norm=updated_grad_norm,
-                lr=float(adam.param_groups[0]["lr"]),
-                optimizer=adam,
-                model=self._cvnn,
-            )
             global_step += 1
 
             # Periodic blockchain commits

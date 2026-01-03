@@ -36,6 +36,7 @@ ENV PATH="/root/.local/bin:/usr/local/bin:$PATH" \
     MYPY_CACHE_DIR=/opt/spectralmc/mypy_cache \
     RUFF_CACHE_DIR=/opt/spectralmc/ruff_cache \
     PYTEST_CACHE_DIR=/opt/spectralmc/pytest_cache \
+    TLA_JAR=/opt/tla/tla2tools.jar \
     DOCKER_CONTAINER=1 \
     CI=false
 
@@ -60,7 +61,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nano \
     tini \
     bash-completion \
+    openjdk-17-jre-headless \
     && rm -rf /var/lib/apt/lists/*
+
+# 1.25) Install TLA+ tools (TLC)
+RUN TLA_VERSION=1.7.3 && \
+    mkdir -p /opt/tla && \
+    wget -q https://github.com/tlaplus/tlaplus/releases/download/v${TLA_VERSION}/tla2tools.jar \
+        -O /opt/tla/tla2tools.jar
 
 # 1.5) Install protoc from GitHub (need >= 3.19 for protobuf 6.x compatibility)
 RUN PROTOC_VERSION=29.5 && \
