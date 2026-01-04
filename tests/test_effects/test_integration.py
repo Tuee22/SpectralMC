@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import warnings
+import cupy as cp
 import pytest
 import torch
-import cupy as cp
 from torch import nn
 
 from spectralmc.effects import (
@@ -99,7 +100,13 @@ async def test_interpret_sequence_success() -> None:
         StreamSync(stream_type="cupy"),
     )
 
-    result = await interpreter.interpret_sequence(effects)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "error",
+            message="To copy construct from a tensor.*",
+            category=UserWarning,
+        )
+        result = await interpreter.interpret_sequence(effects)
     assert isinstance(result, Success)
     normals = interpreter.registry.get_tensor("normals")
     assert isinstance(normals, Success)

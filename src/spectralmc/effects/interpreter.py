@@ -724,8 +724,15 @@ class TrainingInterpreter:
             if not parameters:
                 return Failure(TrainingError(message="Model has no parameters"))
 
-            grad_norm_result = torch.nn.utils.clip_grad_norm_(parameters, max_norm=effect.max_norm)
-            grad_tensor = torch.tensor(grad_norm_result, device=parameters[0].device)
+            grad_norm_result: torch.Tensor | float = torch.nn.utils.clip_grad_norm_(
+                parameters, max_norm=effect.max_norm
+            )
+            param_device = parameters[0].device
+            param_dtype = parameters[0].dtype
+            if isinstance(grad_norm_result, torch.Tensor):
+                grad_tensor = grad_norm_result.to(device=param_device, dtype=param_dtype).detach()
+            else:
+                grad_tensor = torch.tensor(grad_norm_result, device=param_device, dtype=param_dtype)
             match self._registry.register_tensor(effect.output_tensor_id, grad_tensor):
                 case Failure(err):
                     return Failure(TrainingError(message=f"Registry tensor error: {err}"))
