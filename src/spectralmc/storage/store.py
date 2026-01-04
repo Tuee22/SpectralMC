@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -31,6 +30,7 @@ import aioboto3  # Type stub: stubs/aioboto3/__init__.pyi
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+from spectralmc.effects.logging import LogLevel, LogMessage, LoggingInterpreter
 from ..result import Failure, Result, Success
 from .chain import ModelVersion, bump_semantic_version, create_genesis_version
 from .errors import (
@@ -47,7 +47,15 @@ from .s3_errors import S3NetworkError, S3ObjectNotFound, S3OperationError, S3Unk
 from .s3_operations import S3Operations
 
 
-_logger = logging.getLogger(__name__)
+_LOGGING_INTERPRETER = LoggingInterpreter()
+
+
+async def _log_message(level: LogLevel, message: str) -> None:
+    """Emit a structured log via LoggingInterpreter."""
+    await _LOGGING_INTERPRETER.interpret(
+        LogMessage(level=level, message=message, logger_name=__name__)
+    )
+
 
 # JSON type alias for nested dictionaries
 JsonValue: TypeAlias = str | int | float | bool | None | dict[str, "JsonValue"] | list["JsonValue"]
@@ -775,13 +783,14 @@ class AsyncBlockchainModelStore:
         try:
             await self._append_audit_log(version)
         except ClientError as e:
-            _logger.warning(
-                f"Audit log append failed (non-fatal) for version {version.version_id}: {e}"
+            await _log_message(
+                "warning",
+                f"Audit log append failed (non-fatal) for version {version.version_id}: {e}",
             )
         except (AuditLogError, OSError) as e:
-            _logger.error(
+            await _log_message(
+                "error",
                 f"Unexpected audit log error for version {version.version_id}: {e}",
-                exc_info=True,
             )
 
         # Step 10: Return ModelVersion

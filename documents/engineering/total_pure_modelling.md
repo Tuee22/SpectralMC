@@ -6,7 +6,7 @@
 **Referenced by**: CLAUDE.md; documents/engineering/README.md
 
 > **Purpose**: GPU-first guide for modelling SpectralMC state with total, pure ADTs and
-> state machines that track real-world device placement, blockchain storage, and effect
+> state machines that track real-world device placement, object store storage, and effect
 > boundaries. Impossible states must be unrepresentable; timing toggles are forbidden.
 
 ## Cross-References
@@ -15,6 +15,7 @@
 - [cpu_gpu_compute_policy.md](cpu_gpu_compute_policy.md) — Device placement and transfer rules
 - [reproducibility_proofs.md](reproducibility_proofs.md) — Determinism proofs grounded in total models
 - [code_quality.md](code_quality.md) — Enforcement of guard → decision → effect in code
+- [object_store_storage.md](object_store_storage.md) — Storage assumptions and invariants
 
 ## Executive Summary
 - Model every GPU/CPU boundary, storage transition, and integration handshake as explicit
@@ -22,11 +23,11 @@
 - Compute pure decisions first (device moves, effect routing, retries), then run effect
   interpreters to execute PyTorch ops, storage writes, or network calls.
 - Keep tests and fixtures exhaustive across variants, including failure modes and poisoned
-  data, so CUDA paths and blockchain commits stay aligned.
+  data, so CUDA paths and object store commits stay aligned.
 
 ## How to Use This Guide
 - Apply the core principles to any SpectralMC domain: PyTorch compute, effect
-  interpretation, blockchain storage, or ingestion pipelines.
+  interpretation, object store storage, or ingestion pipelines.
 - Use the domain patterns as checklists; pull canonical shapes and constraints from the
   linked SSoTs before adding new variants.
 - Keep pure logic separate from effects; tests cover only the pure decisions. Effect
@@ -40,7 +41,7 @@
   testing_requirements.md for determinism).
 - Frontend/backend and orchestrators share state names and HTTP codes. Effect names mirror
   the same variants in logs and metrics.
-- Compute pure decisions first; run CUDA kernels, transfers, blockchain commits, or socket
+- Compute pure decisions first; run CUDA kernels, transfers, object store commits, or socket
   connects only after a guard result.
 
 ## SpectralMC-Specific Patterns
@@ -53,7 +54,7 @@
 
 ### Effect Interpretation
 - Pair every pure decision ADT with an interpreter that owns effects (CUDA kernels,
-  blockchain writes, S3 uploads). Link to effect_interpreter.md for interpreter structure.
+  object store writes, S3 uploads). Link to effect_interpreter.md for interpreter structure.
 - Keep interpreters total: every variant mapped; no default branches or implicit retries.
 - Prefer expression-style control flow; avoid mutation of tensors or buffers inside
   interpreters unless explicitly modelled as effects.
@@ -66,7 +67,7 @@
 - Model poisoned data (`DeadLettered(reason)`), incompatible dtypes, and precision changes
   (`CastToBfloat16`) explicitly to prevent silent accuracy drift.
 
-### Blockchain Storage and Integrity
+### Object Store Integrity
 - Capture local vs canonical truth (`LocalPending`, `Committed`, `RollbackRequired`,
   `ConflictDetected(remote_hash)`) so replay and integrity checks are deterministic.
 - Keep state transitions aligned with immutability_doctrine.md: terminal states are
@@ -105,7 +106,7 @@
 - Sleep/polling to “eventually” resolve; schedule retries explicitly with timestamps.
 - Env flags that change behavior (`PYTEST_E2E`); rely on fixtures and dependency injection.
 - Any side effect that bypasses the guard or interpreter (ungated kernel launch or
-  blockchain write).
+  object store write).
 
 ## Small Code Postcards
 ### GPU→CPU Transfer Decision (Python)

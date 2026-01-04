@@ -39,9 +39,9 @@ SpectralMC is a GPU-accelerated library for online machine learning using Monte 
   - `torch.py` - PyTorch-based model definitions
   - `numerical.py` - Numerical model utilities
   - `cpu_gpu_transfer.py` - CPU/GPU memory transfer utilities
-- `storage/` - Blockchain model versioning (S3-based, production-ready)
-  - `chain.py` - Blockchain primitives (ModelVersion, hashing, semantic versioning)
-  - `store.py` - AsyncBlockchainModelStore with atomic S3 commits
+- `storage/` - Object store model versioning (S3-based, production-ready; legacy names)
+  - `chain.py` - Manifest chain primitives (legacy naming)
+  - `store.py` - AsyncBlockchainModelStore with atomic S3 commits (legacy name)
   - `checkpoint.py` - Checkpoint serialization/deserialization utilities
   - `inference.py` - InferenceClient with pinned/tracking modes
   - `verification.py` - Chain integrity verification
@@ -60,9 +60,11 @@ SpectralMC is a GPU-accelerated library for online machine learning using Monte 
   - `models_pb2.py` - Model configuration messages
   - `training_pb2.py` - Training configuration messages
 
-### Blockchain Model Versioning - Overview
+### Object Store Model Versioning - Overview
 
-SpectralMC uses blockchain-based versioning with S3 storage for production ML model control.
+SpectralMC uses an append-only, content-addressed object store model on S3-compatible
+storage for production ML model control. Some APIs still use legacy \"blockchain\"
+names (for example, `AsyncBlockchainModelStore`).
 
 **Key Features**:
 - Immutable version history (SHA256 content addressing)
@@ -71,7 +73,7 @@ SpectralMC uses blockchain-based versioning with S3 storage for production ML mo
 - InferenceClient (pinned/tracking modes)
 - Chain verification and garbage collection
 
-**For complete documentation**, see [Blockchain Storage](documents/engineering/blockchain_storage.md):
+**For complete documentation**, see [Object Store Model Versioning](documents/engineering/object_store_storage.md):
 - S3 storage structure and CLI commands
 - Storage architecture and 10-step atomic commit protocol
 - InferenceClient modes (pinned vs tracking)

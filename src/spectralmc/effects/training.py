@@ -93,9 +93,73 @@ class LogMetrics:
     """
 
     kind: Literal["LogMetrics"] = "LogMetrics"
-    metrics: tuple[tuple[str, float], ...] = ()
+    metrics: tuple[tuple[str, float | str], ...] = ()
     step: int = 0
 
 
 # Training Effect Union
-TrainingEffect = ForwardPass | BackwardPass | OptimizerStep | ComputeLoss | LogMetrics
+@dataclass(frozen=True)
+class ForwardPassComplex:
+    """Request to execute complex-valued forward pass (real + imaginary inputs)."""
+
+    kind: Literal["ForwardPassComplex"] = "ForwardPassComplex"
+    model_id: str = ""
+    real_input_tensor_id: str = ""
+    imag_input_tensor_id: str = ""
+    real_output_tensor_id: str = "pred_real"
+    imag_output_tensor_id: str = "pred_imag"
+
+
+@dataclass(frozen=True)
+class ComputeComplexLoss:
+    """Request to compute loss for complex-valued predictions."""
+
+    kind: Literal["ComputeComplexLoss"] = "ComputeComplexLoss"
+    pred_real_tensor_id: str = ""
+    pred_imag_tensor_id: str = ""
+    target_tensor_id: str = ""
+    loss_type: Literal["mse", "mae", "huber"] = "mse"
+    output_tensor_id: str = "loss"
+
+
+@dataclass(frozen=True)
+class ZeroGrad:
+    """Request to zero gradients before forward pass."""
+
+    kind: Literal["ZeroGrad"] = "ZeroGrad"
+    optimizer_id: str = ""
+    set_to_none: bool = True
+
+
+@dataclass(frozen=True)
+class ComputeGradNorm:
+    """Request to compute (and optionally clip) gradient norm."""
+
+    kind: Literal["ComputeGradNorm"] = "ComputeGradNorm"
+    model_id: str = ""
+    max_norm: float = float("inf")
+    output_tensor_id: str = "grad_norm"
+
+
+@dataclass(frozen=True)
+class UpdateLearningRate:
+    """Optional effect to adjust optimizer learning rate."""
+
+    kind: Literal["UpdateLearningRate"] = "UpdateLearningRate"
+    optimizer_id: str = ""
+    lr: float = 0.0
+
+
+# Training Effect Union
+TrainingEffect = (
+    ForwardPass
+    | BackwardPass
+    | OptimizerStep
+    | ComputeLoss
+    | LogMetrics
+    | ForwardPassComplex
+    | ComputeComplexLoss
+    | ZeroGrad
+    | ComputeGradNorm
+    | UpdateLearningRate
+)

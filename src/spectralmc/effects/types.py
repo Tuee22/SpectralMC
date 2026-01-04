@@ -25,6 +25,7 @@ from spectralmc.effects.gpu import (
     InvalidDLPackTransferError,
     InvalidTransferError,
     KernelLaunch,
+    SplitInputs,
     StreamSync,
     TensorTransfer,
     tensor_transfer,
@@ -37,11 +38,15 @@ from spectralmc.effects.metadata import (
 )
 from spectralmc.effects.montecarlo import (
     ComputeFFT,
+    ComputeMeanFFT,
     ForwardNormalization,
     GenerateNormals,
     MonteCarloEffect,
     PathScheme,
+    ProcessBatch,
+    SampleContracts,
     SimulatePaths,
+    StackTensors,
 )
 from spectralmc.effects.rng import (
     CaptureRNGState,
@@ -50,17 +55,23 @@ from spectralmc.effects.rng import (
 )
 from spectralmc.effects.storage import (
     CommitVersion,
+    CommitCheckpoint,
     ReadObject,
     StorageEffect,
     WriteObject,
 )
 from spectralmc.effects.training import (
     BackwardPass,
+    ComputeComplexLoss,
+    ComputeGradNorm,
     ComputeLoss,
     ForwardPass,
+    ForwardPassComplex,
     LogMetrics,
     OptimizerStep,
     TrainingEffect,
+    UpdateLearningRate,
+    ZeroGrad,
 )
 
 
@@ -85,15 +96,21 @@ __all__ = [
     "InvalidTransferError",
     "StreamSync",
     "KernelLaunch",
+    "SplitInputs",
     "DLPackTransfer",
     "dlpack_transfer",
     "InvalidDLPackTransferError",
     # Training effects
     "TrainingEffect",
     "ForwardPass",
+    "ForwardPassComplex",
     "BackwardPass",
     "OptimizerStep",
     "ComputeLoss",
+    "ComputeComplexLoss",
+    "ComputeGradNorm",
+    "ZeroGrad",
+    "UpdateLearningRate",
     "LogMetrics",
     "LoggingEffect",
     "LogMessage",
@@ -102,6 +119,10 @@ __all__ = [
     "GenerateNormals",
     "SimulatePaths",
     "ComputeFFT",
+    "ComputeMeanFFT",
+    "SampleContracts",
+    "ProcessBatch",
+    "StackTensors",
     "PathScheme",
     "ForwardNormalization",
     # Storage effects
@@ -109,6 +130,7 @@ __all__ = [
     "ReadObject",
     "WriteObject",
     "CommitVersion",
+    "CommitCheckpoint",
     # RNG effects
     "RNGEffect",
     "CaptureRNGState",

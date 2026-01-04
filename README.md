@@ -16,7 +16,7 @@ While useful in multiple domains, SpectralMC is especially relevant to the field
 
 If you want to read the entire codebase via a single end-to-end path, start with the GPU-only
 test `tests/test_e2e/test_full_stack_cvnn_pricer.py`. It walks through CVNN construction,
-GBM simulation setup, training, snapshotting, blockchain commit/reload, and deterministic
+GBM simulation setup, training, snapshotting, object store commit/reload, and deterministic
 inference—touching the major subsystems in one place.
 
 ## Key Features
@@ -32,15 +32,15 @@ flowchart TB
   MCSimulation[3. GPU Monte Carlo - Price Contracts with GBM]
   FFT[4. FFT - Estimate Characteristic Function]
   CVNNTrain[5. CVNN Training - Approximate Spectrum]
-  BlockchainCommit[6. Blockchain Commit - Version Model]
+  ObjectStoreCommit[6. Object Store Commit - Version Model]
   Inference[7. Inference - Production Pricing]
 
   SimParams --> SobolSample
   SobolSample --> MCSimulation
   MCSimulation --> FFT
   FFT --> CVNNTrain
-  CVNNTrain --> BlockchainCommit
-  BlockchainCommit --> Inference
+  CVNNTrain --> ObjectStoreCommit
+  ObjectStoreCommit --> Inference
 
   CVNNTrain -->|Next Batch| SobolSample
 ```
@@ -98,7 +98,7 @@ flowchart TB
 - **Fourier Transform**: Uses Fast Fourier Transform (FFT) to estimate the sample's characteristic function.
 - **CVNN Training**: Updates the parameters of a complex-valued neural network to approximate the characteristic function.
 - **CVNN Inference**: Produces an estimated distribution (via the characteristic function), enabling computation of means, moments, quantiles, and other metrics.
-- **Blockchain Model Versioning**: Production-ready S3-based version control for trained models with:
+- **Object Store Model Versioning**: Production-ready S3-based version control for trained models with:
   - Automatic commits during training (explicit commit plans for final/periodic checkpoints)
   - Immutable version history with SHA256 content addressing
   - Atomic commits with CAS (Compare-And-Swap) using ETag
@@ -153,7 +153,7 @@ python -m spectralmc.gbm
 
 ### Automatic Training Commits
 
-Train models with automatic blockchain commits:
+Train models with automatic object store commits (legacy API name: `blockchain_store`):
 
 ```python
 # File: README.md
@@ -232,7 +232,7 @@ match GbmCVNNPricer.create(config):
             case Success(snapshot):
                 pass  # Deterministic GbmCVNNPricerConfig
 
-# Commit to blockchain storage
+# Commit to object store storage (legacy API name: AsyncBlockchainModelStore)
 async with AsyncBlockchainModelStore("my-model-bucket") as store:
     version = await commit_snapshot(
         store,
@@ -292,7 +292,7 @@ async with AsyncBlockchainModelStore("my-model-bucket") as store:
 # List all versions
 python -m spectralmc.storage list-versions my-model-bucket
 
-# Verify chain integrity
+# Verify manifest chain integrity
 python -m spectralmc.storage verify my-model-bucket
 
 # Garbage collection (keep last 10 versions)
@@ -300,7 +300,7 @@ python -m spectralmc.storage gc-run my-model-bucket 10 --yes
 
 # Log to TensorBoard
 python -m spectralmc.storage tensorboard-log my-model-bucket
-tensorboard --logdir=runs/blockchain_models
+tensorboard --logdir=runs/blockchain_models  # Legacy logdir name
 ```
 
 For complete documentation, see [CLAUDE.md](CLAUDE.md).

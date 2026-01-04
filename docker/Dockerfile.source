@@ -155,10 +155,11 @@ RUN /bin/bash -c "set -euo pipefail; \
   "
 
 # ============================================================================
-# LAYER 6: Copy Application Source (shared for both build modes)
+# LAYER 6: Copy Application Source (shared for both build modes, include TLA)
 # ============================================================================
 
 COPY ./ /spectralmc/
+COPY ./TLA /spectralmc/TLA
 
 # Use the source build pyproject (torch 2.4.1 from /opt/pytorch-wheel)
 RUN cp pyproject.source.toml pyproject.toml

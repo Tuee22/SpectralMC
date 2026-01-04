@@ -1,5 +1,5 @@
 """
-Storage Effect ADTs for S3 and blockchain operations.
+Storage Effect ADTs for S3 and object store operations.
 
 This module defines frozen dataclasses representing all storage-related side effects,
 enabling exhaustive pattern matching and type-safe effect composition.
@@ -11,7 +11,7 @@ Type Safety:
 
 See Also:
     - effect_interpreter.md - Effect Interpreter doctrine
-    - blockchain_storage.md - Storage architecture
+    - object_store_storage.md - Storage architecture
     - coding_standards.md - ADT patterns and Result types
 """
 
@@ -72,5 +72,17 @@ class CommitVersion:
     message: str = ""
 
 
+@dataclass(frozen=True)
+class CommitCheckpoint:
+    """Request to commit a checkpoint conditionally."""
+
+    kind: Literal["CommitCheckpoint"] = "CommitCheckpoint"
+    checkpoint_id: str = ""
+    commit_plan: str = "NoCommit"
+    current_step: int = 0
+    total_steps: int = 0
+    blockchain_store_id: str = ""
+
+
 # Storage Effect Union
-StorageEffect = ReadObject | WriteObject | CommitVersion
+StorageEffect = ReadObject | WriteObject | CommitVersion | CommitCheckpoint

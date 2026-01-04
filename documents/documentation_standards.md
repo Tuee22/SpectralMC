@@ -43,7 +43,7 @@
 | [pytorch_facade.md](engineering/pytorch_facade.md) | Torch runtime ADT + deterministic configuration effect |
 | [cpu_gpu_compute_policy.md](engineering/cpu_gpu_compute_policy.md) | Device placement boundaries |
 | [docker_build_philosophy.md](engineering/docker_build_philosophy.md) | Build strategy and topology |
-| [blockchain_storage.md](engineering/blockchain_storage.md) | Model versioning and atomic commits |
+| [object_store_storage.md](engineering/object_store_storage.md) | Object store versioning and atomic commits |
 | [effect_interpreter.md](engineering/effect_interpreter.md) | Effect ADTs and interpreter patterns |
 | [total_pure_modelling.md](engineering/total_pure_modelling.md) | Total ADTs and pure state machines |
 | [reproducibility_proofs.md](engineering/reproducibility_proofs.md) | Determinism proofs |

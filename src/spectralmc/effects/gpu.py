@@ -179,6 +179,16 @@ class DLPackTransfer:
     output_tensor_id: str = ""
 
 
+@dataclass(frozen=True)
+class SplitInputs:
+    """Request to split contracts into real/imaginary tensors."""
+
+    kind: Literal["SplitInputs"] = "SplitInputs"
+    contracts_tensor_id: str = ""
+    real_output_tensor_id: str = "real_input"
+    imag_output_tensor_id: str = "imag_input"
+
+
 def dlpack_transfer(
     source_tensor_id: str,
     source_framework: Literal["cupy", "torch"],
@@ -222,4 +232,4 @@ def dlpack_transfer(
 
 
 # GPU Effect Union - enables exhaustive pattern matching
-GPUEffect = TensorTransfer | StreamSync | KernelLaunch | DLPackTransfer
+GPUEffect = TensorTransfer | StreamSync | KernelLaunch | DLPackTransfer | SplitInputs

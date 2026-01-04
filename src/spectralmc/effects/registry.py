@@ -19,12 +19,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Literal, Mapping
+from typing import Literal, Mapping, Protocol, Sequence, TypeVar
 
 import cupy as cp
 
 import torch
+from spectralmc.gbm import BlackScholes
 from spectralmc.runtime import get_torch_handle
+from spectralmc.sobol_sampler import SobolSampler
 
 from spectralmc.result import Failure, Result, Success
 
@@ -90,6 +92,35 @@ class FrozenRegistrySnapshot:
     models: Mapping[str, object]
     optimizers: Mapping[str, object]
     kernels: Mapping[str, object]
+    contracts: Mapping[str, Sequence[object]]
+    samplers: Mapping[str, object]
+    blockchain_stores: Mapping[str, "BlockchainStore"]
+
+
+class SupportsContracts(Protocol):
+    """Protocol for contract-like objects used in Monte Carlo simulation."""
+
+    X0: float
+    K: float
+    T: float
+    r: float
+    d: float
+    v: float
+
+
+ContractT = TypeVar("ContractT", bound=SupportsContracts)
+
+
+class SupportsSampler(Protocol[ContractT]):
+    """Protocol for Sobol-style samplers."""
+
+    def sample(self, n_samples: int) -> Result[list[ContractT], object] | list[ContractT]: ...
+
+
+class BlockchainStore(Protocol):
+    """Protocol for blockchain stores used by effects."""
+
+    async def commit(self, checkpoint_data: bytes, content_hash: str, message: str) -> object: ...
 
 
 class SharedRegistry:
@@ -135,6 +166,11 @@ class SharedRegistry:
         self._models: dict[str, object] = {}
         self._optimizers: dict[str, object] = {}
         self._kernels: dict[str, object] = {}
+        self._contracts: dict[str, tuple[SupportsContracts | BlackScholes.Inputs, ...]] = {}
+        self._samplers: dict[
+            str, SupportsSampler[SupportsContracts] | SobolSampler[BlackScholes.Inputs]
+        ] = {}
+        self._blockchain_stores: dict[str, BlockchainStore] = {}
 
     def freeze_snapshot(self) -> FrozenRegistrySnapshot:
         """
@@ -159,6 +195,9 @@ class SharedRegistry:
             models=MappingProxyType(dict(self._models)),
             optimizers=MappingProxyType(dict(self._optimizers)),
             kernels=MappingProxyType(dict(self._kernels)),
+            contracts=MappingProxyType(dict(self._contracts)),
+            samplers=MappingProxyType(dict(self._samplers)),
+            blockchain_stores=MappingProxyType(dict(self._blockchain_stores)),
         )
 
     # ========== Tensor Operations ==========
@@ -497,6 +536,100 @@ class SharedRegistry:
         """
         return optimizer_id in self._optimizers
 
+    # ========== Contract Operations ==========
+
+    def register_contracts(
+        self,
+        contracts_id: str,
+        contracts: Sequence[SupportsContracts] | Sequence[BlackScholes.Inputs],
+    ) -> Result[None, RegistryError]:
+        """Register a batch of contract parameters."""
+        match contracts_id in self._contracts:
+            case True:
+                return Failure(RegistryKeyExists(key=contracts_id, expected_type="contracts"))
+            case False:
+                pass
+
+        normalized_contracts: tuple[SupportsContracts | BlackScholes.Inputs, ...] = tuple(contracts)
+        self._contracts[contracts_id] = normalized_contracts
+        return Success(None)
+
+    def get_contracts(
+        self, contracts_id: str
+    ) -> Result[tuple[SupportsContracts | BlackScholes.Inputs, ...], RegistryError]:
+        """Get stored contracts by ID."""
+        match self._contracts.get(contracts_id):
+            case None:
+                return Failure(
+                    RegistryKeyNotFound(key=contracts_id, expected_type="Sequence[contracts]")
+                )
+            case value:
+                return Success(value)
+
+    def has_contracts(self, contracts_id: str) -> bool:
+        """Check if contracts exist in the registry."""
+        return contracts_id in self._contracts
+
+    # ========== Sampler Operations ==========
+
+    def register_sampler(
+        self,
+        sampler_id: str,
+        sampler: SupportsSampler[SupportsContracts] | SobolSampler[BlackScholes.Inputs],
+    ) -> Result[None, RegistryError]:
+        """Register a Sobol-style sampler."""
+        match sampler_id in self._samplers:
+            case True:
+                return Failure(RegistryKeyExists(key=sampler_id, expected_type="sampler"))
+            case False:
+                self._samplers[sampler_id] = sampler
+                return Success(None)
+
+    def get_sampler(
+        self, sampler_id: str
+    ) -> Result[
+        SupportsSampler[SupportsContracts] | SobolSampler[BlackScholes.Inputs], RegistryError
+    ]:
+        """Retrieve a registered sampler."""
+        match self._samplers.get(sampler_id):
+            case None:
+                return Failure(RegistryKeyNotFound(key=sampler_id, expected_type="sampler"))
+            case value:
+                return Success(value)
+
+    def has_sampler(self, sampler_id: str) -> bool:
+        """Check if a sampler ID exists in the registry."""
+        return sampler_id in self._samplers
+
+    # ========== Blockchain Store Operations ==========
+
+    def register_blockchain_store(
+        self, store_id: str, store: BlockchainStore
+    ) -> Result[None, RegistryError]:
+        """Register a blockchain store for checkpoint commits."""
+        match store_id in self._blockchain_stores:
+            case True:
+                return Failure(
+                    RegistryKeyExists(key=store_id, expected_type="AsyncBlockchainModelStore")
+                )
+            case False:
+                self._blockchain_stores[store_id] = store
+                return Success(None)
+
+    def get_blockchain_store(self, store_id: str) -> Result[BlockchainStore, RegistryError]:
+        """Retrieve a blockchain store by ID."""
+        match self._blockchain_stores.get(store_id):
+            case None:
+                return Failure(
+                    RegistryKeyNotFound(key=store_id, expected_type="AsyncBlockchainModelStore")
+                )
+            case value:
+                return Success(value)
+
+    def has_blockchain_store(self, store_id: str) -> bool:
+        """Check if a blockchain store ID exists in the registry."""
+        return store_id in self._blockchain_stores
+
     # ========== Kernel Operations ==========
 
     def register_kernel(self, kernel_name: str, kernel_fn: object) -> Result[None, RegistryError]:
@@ -549,6 +682,9 @@ class SharedRegistry:
         self._models.clear()
         self._optimizers.clear()
         self._kernels.clear()
+        self._contracts.clear()
+        self._samplers.clear()
+        self._blockchain_stores.clear()
 
     def clear_tensors(self) -> None:
         """Clear only tensor registry (preserves models, content, etc.)."""

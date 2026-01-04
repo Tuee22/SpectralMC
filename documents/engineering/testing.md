@@ -14,7 +14,7 @@
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) — Device placement boundaries
 - [Total Pure Modelling](total_pure_modelling.md) — Model shapes/states mirrored in fixtures
 - [Reproducibility Proofs](reproducibility_proofs.md) — Determinism guarantees
-- [Blockchain Storage](blockchain_storage.md) — Commit semantics for snapshot persistence
+- [Object Store Model Versioning](object_store_storage.md) — Commit semantics for snapshot persistence
 - [Documentation Standards](../documentation_standards.md) — Metadata/linking rules
 - [Docker Workflow](docker_workflow.md) — Container-only execution of `poetry run test-all`
 
@@ -41,7 +41,7 @@
 
 - **Scope (per [total_pure_modelling.md](total_pure_modelling.md))**: Builds a minimal CVNN via `cvnn_factory` with deterministic seeds, constructs GBM simulation params, and instantiates `GbmCVNNPricer` on `torch.device("cuda:0")` with full-precision dtypes. Randomness is seeded locally to satisfy [reproducibility_proofs.md](reproducibility_proofs.md).
 - **Training phase**: Runs a short `TrainingConfig` (small batches/steps) to respect the 60s per-test guard from [testing_requirements.md](testing_requirements.md#timeout-policy) while still mutating weights/optimizer state.
-- **Snapshot + storage**: Captures `GbmCVNNPricer.snapshot()` and commits it to the async blockchain store fixture, validating commit semantics from [blockchain_storage.md](blockchain_storage.md). Verifies optimizer state, RNG states, `sobol_skip`, and CVNN parameters are preserved bit-for-bit.
+- **Snapshot + storage**: Captures `GbmCVNNPricer.snapshot()` and commits it to the async object store fixture (legacy name), validating commit semantics from [object_store_storage.md](object_store_storage.md). Verifies optimizer state, RNG states, `sobol_skip`, and CVNN parameters are preserved bit-for-bit.
 - **Reload + parity checks**: Rehydrates a fresh pricer from the committed snapshot and asserts parameter equality against the pre-commit model using helpers defined in [testing_architecture.md](testing_architecture.md#helper-function-consolidation) and device rules in [cpu_gpu_compute_policy.md](cpu_gpu_compute_policy.md).
 - **Inference determinism**: Runs `predict_price` on a small set of `BlackScholes.Inputs` both before and after reload, asserting finite outputs and exact equality to demonstrate deterministic inference through the full pipeline.
 - **Execution contract**: Requires GPU availability at module import (global guard), must be invoked via `docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_e2e/test_full_stack_cvnn_pricer.py` per [docker_workflow.md](docker_workflow.md) and [command_reference.md](command_reference.md).

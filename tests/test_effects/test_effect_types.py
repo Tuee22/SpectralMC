@@ -15,26 +15,36 @@ import pytest
 from spectralmc.effects import (
     BackwardPass,
     CaptureRNGState,
+    CommitCheckpoint,
     CommitVersion,
+    ComputeComplexLoss,
     ComputeFFT,
+    ComputeGradNorm,
     Effect,
     ForwardPass,
+    ForwardPassComplex,
     GenerateNormals,
     GPUEffect,
     InvalidTransferError,
     KernelLaunch,
     MonteCarloEffect,
     OptimizerStep,
+    ProcessBatch,
     ReadObject,
     RestoreRNGState,
     RNGEffect,
+    SampleContracts,
     SimulatePaths,
+    SplitInputs,
     StorageEffect,
+    StackTensors,
     StreamSync,
     TensorTransfer,
     tensor_transfer,
     TrainingEffect,
+    UpdateLearningRate,
     WriteObject,
+    ZeroGrad,
 )
 from spectralmc.models.torch import Device
 from spectralmc.result import Failure
@@ -94,8 +104,9 @@ class TestGPUEffects:
             TensorTransfer(tensor_id="x"),
             StreamSync(),
             KernelLaunch(kernel_name="test"),
+            SplitInputs(contracts_tensor_id="contracts"),
         ]
-        assert len(effects) == 3
+        assert len(effects) == 4
 
 
 class TestTrainingEffects:
@@ -126,8 +137,13 @@ class TestTrainingEffects:
             ForwardPass(model_id="m"),
             BackwardPass(loss_tensor_id="l"),
             OptimizerStep(optimizer_id="o"),
+            ForwardPassComplex(model_id="m2"),
+            ComputeComplexLoss(),
+            ZeroGrad(optimizer_id="opt"),
+            ComputeGradNorm(model_id="m"),
+            UpdateLearningRate(optimizer_id="opt", lr=0.1),
         ]
-        assert len(effects) == 3
+        assert len(effects) == 8
 
 
 class TestMonteCarloEffects:
@@ -167,8 +183,11 @@ class TestMonteCarloEffects:
             GenerateNormals(rows=10, cols=10),
             SimulatePaths(),
             ComputeFFT(input_tensor_id="x"),
+            SampleContracts(sampler_id="sampler"),
+            ProcessBatch(contracts_tensor_id="contracts"),
+            StackTensors(input_tensor_ids=("a", "b")),
         ]
-        assert len(effects) == 3
+        assert len(effects) == 6
 
 
 class TestStorageEffects:
@@ -198,6 +217,18 @@ class TestStorageEffects:
         assert effect.parent_counter == 42
         assert effect.checkpoint_hash == "hash123"
         assert effect.message == "Training complete"
+
+    def test_commit_checkpoint_creation(self) -> None:
+        """CommitCheckpoint is created with correct values."""
+        effect = CommitCheckpoint(
+            checkpoint_id="ckpt",
+            commit_plan="FinalCommit",
+            current_step=10,
+            total_steps=20,
+            blockchain_store_id="store",
+        )
+        assert effect.kind == "CommitCheckpoint"
+        assert effect.checkpoint_id == "ckpt"
 
     def test_commit_version_genesis(self) -> None:
         """CommitVersion can be created as genesis (no parent)."""

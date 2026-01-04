@@ -104,6 +104,9 @@ services:
       - type: bind
         source: ../tools
         target: /spectralmc/tools
+      - type: bind
+        source: ../TLA
+        target: /spectralmc/TLA
     environment:
       AWS_ACCESS_KEY_ID:     minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin

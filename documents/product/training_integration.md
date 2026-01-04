@@ -1,14 +1,14 @@
 # File: documents/product/training_integration.md
-# Training Integration with Blockchain Storage
+# Training Integration with Object Store Storage
 
 **Status**: Reference only  
 **Supersedes**: Prior training integration guides  
 **Referenced by**: documents/product/index.md
 
-> **Purpose**: Guide SpectralMC users through training flows that integrate blockchain model versioning.
-> **📖 Authoritative Reference**: [../engineering/blockchain_storage.md](../engineering/blockchain_storage.md)
+> **Purpose**: Guide SpectralMC users through training flows that integrate object store model versioning.
+> **📖 Authoritative Reference**: [../engineering/object_store_storage.md](../engineering/object_store_storage.md)
 
-This guide explains how to integrate blockchain model versioning with the GBM training loop using automatic commits.
+This guide explains how to integrate object store model versioning with the GBM training loop using automatic commits.
 
 ## Table of Contents
 
@@ -23,7 +23,7 @@ This guide explains how to integrate blockchain model versioning with the GBM tr
 
 ## Overview
 
-SpectralMC's `GbmCVNNPricer.train()` method integrates seamlessly with blockchain storage to automatically commit model checkpoints during and after training. This enables:
+SpectralMC's `GbmCVNNPricer.train()` method integrates seamlessly with object store storage to automatically commit model checkpoints during and after training. This enables:
 
 - **Automatic version control** without manual commit code
 - **Periodic checkpoints** during long training runs
@@ -33,11 +33,14 @@ SpectralMC's `GbmCVNNPricer.train()` method integrates seamlessly with blockchai
 
 ### Key Features
 
-- **Backward compatible**: Works with existing training code (blockchain storage is optional)
+- **Backward compatible**: Works with existing training code (object store storage is optional)
 - **Graceful error handling**: Commit failures are logged but don't crash training
 - **Optimizer state preservation**: Full checkpoints include Adam optimizer state
 - **Template interpolation**: Commit messages support `{step}`, `{loss}`, `{batch}` variables
 - **Async-to-sync bridge**: Uses `asyncio.run()` for seamless integration
+
+**Legacy naming note**: The training API uses the `blockchain_store` parameter name and
+some examples reference legacy filenames. These will be renamed in a dedicated API pass.
 
 ## Quick Start
 
@@ -214,13 +217,13 @@ flowchart TB
 
 ---
 
-### Mode 1: No Blockchain Storage (Default)
+### Mode 1: No Object Store Storage (Default)
 
 Existing training code continues to work without modification:
 
 ```python
 # File: examples/training_integration/no_blockchain_storage.py
-# No blockchain storage - works exactly as before
+# No object store storage - works exactly as before
 pricer.train(training_config)
 ```
 
@@ -273,7 +276,7 @@ pricer.train(
 
 ### Mode 4: Manual Commits Only
 
-Use blockchain storage but control commits manually:
+Use object store storage but control commits manually:
 
 ```python
 # File: examples/training_integration/manual_commit.py
@@ -312,13 +315,13 @@ training_config = build_training_config(
 ).unwrap()
 ```
 
-### Blockchain Storage Parameters
+### Object Store Storage Parameters
 
 Parameters for `pricer.train()` method:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `blockchain_store` | `AsyncBlockchainModelStore \| None` | `None` | Blockchain storage instance |
+| `blockchain_store` | `AsyncBlockchainModelStore \| None` | `None` | Object store instance (legacy name) |
 | `auto_commit` | `bool` | `False` | Enable automatic final commit |
 | `commit_interval` | `int \| None` | `None` | Commit every N batches (requires `auto_commit=True`) |
 | `commit_message_template` | `str` | `"Training checkpoint..."` | Message template with variables |
@@ -349,7 +352,7 @@ commit_message_template="Production model v{step}: loss={loss:.4f}"
 
 ### Validation Errors
 
-Training validates blockchain parameters before starting:
+Training validates object store parameters before starting:
 
 ```python
 # File: examples/training_integration/validation_errors.py
@@ -385,7 +388,7 @@ pricer.train(
 
 ### Retry Logic
 
-The blockchain store has built-in retry logic:
+The object store has built-in retry logic:
 
 - **Exponential backoff**: 1s, 2s, 4s delays
 - **Max retries**: 3 attempts

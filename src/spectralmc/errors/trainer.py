@@ -57,6 +57,14 @@ class PredictionFailed:
     kind: Literal["PredictionFailed"] = "PredictionFailed"
 
 
+@dataclass(frozen=True)
+class TrainingExecutionFailed:
+    """Effect-based training execution failed."""
+
+    message: str
+    kind: Literal["TrainingExecutionFailed"] = "TrainingExecutionFailed"
+
+
 SamplerError = DimensionMismatch | InvalidBounds | NegativeSamples | SamplerValidationFailed
 TrainerError = (
     SamplerInitFailed
@@ -66,4 +74,5 @@ TrainerError = (
     | InvalidTrainingConfig
     | OptimizerStateSerializationFailed
     | PredictionFailed
+    | TrainingExecutionFailed
 )

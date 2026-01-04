@@ -144,7 +144,7 @@ These variables are defined in `docker/docker-compose.yml` for the `spectralmc` 
 MinIO access key for S3-compatible storage.
 
 - **Purpose**: Authenticates boto3 S3 client with local MinIO instance
-- **Rationale**: Required for blockchain model versioning and TensorBoard log storage
+- **Rationale**: Required for object store model versioning and TensorBoard log storage
 - **Value**: `minioadmin` (MinIO default credentials for development)
 - **Security**: Development-only; production deployments must use secure credentials
 - **Default without it**: S3 operations fail with authentication errors
@@ -531,7 +531,7 @@ poetry run test-all  # Tests complete when they complete
 
 ## Infrastructure Services
 
-SpectralMC development requires MinIO for S3-compatible storage (blockchain model versioning):
+SpectralMC development requires MinIO for S3-compatible storage (object store model versioning):
 
 | Service       | Image                      | Internal Port | Purpose                        |
 | ------------- | -------------------------- | ------------- | ------------------------------ |

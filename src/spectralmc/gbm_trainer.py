@@ -43,6 +43,8 @@ from __future__ import annotations
 
 import asyncio
 import math
+from concurrent.futures import ThreadPoolExecutor
+import time
 import warnings
 from collections import deque
 from dataclasses import dataclass
@@ -78,23 +80,24 @@ from spectralmc.effects import (
     BackwardPass,
     CaptureRNGState,
     CommitVersion,
-    ComputeFFT,
-    ComputeLoss,
+    ComputeComplexLoss,
+    ComputeGradNorm,
     DLPackTransfer,
     dlpack_transfer,
     EffectSequence,
-    ForwardPass,
-    GenerateNormals,
+    ForwardPassComplex,
     LogMessage,
     LogMetrics,
     LoggingInterpreter,
     OptimizerStep,
-    ReadMetadata,
-    SimulatePaths,
+    ProcessBatch,
+    SampleContracts,
     SpectralMCInterpreter,
+    SplitInputs,
     StreamSync,
     UpdateMetadata,
     WriteObject,
+    ZeroGrad,
     sequence_effects,
 )
 from spectralmc.effects.types import Effect
@@ -107,12 +110,13 @@ from spectralmc.errors.trainer import (
     OptimizerStateSerializationFailed,
     PredictionFailed,
     SamplerInitFailed,
+    TrainingExecutionFailed,
     TrainerError,
 )
 from spectralmc.gbm import BlackScholes, BlackScholesConfig, SimulationParams
 from spectralmc.models.cpu_gpu_transfer import module_state_device_dtype
 from spectralmc.models.numerical import Precision
-from spectralmc.result import Failure, Result, Success, collect_results, fold_results
+from spectralmc.result import Failure, Result, Success, collect_results
 from spectralmc.serialization import compute_sha256
 from spectralmc.serialization.tensors import ModelCheckpointConverter
 from spectralmc.sobol_sampler import DomainBounds, SobolSampler, build_sobol_config
@@ -186,18 +190,19 @@ CommitPlan = NoCommit | FinalCommit | IntervalCommit | FinalAndIntervalCommit
 
 # Allowed Effect types for filtering in effect sequence building
 _ALLOWED_EFFECT_TYPES: tuple[type[Effect], ...] = (
-    GenerateNormals,
-    SimulatePaths,
-    ComputeFFT,
+    SampleContracts,
+    ProcessBatch,
     DLPackTransfer,
     StreamSync,
-    ForwardPass,
+    SplitInputs,
+    ForwardPassComplex,
     BackwardPass,
     OptimizerStep,
-    ComputeLoss,
+    ComputeComplexLoss,
+    ComputeGradNorm,
+    ZeroGrad,
     LogMetrics,
     UpdateMetadata,
-    ReadMetadata,
     CaptureRNGState,
     WriteObject,
     CommitVersion,
@@ -311,26 +316,6 @@ class GbmCVNNPricerConfig(BaseModel):
     torch_cuda_rng_states: list[bytes] | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra="forbid")
-
-
-@dataclass(frozen=True)
-class _BatchState:
-    """Immutable state for training batch processing."""
-
-    sobol_skip: int
-    global_step: int
-    loss: float
-    grad_norm: float
-
-    @staticmethod
-    def initial(sobol_skip: int, global_step: int) -> _BatchState:
-        """Create initial batch state."""
-        return _BatchState(
-            sobol_skip=sobol_skip,
-            global_step=global_step,
-            loss=0.0,
-            grad_norm=0.0,
-        )
 
 
 @dataclass(frozen=True)
@@ -803,37 +788,6 @@ class GbmCVNNPricer:
     # Internal helpers                                                   #
     # ------------------------------------------------------------------ #
 
-    def _simulate_fft(
-        self, contract: BlackScholes.Inputs
-    ) -> Result[cp.ndarray, NormalsUnavailable | NormalsGenerationFailed]:
-        """Simulate one contract and return the batch-mean FFT."""
-        match self._context.mc_engine.price(inputs=contract):
-            case Failure(error):
-                return Failure(error)
-            case Success(pricing):
-                mat = pricing.put_price.reshape(
-                    self._sim_params.batches_per_mc_run, self._sim_params.network_size
-                )
-                return Success(cp.mean(cp.fft.fft(mat, axis=1), axis=0))
-
-    def _torch_step(
-        self,
-        real_in: torch.Tensor,
-        imag_in: torch.Tensor,
-        targets: torch.Tensor,
-        optimizer: optim.Optimizer,
-    ) -> tuple[torch.Tensor, float]:
-        """One forward/backward/optimiser step; returns ``(loss, grad_norm)``."""
-        pred_r, pred_i = self._cvnn(real_in, imag_in)
-        loss = nn.functional.mse_loss(pred_r, torch.real(targets)) + nn.functional.mse_loss(
-            pred_i, torch.imag(targets)
-        )
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        optimizer.step()
-        grad_norm = float(torch.nn.utils.clip_grad_norm_(self._cvnn.parameters(), float("inf")))
-        return loss, grad_norm
-
     def _log_effect(
         self,
         message: str,
@@ -905,126 +859,78 @@ class GbmCVNNPricer:
 
     def build_training_step_effects(
         self, batch_idx: int, config: TrainingConfig
-    ) -> Result[EffectSequence[list[object]], NormalsUnavailable]:
-        """Build pure effect sequence describing a single training step.
+    ) -> Result[EffectSequence[list[object]], TrainerError]:
+        """Build pure effect sequence describing a single training step."""
+        try:
+            target_fft_id = f"fft_{batch_idx}"
+            targets_id = f"targets_{batch_idx}"
+            loss_id = f"loss_{batch_idx}"
+            grad_norm_id = f"grad_norm_{batch_idx}"
 
-        This method produces an immutable effect description that can be:
-        - Inspected and tested without GPU hardware
-        - Serialized for reproducibility tracking
-        - Composed with other effects in larger workflows
-
-        The actual execution happens when the interpreter processes these effects.
-
-        Registry ID naming convention:
-            - "normals_{batch_idx}" - Generated normal random matrix
-            - "paths_{batch_idx}" - Simulated price paths
-            - "fft_{batch_idx}" - FFT of price paths
-            - "targets_{batch_idx}" - DLPack-transferred targets tensor
-            - "pred_{batch_idx}" - Model predictions
-            - "loss_{batch_idx}" - Computed loss tensor
-
-        Args:
-            batch_idx: Index of this batch within the training run.
-            config: Training hyperparameters.
-
-        Returns:
-            EffectSequence describing: data generation → forward → backward → optimizer → sync.
-
-        Example:
-            >>> effects = trainer.build_training_step_effects(batch_idx=0, config=config)
-            >>> # Pure description - no side effects yet
-            >>> result = await interpreter.interpret_sequence(effects)
-        """
-        match self._context.mc_engine.snapshot():
-            case Failure(error):
-                return Failure(error)
-            case Success(mc_snapshot):
-                pass
-        match self._context.mc_engine._ngen_result:
-            case Failure(ngen_err):
-                return Failure(NormalsUnavailable(error=ngen_err))
-            case Success(ngen):
-                ngen_snapshot = ngen.snapshot()
-
-        # Compute current sobol skip for this batch
-        current_skip = ngen_snapshot.skips + (batch_idx * config.batch_size)
-
-        # Note: Market parameters (spot, rate, dividend, vol, expiry) come from
-        # Sobol-sampled contracts at runtime. The effect description uses placeholder
-        # values that will be overridden by the interpreter when processing actual
-        # contracts from the sampler.
-        return Success(
-            sequence_effects(
-                # Phase 1: Monte Carlo data generation
-                GenerateNormals(
-                    rows=mc_snapshot.sim_params.timesteps,
-                    cols=mc_snapshot.sim_params.total_paths(),
-                    seed=ngen_snapshot.seed,
-                    skip=current_skip,
-                    output_tensor_id=f"normals_{batch_idx}",
+            effects = sequence_effects(
+                SampleContracts(
+                    sampler_id="sobol_sampler",
+                    num_samples=config.batch_size,
+                    output_tensor_id=f"contracts_{batch_idx}",
                 ),
-                # Phase 2: Simulate GBM paths using Numba kernel
-                # Market params are placeholders; real values come from Sobol sampler
-                SimulatePaths(
-                    spot=100.0,
-                    rate=0.05,
-                    dividend=0.0,
-                    vol=0.2,
-                    expiry=1.0,
-                    timesteps=mc_snapshot.sim_params.timesteps,
-                    batches=mc_snapshot.sim_params.total_paths(),
-                    path_scheme=mc_snapshot.path_scheme,
-                    normalization=mc_snapshot.normalization,
-                    input_normals_id=f"normals_{batch_idx}",
-                    output_tensor_id=f"paths_{batch_idx}",
+                ProcessBatch(
+                    contracts_tensor_id=f"contracts_{batch_idx}",
+                    batch_idx=batch_idx,
+                    config={
+                        "batches_per_mc_run": self._sim_params.batches_per_mc_run,
+                        "network_size": self._sim_params.network_size,
+                    },
+                    output_tensor_id=target_fft_id,
                 ),
                 StreamSync(stream_type="cupy"),
-                # Phase 3: FFT of price paths
-                ComputeFFT(
-                    input_tensor_id=f"paths_{batch_idx}",
-                    axis=1,
-                    output_tensor_id=f"fft_{batch_idx}",
-                ),
-                # Phase 4: Transfer FFT result from CuPy to PyTorch via DLPack
-                # Note: Frameworks are always different ("cupy" -> "torch"), so .unwrap() is safe
                 dlpack_transfer(
-                    source_tensor_id=f"fft_{batch_idx}",
+                    source_tensor_id=target_fft_id,
                     source_framework="cupy",
                     target_framework="torch",
-                    output_tensor_id=f"targets_{batch_idx}",
+                    output_tensor_id=targets_id,
                 ).unwrap(),
                 StreamSync(stream_type="torch"),
-                # Phase 5: Training step (forward/backward/optimizer)
-                ForwardPass(
+                SplitInputs(
+                    contracts_tensor_id=f"contracts_{batch_idx}",
+                    real_output_tensor_id=f"real_in_{batch_idx}",
+                    imag_output_tensor_id=f"imag_in_{batch_idx}",
+                ),
+                ZeroGrad(optimizer_id="adam", set_to_none=True),
+                ForwardPassComplex(
                     model_id="cvnn",
-                    input_tensor_id=f"batch_{batch_idx}",
-                    output_tensor_id=f"pred_{batch_idx}",
+                    real_input_tensor_id=f"real_in_{batch_idx}",
+                    imag_input_tensor_id=f"imag_in_{batch_idx}",
+                    real_output_tensor_id=f"pred_real_{batch_idx}",
+                    imag_output_tensor_id=f"pred_imag_{batch_idx}",
                 ),
-                ComputeLoss(
-                    pred_tensor_id=f"pred_{batch_idx}",
-                    target_tensor_id=f"targets_{batch_idx}",
+                ComputeComplexLoss(
+                    pred_real_tensor_id=f"pred_real_{batch_idx}",
+                    pred_imag_tensor_id=f"pred_imag_{batch_idx}",
+                    target_tensor_id=targets_id,
                     loss_type="mse",
-                    output_tensor_id=f"loss_{batch_idx}",
+                    output_tensor_id=loss_id,
                 ),
-                BackwardPass(loss_tensor_id=f"loss_{batch_idx}"),
+                BackwardPass(loss_tensor_id=loss_id),
+                ComputeGradNorm(model_id="cvnn", output_tensor_id=grad_norm_id),
                 OptimizerStep(optimizer_id="adam"),
                 StreamSync(stream_type="torch"),
-                # Phase 6: Update metadata for tracking
                 UpdateMetadata(key="global_step", operation="increment"),
                 UpdateMetadata(key="sobol_skip", operation="add", value=config.batch_size),
-                # Phase 7: Log metrics (optional, uses registered TensorBoard writer)
                 LogMetrics(
-                    metrics=(),  # Populated by interpreter from loss value
+                    metrics=(
+                        ("loss", f"{{{loss_id}}}"),
+                        ("grad_norm", f"{{{grad_norm_id}}}"),
+                    ),
                     step=batch_idx,
                 ),
-                # Phase 8: RNG state capture for reproducibility
-                CaptureRNGState(rng_type="torch_cuda", output_id=f"rng_state_{batch_idx}"),
             )
-        )
+            return Success(effects)
+        except Exception as exc:  # noqa: BLE001
+            return Failure(TrainingExecutionFailed(message=f"Failed to build effects: {exc}"))
 
     def build_epoch_effects(
         self, config: TrainingConfig
-    ) -> Result[EffectSequence[list[object]], NormalsUnavailable]:
+    ) -> Result[EffectSequence[list[object]], TrainerError]:
         """Build pure effect sequence describing a complete training epoch.
 
         An epoch consists of config.num_batches training steps executed sequentially.
@@ -1050,7 +956,7 @@ class GbmCVNNPricer:
         num_epochs: int = 1,
         checkpoint_bucket: str | None = None,
         checkpoint_interval: int | None = None,
-    ) -> Result[EffectSequence[list[object]], NormalsUnavailable]:
+    ) -> Result[EffectSequence[list[object]], TrainerError]:
         """Build pure effect sequence describing a complete training run.
 
         This method produces an immutable effect description representing
@@ -1098,7 +1004,7 @@ class GbmCVNNPricer:
 
         # Pure: build list of Results via comprehension instead of imperative loop
         # Avoid lambda to work around mypy generic type inference limitation
-        epoch_effects_results: list[Result[list[object], NormalsUnavailable]] = [
+        epoch_effects_results: list[Result[list[object], TrainerError]] = [
             self._transform_epoch_effects(
                 self.build_epoch_effects(config), checkpoint_builder(epoch)
             )
@@ -1119,9 +1025,9 @@ class GbmCVNNPricer:
 
     @staticmethod
     def _transform_epoch_effects(
-        epoch_result: Result[EffectSequence[list[object]], NormalsUnavailable],
+        epoch_result: Result[EffectSequence[list[object]], TrainerError],
         checkpoint_effects: list[Effect],
-    ) -> Result[list[object], NormalsUnavailable]:
+    ) -> Result[list[object], TrainerError]:
         """Transform epoch effects Result by combining with checkpoint effects.
 
         Extracted to helper function to avoid mypy lambda type inference limitation.
@@ -1477,9 +1383,48 @@ class GbmCVNNPricer:
             Blockchain commits are executed synchronously within the training loop using asyncio.run().
             This may add latency; for production, consider committing in a separate process/thread.
         """
-        # No need to check CUDA - _context guarantees we're on CUDA
-        # (enforced by __init__ which raises RuntimeError if not on CUDA)
+        try:
+            asyncio.get_running_loop()
+            running = True
+        except RuntimeError:
+            running = False
 
+        if not running:
+            return asyncio.run(
+                self.train_via_effects(
+                    config,
+                    logger=logger,
+                    blockchain_store=blockchain_store,
+                    commit_plan=commit_plan,
+                )
+            )
+
+        def _run_in_thread() -> Result[TrainingResult, TrainerError]:
+            return asyncio.run(
+                self.train_via_effects(
+                    config,
+                    logger=logger,
+                    blockchain_store=blockchain_store,
+                    commit_plan=commit_plan,
+                )
+            )
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_run_in_thread)
+            return future.result()
+
+    async def train_via_effects(
+        self,
+        config: TrainingConfig,
+        *,
+        interpreter: SpectralMCInterpreter | None = None,
+        logger: StepLogger | None = None,
+        blockchain_store: AsyncBlockchainModelStore | None = None,
+        commit_plan: CommitPlan = NoCommit(),
+    ) -> Result[TrainingResult, TrainerError]:
+        """
+        Execute training via effect interpreter (Phase 4 implementation).
+        """
         match self._validate_commit_plan(commit_plan):
             case Failure(plan_error):
                 return Failure(plan_error)
@@ -1501,21 +1446,14 @@ class GbmCVNNPricer:
         match self._sampler_result:
             case Failure(sampler_error):
                 return Failure(SamplerInitFailed(error=sampler_error))
-            case Success(_):
-                pass
-
-        # Track state in local variables (functional approach)
-        current_sobol_skip = self._sobol_skip
-        current_global_step = self._global_step
-        final_loss = 0.0
-        final_grad_norm = 0.0
+            case Success(sampler):
+                active_sampler = sampler
 
         adam = optim.Adam(self._cvnn.parameters(), lr=config.learning_rate)
 
-        # (re-)attach previous optimiser state -------------------------- #
         match self._optimizer_state:
             case None:
-                pass  # No previous optimizer state to restore
+                pass
             case optimizer_state:
                 match optimizer_state.to_torch():
                     case Failure(opt_err):
@@ -1529,93 +1467,164 @@ class GbmCVNNPricer:
 
         self._cvnn.train()
 
-        def _run_batch(state: _BatchState, batch_idx: int) -> Result[_BatchState, TrainerError]:
-            sobol_skip = state.sobol_skip
-            global_step = state.global_step
-            match self._sampler_result:
-                case Failure(sampler_err):
-                    return Failure(SamplerInitFailed(error=sampler_err))
-                case Success(sampler):
-                    sample_result = sampler.sample(config.batch_size)
-                    match sample_result:
-                        case Success(sobol_inputs):
-                            sobol_skip += config.batch_size
-                        case Failure(sample_err):
-                            return Failure(SamplerInitFailed(error=sample_err))
+        active_interpreter = interpreter or SpectralMCInterpreter.create(
+            torch_stream=self._context.torch_stream,
+            cupy_stream=self._context.cupy_stream,
+            storage_bucket=blockchain_store.bucket_name if blockchain_store else "",
+            mc_engine=self._context.mc_engine,
+            logging_interpreter=self._logging_interpreter,
+        )
 
-            fft_result = collect_results([self._simulate_fft(c) for c in sobol_inputs])
-            match fft_result:
+        for registration in (
+            active_interpreter.registry.register_model("cvnn", self._cvnn),
+            active_interpreter.registry.register_optimizer("adam", adam),
+            active_interpreter.registry.register_sampler("sobol_sampler", active_sampler),
+            active_interpreter.registry.register_metadata("global_step", self._global_step),
+            active_interpreter.registry.register_metadata("sobol_skip", self._sobol_skip),
+        ):
+            match registration:
+                case Failure(err):
+                    return Failure(InvalidTrainerConfig(message=f"registry_error:{err}"))
+                case Success(_):
+                    continue
+
+        if isinstance(logger, TensorBoardLogger):
+            _ = active_interpreter.registry.register_tensor("_tensorboard_writer", logger._writer)
+
+        if blockchain_store is not None:
+            match active_interpreter.registry.register_blockchain_store(
+                "main_store", blockchain_store
+            ):
+                case Failure(err):
+                    return Failure(InvalidTrainerConfig(message=f"registry_error:{err}"))
+                case Success(_):
+                    pass
+
+        current_sobol_skip = self._sobol_skip
+        current_global_step = self._global_step
+        final_loss = 0.0
+        final_grad_norm = 0.0
+
+        def _ensure_optimizer_state() -> None:
+            if adam.state_dict().get("state"):
+                return
+            for param in self._cvnn.parameters():
+                if param.grad is None:
+                    param.grad = torch.zeros_like(param)
+            adam.step()
+            adam.zero_grad(set_to_none=True)
+
+        def _update_optimizer_snapshot() -> None:
+            _ensure_optimizer_state()
+            state_dict = adam.state_dict()
+            state_dict["state"] = dict(
+                map(
+                    lambda item: (
+                        item[0],
+                        dict(
+                            map(
+                                lambda kv: (
+                                    kv[0],
+                                    kv[1].cpu() if isinstance(kv[1], torch.Tensor) else kv[1],
+                                ),
+                                item[1].items(),
+                            )
+                        ),
+                    ),
+                    state_dict["state"].items(),
+                )
+            )
+            match AdamOptimizerState.from_torch(state_dict):
+                case Success(state):
+                    self._optimizer_state = state
+                case Failure(_):
+                    return
+
+        for batch_idx in range(config.num_batches):
+            batch_start = time.perf_counter()
+
+            effects_result = self.build_training_step_effects(batch_idx, config)
+            match effects_result:
                 case Failure(error):
                     return Failure(error)
-                case Success(fft_values):
-                    with self._context.cupy_stream:
-                        fft_buf = cp.asarray(fft_values, dtype=self._cupy_cdtype)
-                    self._context.cupy_stream.synchronize()
+                case Success(effects):
+                    pass
 
-            with torch.cuda.stream(self._context.torch_stream):
-                targets = torch.from_dlpack(fft_buf).to(self._torch_cdtype).detach()
-                real_in, imag_in = _split_inputs(
-                    sobol_inputs,
-                    dtype=self._dtype.to_torch(),
-                    device=self._device.to_torch(),
-                )
-                loss, grad_norm = self._torch_step(real_in, imag_in, targets, adam)
-            self._context.torch_stream.synchronize()
+            exec_result = await active_interpreter.interpret_sequence(effects)
+            match exec_result:
+                case Failure(exec_error):
+                    _update_optimizer_snapshot()
+                    return Failure(TrainingExecutionFailed(message=str(exec_error)))
+                case Success(_):
+                    pass
 
-            updated_loss = loss.item()
-            updated_grad_norm = grad_norm
-            global_step += 1
+            loss_result = active_interpreter.registry.get_tensor(f"loss_{batch_idx}")
+            grad_result = active_interpreter.registry.get_tensor(f"grad_norm_{batch_idx}")
 
-            # Periodic blockchain commits
-            match self._should_commit_now(blockchain_store, commit_plan, global_step):
-                case True, template:
-                    self._log_sync_message(
-                        f"Periodic commit at step {global_step}",
-                        level="info",
+            match loss_result:
+                case Failure(err):
+                    _update_optimizer_snapshot()
+                    return Failure(TrainingExecutionFailed(message=f"loss_missing:{err}"))
+                case Success(loss_tensor):
+                    final_loss = float(loss_tensor.item()) if hasattr(loss_tensor, "item") else 0.0
+
+            match grad_result:
+                case Failure(_):
+                    final_grad_norm = 0.0
+                case Success(grad_tensor):
+                    final_grad_norm = (
+                        float(grad_tensor.item())
+                        if hasattr(grad_tensor, "item")
+                        else final_grad_norm
                     )
-                    self._global_step = global_step
-                    self._sobol_skip = sobol_skip
-                    # Type narrowing: blockchain_store guaranteed non-None by _should_commit_now
+
+            match active_interpreter.registry.get_metadata("global_step"):
+                case Success(step_val):
+                    current_global_step = int(step_val)
+                case Failure(_):
+                    current_global_step += 1
+
+            match active_interpreter.registry.get_metadata("sobol_skip"):
+                case Success(skip_val):
+                    current_sobol_skip = int(skip_val)
+                case Failure(_):
+                    current_sobol_skip += config.batch_size
+
+            lr = config.learning_rate
+            if getattr(adam, "param_groups", None):
+                lr = float(adam.param_groups[0].get("lr", lr))
+
+            batch_time = time.perf_counter() - batch_start
+
+            if logger is not None:
+                logger(
+                    StepMetrics(
+                        step=current_global_step,
+                        batch_time=batch_time,
+                        loss=final_loss,
+                        grad_norm=final_grad_norm,
+                        lr=lr,
+                        optimizer=adam,
+                        model=self._cvnn,
+                    )
+                )
+
+            match self._should_commit_now(blockchain_store, commit_plan, current_global_step):
+                case True, template:
+                    self._global_step = current_global_step
+                    self._sobol_skip = current_sobol_skip
                     assert blockchain_store is not None
-                    self._commit_to_blockchain(
+                    await self._async_commit_to_blockchain(
                         blockchain_store,
                         adam,
                         template,
-                        updated_loss,
-                        batch=global_step,
+                        final_loss,
+                        batch=current_global_step,
                     )
                 case False, _:
                     pass
 
-            return Success(
-                _BatchState(
-                    sobol_skip=sobol_skip,
-                    global_step=global_step,
-                    loss=updated_loss,
-                    grad_norm=updated_grad_norm,
-                )
-            )
-
-        initial_state = _BatchState.initial(current_sobol_skip, current_global_step)
-        final_state_result = fold_results(
-            list(range(config.num_batches)),
-            _run_batch,
-            initial_state,
-        )
-
-        match final_state_result:
-            case Failure(batch_err):
-                return Failure(batch_err)
-            case Success(final_state):
-                current_sobol_skip = final_state.sobol_skip
-                current_global_step = final_state.global_step
-                final_loss = final_state.loss
-                final_grad_norm = final_state.grad_norm
-
-        # ── Snapshot optimiser      ─────────────────────────────────── #
-        # NOTE: Explicit .cpu() calls acceptable per CPU/GPU policy for checkpoint I/O.
-        # The TensorTree API cannot be used here due to type narrowing constraints
-        # with optimizer state_dict's complex nested type structure.
+        _ensure_optimizer_state()
         state_dict = adam.state_dict()
         state_dict["state"] = dict(
             map(
@@ -1644,31 +1653,19 @@ class GbmCVNNPricer:
             case Success(state):
                 final_optimizer_state = state
 
-        # Update self._* with final values for snapshot
         self._optimizer_state = final_optimizer_state
         self._global_step = current_global_step
         self._sobol_skip = current_sobol_skip
 
-        # ── Final blockchain commit ─────────────────────────────────── #
         match self._should_commit_final(blockchain_store, commit_plan):
             case True, template:
-                self._log_sync_message(
-                    f"Final commit after training at step {current_global_step}",
-                    level="info",
-                )
-                # Type narrowing: blockchain_store guaranteed non-None by _should_commit_final
                 assert blockchain_store is not None
-                self._commit_to_blockchain(
-                    blockchain_store,
-                    adam,
-                    template,
-                    final_loss,
-                    batch=config.num_batches,
+                await self._async_commit_to_blockchain(
+                    blockchain_store, adam, template, final_loss, batch=config.num_batches
                 )
             case False, _:
                 pass
 
-        # ── Return immutable training result ────────────────────────── #
         updated_config = self.snapshot()
         match updated_config:
             case Failure(snapshot_err):
@@ -1682,25 +1679,6 @@ class GbmCVNNPricer:
                         final_grad_norm=final_grad_norm,
                     )
                 )
-
-    async def train_via_effects(
-        self,
-        config: TrainingConfig,
-        *,
-        logger: StepLogger | None = None,
-        blockchain_store: AsyncBlockchainModelStore | None = None,
-        commit_plan: CommitPlan = NoCommit(),
-    ) -> Result[TrainingResult, TrainerError]:
-        """
-        Effect-based training currently delegates to the synchronous implementation
-        while the Result-based refactor is in progress.
-        """
-        return self.train(
-            config,
-            logger=logger,
-            blockchain_store=blockchain_store,
-            commit_plan=commit_plan,
-        )
 
     # ------------------------------------------------------------------ #
     # Public API: inference                                              #

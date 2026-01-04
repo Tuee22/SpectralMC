@@ -79,7 +79,7 @@ flowchart TB
 - **[Reproducibility Proofs](reproducibility_proofs.md)** — Formal guarantees for determinism and checkpointing.
 - **[TLA+ Reproducibility Proofs](tla.md)** — Formal model-checking workflow for reproducibility.
 - **[Total Pure Modelling](total_pure_modelling.md)** — Total ADTs for device placement, retries, and storage ownership.
-- **[Blockchain Model Versioning](blockchain_storage.md)** — Storage CAS protocol and integrity checks.
+- **[Object Store Model Versioning](object_store_storage.md)** — Storage CAS protocol and integrity checks.
 - **[Pydantic Best Practices](pydantic_patterns.md)** — Config and validation patterns.
 - **[GPU Build Guide](gpu_build.md)** — Legacy GPU build-from-source workflow.
 
@@ -132,7 +132,7 @@ All engineering decisions flow from this principle. Every standard, pattern, and
 - Reproducibility Proofs
 - TLA+ Reproducibility Proofs
 - Total Pure Modelling
-- Blockchain Model Versioning
+- Object Store Model Versioning
 - Pydantic Best Practices
 - GPU Build Guide
 - Purity Doctrine

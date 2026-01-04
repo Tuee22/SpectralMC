@@ -16,7 +16,7 @@ See Also:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
 
@@ -108,5 +108,53 @@ class ComputeFFT:
     output_tensor_id: str = "fft"
 
 
+@dataclass(frozen=True)
+class SampleContracts:
+    """Request to sample contracts from a Sobol sampler."""
+
+    kind: Literal["SampleContracts"] = "SampleContracts"
+    sampler_id: str = ""
+    num_samples: int = 0
+    output_tensor_id: str = "contracts"
+
+
+@dataclass(frozen=True)
+class ProcessBatch:
+    """Composite effect to generate Monte Carlo targets for a batch of contracts."""
+
+    kind: Literal["ProcessBatch"] = "ProcessBatch"
+    contracts_tensor_id: str = ""
+    batch_idx: int = 0
+    config: dict[str, int | float] = field(default_factory=dict)
+    output_tensor_id: str = "batch_fft"
+
+
+@dataclass(frozen=True)
+class StackTensors:
+    """Request to stack multiple tensors/arrays along a dimension."""
+
+    kind: Literal["StackTensors"] = "StackTensors"
+    input_tensor_ids: tuple[str, ...] = ()
+    dim: int = 0
+    output_tensor_id: str = "stacked"
+
+
+@dataclass(frozen=True)
+class ComputeMeanFFT:
+    """Request to compute FFT with mean reduction along axis 1."""
+
+    kind: Literal["ComputeMeanFFT"] = "ComputeMeanFFT"
+    input_tensor_id: str = ""
+    output_tensor_id: str = "fft_result"
+
+
 # Monte Carlo Effect Union
-MonteCarloEffect = GenerateNormals | SimulatePaths | ComputeFFT
+MonteCarloEffect = (
+    GenerateNormals
+    | SimulatePaths
+    | ComputeFFT
+    | SampleContracts
+    | ProcessBatch
+    | StackTensors
+    | ComputeMeanFFT
+)

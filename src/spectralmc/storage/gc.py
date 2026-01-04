@@ -6,16 +6,17 @@ Removes old model versions while preserving chain integrity and recent checkpoin
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
+from typing import Literal
+
+from spectralmc.effects import LogMessage, LoggingInterpreter
 
 from ..errors.storage import GCError
 from ..result import Failure, Result, Success
 from .chain import ModelVersion
 from .store import AsyncBlockchainModelStore
 
-
-logger = logging.getLogger(__name__)
+LogLevel = Literal["debug", "info", "warning", "error", "critical"]
 
 
 @dataclass(frozen=True)
@@ -97,16 +98,29 @@ class GarbageCollector:
         ```
     """
 
-    def __init__(self, store: AsyncBlockchainModelStore, policy: RetentionPolicy) -> None:
+    def __init__(
+        self,
+        store: AsyncBlockchainModelStore,
+        policy: RetentionPolicy,
+        logging_interpreter: LoggingInterpreter | None = None,
+    ) -> None:
         """
         Initialize garbage collector.
 
         Args:
             store: AsyncBlockchainModelStore instance
             policy: Retention policy
+            logging_interpreter: Interpreter used for structured logging
         """
         self.store = store
         self.policy = policy
+        self._logging_interpreter = logging_interpreter or LoggingInterpreter()
+
+    async def _log_async(self, level: LogLevel, message: str) -> None:
+        """Emit log message via effects."""
+        await self._logging_interpreter.interpret(
+            LogMessage(level=level, message=message, logger_name=__name__)
+        )
 
     async def collect(self, mode: GCMode = PreviewGC()) -> Result[GCReport, GCError]:
         """
@@ -166,7 +180,9 @@ class GarbageCollector:
             for version in to_delete:
                 freed = await self._delete_version(version)
                 bytes_freed += freed
-                logger.info(f"Deleted version {version.counter} (freed {freed} bytes)")
+                await self._log_async(
+                    "info", f"Deleted version {version.counter} (freed {freed} bytes)"
+                )
         else:
             # Dry run: estimate bytes
             for version in to_delete:

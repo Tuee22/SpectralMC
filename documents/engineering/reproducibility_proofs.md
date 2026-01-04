@@ -13,6 +13,8 @@
 - [Immutability Doctrine](immutability_doctrine.md)
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md)
 - [Total Pure Modelling](total_pure_modelling.md)
+- [Object Store Model Versioning](object_store_storage.md)
+- [TLA+ Reproducibility Proofs](tla.md)
 
 ## Overview
 
@@ -28,12 +30,18 @@ Total pure models (see [total_pure_modelling.md](total_pure_modelling.md)) ensur
 state transition and device move is explicit before effects execute, so replay is
 deterministic and illegal states are unrepresentable.
 
+The TLA+ proofs include the effect interpreter behind the purity wall and model
+storage transitions using the object store spec. Storage correctness is proven
+only under the explicit S3/MinIO assumptions in
+[object_store_storage.md](object_store_storage.md).
+
 **Related Standards**:
 - [Purity Doctrine](purity_doctrine.md) - Pure functions enabling reproducibility
 - [Effect Interpreter](effect_interpreter.md) - Effect ADT patterns enabling reproducibility
 - [Torch Runtime (facade removed)](pytorch_facade.md) - Pure runtime ADT + deterministic config effect
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) - Device placement rules
 - [Coding Standards](coding_standards.md) - Type safety requirements
+- [Object Store Model Versioning](object_store_storage.md) - Storage assumptions and invariants
 
 ---
 
@@ -200,12 +208,23 @@ flowchart TB
     SampleSobol[Sample Sobol batch]
     StepModel[Run torch step]
     Snapshot[Capture snapshot + RNG state]
-    Commit[Commit snapshot to blockchain store]
+    Commit[Commit snapshot to object store]
 
     Start --> RestoreCPU --> RestoreCUDA --> InitSobol --> TrainingLoop
     TrainingLoop --> SampleSobol --> StepModel --> TrainingLoop
     TrainingLoop --> Snapshot --> Commit
 ```
+
+## Object Store Commit Semantics
+
+Storage reproducibility is guaranteed by an append-only, content-addressed object
+store model (see [object_store_storage.md](object_store_storage.md)). The proof
+relies on these storage invariants:
+
+- **Exactly-once elements** via conditional create (`If-None-Match: *`)
+- **Manifest chain integrity** through explicit `prev_manifest_hash`
+- **CAS head updates** (`If-Match`) to enforce linear history
+- **WORM immutability** for locked object versions
 
 ### Sobol Sampler: Deterministic Quasi-Random
 
@@ -338,7 +357,7 @@ content_hash = compute_sha256(checkpoint_bytes)
 Properties:
 - If `hash(checkpoint_1) = hash(checkpoint_2)`, then `checkpoint_1 = checkpoint_2`
 - Corrupted checkpoints are detected before restore
-- Blockchain versioning provides immutable history
+- Object store versioning provides immutable history
 
 ---
 
@@ -457,12 +476,12 @@ flowchart TB
     TypeLayer[Type system layer]
     EffectLayer[Effect interpreter layer]
     StateLayer[Explicit state layer]
-    StorageLayer[Storage layer]
+    StorageLayer[Object store layer]
     G1[G1 pure functions guarantee]
     G2[G2 effect sequencing guarantee]
     G3[G3 state threading guarantee]
     G4[G4 checkpoint correctness guarantee]
-    G5[G5 integrity verification guarantee]
+    G5[G5 tamper evidence guarantee]
 
     TypeLayer -->|enables| EffectLayer
     EffectLayer -->|propagates| StateLayer
@@ -482,7 +501,7 @@ flowchart TB
 | G2 | Effect Sequencing | TorchRuntime ADT + configuration effect | Runtime decision + interpreter gate |
 | G3 | State Threading | Explicit RNG capture/restore | Checkpoint tests |
 | G4 | Checkpoint Correctness | Complete state serialization | Resume tests |
-| G5 | Integrity Verification | SHA256 content addressing | Hash verification |
+| G5 | Tamper Evidence | Manifest chain + object immutability | Hash + chain verification |
 
 ---
 
@@ -507,5 +526,5 @@ When implementing new features, verify:
 - [Torch Runtime (facade removed)](pytorch_facade.md) - Determinism implementation details
 - [Coding Standards](coding_standards.md) - Type safety requirements
 - [Testing Requirements](testing_requirements.md) - Reproducibility test patterns
-- [Blockchain Storage](blockchain_storage.md) - Checkpoint verification
+- [Object Store Model Versioning](object_store_storage.md) - Checkpoint verification
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) - Device management

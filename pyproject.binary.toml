@@ -233,6 +233,7 @@ tier1_infrastructure = [
 ]
 tier3_effects = [
   "src/spectralmc/effects/interpreter.py",
+  "src/spectralmc/effects/logging.py",
   "src/spectralmc/storage/*.py",
   "src/spectralmc/__main__.py",
   "src/spectralmc/gbm_trainer.py",

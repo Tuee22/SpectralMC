@@ -52,7 +52,7 @@ flowchart TB
 
 3. **Interpreters (Impure boundary)**  
    - Single boundary for side effects.  
-   - Handles GPU operations (kernels, streams), storage (S3/blockchain CAS), logging, RNG capture/restore.  
+   - Handles GPU operations (kernels, streams), storage (S3/object store CAS), logging, RNG capture/restore.  
    - Receives a validated torch handle from the TorchRuntime effect for deterministic device/dtype defaults.
 
 Example (TPM guard → decision → effect):
@@ -76,7 +76,7 @@ interpreter = SpectralMCInterpreter.create(
 ## GPU/Storage Topology
 
 - **GPU path**: CPU initialization → explicit `TensorTransfer` → kernel launches guarded by device checks (`cpu_gpu_compute_policy.md`).  
-- **Storage path**: Immutable model/version ADTs → CAS writes via blockchain storage interpreter.  
+- **Storage path**: Immutable model/version ADTs → CAS writes via object store interpreter.  
 - **RNG path**: RNG state captured/restored as effects; Sobol/PRNG selection is explicit and typed.
 
 ### Pure Model → Effects → Infrastructure

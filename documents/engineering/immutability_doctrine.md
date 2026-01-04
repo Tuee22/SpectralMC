@@ -53,7 +53,7 @@ object.__setattr__(version, "counter", 999)  # ❌ FORBIDDEN
 - Violates immutability contract
 - Creates mutable state where code assumes immutability
 - Cannot be detected by mypy or type checkers
-- Undermines correctness guarantees (e.g., blockchain integrity)
+- Undermines correctness guarantees (e.g., object store integrity)
 
 **Correct approach**:
 ```python
@@ -193,7 +193,7 @@ def test_immutability():
 
 ### Critical Use Cases in SpectralMC
 
-#### 1. Blockchain Integrity (`ModelVersion`)
+#### 1. Object Store Integrity (`ModelVersion`)
 
 ```python
 # File: documents/engineering/immutability_doctrine.md
@@ -205,7 +205,7 @@ class ModelVersion:
     # ...
 ```
 
-- Versions form a Merkle chain
+- Versions form a manifest chain
 - Mutating a version breaks chain integrity
 - Cannot detect corruption if versions can change
 - **Impact**: Silent data corruption, undetectable tampering

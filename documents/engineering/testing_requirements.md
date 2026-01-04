@@ -652,7 +652,7 @@ tests/
 ├── test_storage/              # Storage system tests (14 files)
 │   ├── test_atomic_cas.py         # Atomic CAS operations
 │   ├── test_audit_log.py          # Audit logging
-│   ├── test_chain.py              # Blockchain chain operations
+│   ├── test_chain.py              # Manifest chain operations
 │   ├── test_cli.py                # CLI commands
 │   ├── test_context_manager.py    # Async context manager
 │   ├── test_e2e_storage.py        # End-to-end storage tests
@@ -963,7 +963,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc \
 
 ---
 
-## Blockchain Storage Test Coverage
+## Object Store Storage Test Coverage
 
 All storage features have comprehensive test coverage:
 
@@ -972,7 +972,7 @@ All storage features have comprehensive test coverage:
   - gc-preview, gc-run with protected tags
   - tensorboard-log, error handling
 - **InferenceClient**: 8 tests (pinned mode, tracking mode, lifecycle)
-- **Chain verification**: 15 tests (genesis, merkle chain, corruption detection)
+- **Chain verification**: 15 tests (genesis, manifest chain, corruption detection)
 - **Garbage collection**: 15 tests (retention policies, safety checks)
 - **TensorBoard**: 12 tests (logging, metadata, error handling)
 - **Training integration**: 7 tests (auto_commit, periodic commits, optimizer state preservation)
@@ -986,7 +986,7 @@ docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all 
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run test-all tests/test_integrity/
 ```
 
-See also: [Blockchain Storage](blockchain_storage.md) for complete storage documentation.
+See also: [Object Store Model Versioning](object_store_storage.md) for complete storage documentation.
 
 ---
 
@@ -1003,4 +1003,4 @@ See also: [Blockchain Storage](blockchain_storage.md) for complete storage docum
 - **Output handling**: Always redirect to files, read complete output
 - **Avoid anti-patterns**: See 13 testing anti-patterns above
 
-See also: [Coding Standards](coding_standards.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [Torch Runtime](pytorch_facade.md), [Blockchain Storage](blockchain_storage.md)
+See also: [Coding Standards](coding_standards.md), [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md), [Torch Runtime](pytorch_facade.md), [Object Store Model Versioning](object_store_storage.md)

@@ -12,10 +12,11 @@
 ## Executive Summary
 
 This document defines the TLA+ model, assumptions, and workflow for proving that
-SpectralMC training is reproducible and snapshot/restore is equivalent to
-continuous training. The proof is valid only under explicit runtime and GPU
-assumptions that are already enforced by existing doctrines. This document is
-hands-on and includes a step-by-step workflow for running the model checker.
+SpectralMC training is reproducible, storage history is tamper-evident, and
+snapshot/restore is equivalent to continuous training. The proof is valid only
+under explicit runtime, GPU, and object store assumptions that are already
+enforced by existing doctrines. This document is hands-on and includes a
+step-by-step workflow for running the model checker.
 
 ## Cross-References
 
@@ -26,6 +27,7 @@ hands-on and includes a step-by-step workflow for running the model checker.
 - [Torch Runtime](pytorch_facade.md)
 - [Total Pure Modelling](total_pure_modelling.md)
 - [Immutability Doctrine](immutability_doctrine.md)
+- [Object Store Model Versioning](object_store_storage.md)
 - [Documentation Standards](../documentation_standards.md)
 
 ## Scope
@@ -36,9 +38,12 @@ The TLA+ spec covers:
 - Explicit RNG threading (torch CPU/CUDA, numpy, Sobol skip)
 - Snapshot and restore equivalence
 - Effect sequencing for GPU work, RNG capture/restore, and metadata updates
+- Object store storage transitions (elements, manifests, head pointer)
+- Effect interpreter state behind the purity wall
 
-The spec does not model GPU kernel implementations, cuDNN internals, or external
-storage engines. Those details are abstracted into assumptions.
+The spec does not model GPU kernel implementations, cuDNN internals, or vendor
+storage internals. Those details are abstracted into explicit assumptions while
+storage transitions are modeled at the effect boundary.
 
 ## Explicit Assumptions
 
@@ -57,6 +62,8 @@ The proof holds only if all of the following are true:
    explicit effect ADTs (see [effect_interpreter.md](effect_interpreter.md)).
 6. **Pure business logic**: Tier 2 modules remain pure per
    [purity_doctrine.md](purity_doctrine.md).
+7. **Object store assumptions**: storage semantics follow the explicit S3/MinIO
+   assumptions in [object_store_storage.md](object_store_storage.md).
 
 These assumptions are aligned with existing SpectralMC doctrines; the TLA+ proof
 is a formalization of those contracts, not a replacement for them.
@@ -87,8 +94,34 @@ image as a sidecar. This is optional and manual; no automation is allowed.
 # (Mount the repo and run TLC from /spectralmc)
 
 docker run --rm -v "$(pwd)":/spectralmc -w /spectralmc tlaplus/tlaplus:latest \
-  tlc2.TLC -workers auto -config documents/engineering/tla/reproducibility.cfg \
-  documents/engineering/tla/reproducibility.tla
+  tlc2.TLC -workers auto -config TLA/training/reproducibility.cfg \
+  TLA/training/reproducibility.tla
+```
+
+## TLA+ Source Layout
+
+All TLA+ sources live under the repo root in `TLA/`.
+
+```text
+# File: documents/engineering/tla.md
+TLA/
+├── README.md
+├── common/
+│   ├── types.tla
+│   ├── hashing.tla
+│   └── effects.tla
+├── storage/
+│   ├── object_store_spec.tla
+│   └── object_store_spec.cfg
+├── interpreter/
+│   ├── effect_interpreter.tla
+│   └── effect_interpreter.cfg
+├── training/
+│   ├── reproducibility.tla
+│   └── reproducibility.cfg
+└── integration/
+    ├── training_with_storage.tla
+    └── training_with_storage.cfg
 ```
 
 ## State Model
@@ -102,7 +135,8 @@ VARIABLES
   ModelParams, OptimizerState, TrainingConfig,
   RngTorchCpu, RngTorchCuda, RngNumpy, SobolSkip,
   GlobalStep, DeviceCount, DeterminismFlags,
-  EffectQueue, SnapshotStore
+  EffectQueue, SnapshotStore,
+  ElementStore, ManifestStore, HeadRef
 ```
 
 **State mapping**:
@@ -112,6 +146,7 @@ VARIABLES
 - `RngTorchCpu` / `RngTorchCuda` / `RngNumpy` → serialized RNG state bytes
 - `SobolSkip` / `GlobalStep` → metadata effects tracked in the interpreter
 - `DeterminismFlags` → runtime determinism effect applied before execution
+- `ElementStore` / `ManifestStore` / `HeadRef` → object store state
 
 ## Actions
 
@@ -138,14 +173,26 @@ Snapshot ==
 
 Restore ==
   /\ \E snap \in SnapshotStore: RestoreFrom(snap)
+
+WriteElement ==
+  /\ ElementStore' = ElementStore \cup {NewElement}
+
+CommitManifest ==
+  /\ ManifestStore' = ManifestStore \cup {NewManifest}
+
+UpdateHead ==
+  /\ HeadRef' = NewHead
 ```
 
 ## Invariants
 
-The proof centers on two invariants:
+The proof centers on the following invariants:
 
 1. **Determinism**: same inputs imply same outputs.
 2. **Resume equivalence**: snapshot → restore → N steps equals continuous N steps.
+3. **Manifest chain integrity**: manifests link to their predecessors by hash.
+4. **Head linearity**: the head pointer advances only via CAS and points to a
+   valid manifest.
 
 ```tla
 \* File: documents/engineering/tla.md
@@ -175,6 +222,7 @@ interpretable:
 
 - **One spec per topic**: use a single `.tla` file per proof target.
 - **Local config**: place the `.cfg` next to the `.tla` file.
+- **Root location**: keep all TLA+ sources under `TLA/`.
 - **Small state**: limit the model to small finite sets so TLC can terminate.
 - **Module naming**: module name must match the `.tla` file name (case-sensitive).
 - **Config binding**: put `SPECIFICATION` and `INVARIANT` in the `.cfg`, not in
@@ -196,6 +244,13 @@ interpretable:
 - `--workers <n|auto>`: TLC worker count (default `auto`).
 - `--tlc-arg <arg>`: pass through additional TLC arguments (repeatable).
 
+## Optional Tooling (Manual Only)
+
+- **TLA+ Toolbox**: SANY parser + TLC runner with UI traces (manual only).
+- **TLAPS (`tlapm`)**: Interactive proof checking for inductive proofs.
+- **Editor support**: TLA+ syntax highlighting and basic linting via IDE extensions.
+- **No repo automation**: Do not add linters, hooks, or CI automation for TLA+.
+
 ## Guided Workflow (TLC)
 
 All commands must run through Docker per repo policy. The examples below show
@@ -207,15 +262,15 @@ Create a dedicated folder and two files (module + config):
 
 ```bash
 # File: documents/engineering/tla.md
-mkdir -p documents/engineering/tla
-nano documents/engineering/tla/reproducibility.tla
-nano documents/engineering/tla/reproducibility.cfg
+mkdir -p TLA/training
+nano TLA/training/reproducibility.tla
+nano TLA/training/reproducibility.cfg
 ```
 
 **Minimal skeleton** (start here and expand):
 
 ```tla
-\* File: documents/engineering/tla/reproducibility.tla
+\* File: TLA/training/reproducibility.tla
 ---- MODULE reproducibility ----
 EXTENDS Naturals, Sequences
 
@@ -242,7 +297,7 @@ Spec == Init /\ [][Next]_<<ModelParams, OptimizerState, RngTorchCpu, RngTorchCud
 ```
 
 ```tla
-\* File: documents/engineering/tla/reproducibility.cfg
+\* File: TLA/training/reproducibility.cfg
 SPECIFICATION Spec
 INVARIANT Deterministic
 ```
@@ -267,16 +322,16 @@ Use the new Poetry entrypoint to run TLC:
 # File: documents/engineering/tla.md
 # Run TLC (module path required; .tla extension is ok)
 poetry run tla-check \
-  --spec documents/engineering/tla/reproducibility.tla \
-  --config documents/engineering/tla/reproducibility.cfg
+  --spec TLA/training/reproducibility.tla \
+  --config TLA/training/reproducibility.cfg
 ```
 
 ```bash
 # File: documents/engineering/tla.md
 # Same command via docker compose
 docker compose -f docker/docker-compose.yml exec spectralmc poetry run tla-check \
-  --spec documents/engineering/tla/reproducibility.tla \
-  --config documents/engineering/tla/reproducibility.cfg
+  --spec TLA/training/reproducibility.tla \
+  --config TLA/training/reproducibility.cfg
 ```
 
 ### 3) Interpret the output
@@ -301,6 +356,7 @@ artifacts are directly modeled:
 - `src/spectralmc/gbm_trainer.py` (train step + snapshot)
 - `src/spectralmc/effects/interpreter.py` (RNG capture/restore, metadata effects)
 - `src/spectralmc/runtime/torch_runtime.py` (deterministic runtime effect)
+- `src/spectralmc/storage/` (object store effects and CAS semantics)
 
 The TLA+ model is authoritative for reproducibility guarantees; tests provide
 empirical validation only.
@@ -309,10 +365,10 @@ empirical validation only.
 
 - Proving floating-point arithmetic identities across GPU architectures
 - Proving determinism for non-deterministic library calls
-- Modeling external services or storage backends beyond their effect contracts
+- Modeling vendor internals for GPU kernels or S3/MinIO storage
 
 ## Manual Verification Workflow
 
-- Write the TLA+ spec in `documents/engineering/tla/`.
+- Write the TLA+ spec in `TLA/`.
 - Run TLC manually with `poetry run tla-check`.
 - Capture results in review notes; do not add automation or CI hooks.

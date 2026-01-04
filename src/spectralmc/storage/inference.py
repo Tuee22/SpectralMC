@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from dataclasses import dataclass
+from typing import Literal
 
+from spectralmc.effects import LogMessage, LoggingInterpreter
 from spectralmc.runtime import get_torch_handle
 from ..errors.storage import (
     StartError,
@@ -23,7 +24,7 @@ from .store import AsyncBlockchainModelStore
 
 get_torch_handle()
 
-logger = logging.getLogger(__name__)
+LogLevel = Literal["debug", "info", "warning", "error", "critical"]
 
 
 # ============================================================================
@@ -156,6 +157,7 @@ class InferenceClient:
         model_template: ComplexValuedModel,
         config_template: GbmCVNNPricerConfig,
         max_consecutive_failures: int = 5,
+        logging_interpreter: LoggingInterpreter | None = None,
     ) -> None:
         """
         Initialize inference client.
@@ -167,6 +169,7 @@ class InferenceClient:
             model_template: Empty model for loading weights into
             config_template: Config template for snapshot loading
             max_consecutive_failures: Stop polling after this many failures (default: 5)
+            logging_interpreter: Interpreter for structured logging
         """
         self.mode = mode
         self.poll_interval = poll_interval
@@ -174,6 +177,7 @@ class InferenceClient:
         self.model_template = model_template
         self.config_template = config_template
         self.max_consecutive_failures = max_consecutive_failures
+        self._logging_interpreter = logging_interpreter or LoggingInterpreter()
 
         # Runtime state
         self._current_version: ModelVersion | None = None
@@ -184,15 +188,33 @@ class InferenceClient:
 
         match mode:
             case PinnedMode(counter):
-                logger.info(
+                self._log_sync(
+                    "info",
                     f"InferenceClient initialized: mode=pinned, "
-                    f"version={counter}, poll_interval={poll_interval}s"
+                    f"version={counter}, poll_interval={poll_interval}s",
                 )
             case TrackingMode():
-                logger.info(
+                self._log_sync(
+                    "info",
                     f"InferenceClient initialized: mode=tracking, "
-                    f"poll_interval={poll_interval}s"
+                    f"poll_interval={poll_interval}s",
                 )
+
+    def _log_sync(self, level: LogLevel, message: str) -> None:
+        """Emit a log message synchronously."""
+        effect = LogMessage(level=level, message=message, logger_name=__name__)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self._logging_interpreter.interpret(effect))
+            return
+        loop.create_task(self._logging_interpreter.interpret(effect))
+
+    async def _log_async(self, level: LogLevel, message: str) -> None:
+        """Emit a log message asynchronously."""
+        await self._logging_interpreter.interpret(
+            LogMessage(level=level, message=message, logger_name=__name__)
+        )
 
     async def __aenter__(self) -> InferenceClient:
         """Enter async context manager, start client."""
@@ -222,7 +244,7 @@ class InferenceClient:
             Success(None) if started successfully
             Failure(StartError) if cannot start (e.g., empty store in tracking mode)
         """
-        logger.info("Starting InferenceClient...")
+        await self._log_async("info", "Starting InferenceClient...")
 
         # Load initial model based on mode
         match self.mode:
@@ -230,7 +252,7 @@ class InferenceClient:
                 # Pinned mode: load specific version
                 match await self._fetch_version_by_counter(counter):
                     case Success(version):
-                        logger.info(f"Pinned mode: loading version {counter}")
+                        await self._log_async("info", f"Pinned mode: loading version {counter}")
                     case Failure(error):
                         return Failure(
                             StartError(
@@ -244,7 +266,9 @@ class InferenceClient:
                 head_result = await self.store.get_head()
                 match head_result:
                     case Success(version):
-                        logger.info(f"Tracking mode: loading latest version {version.counter}")
+                        await self._log_async(
+                            "info", f"Tracking mode: loading latest version {version.counter}"
+                        )
                     case Failure():
                         return Failure(
                             StartError(
@@ -260,11 +284,13 @@ class InferenceClient:
             case TrackingMode():
                 self._shutdown_event.clear()
                 self._polling_task = asyncio.create_task(self._poll_loop())
-                logger.info(f"Started polling task (interval={self.poll_interval}s)")
+                await self._log_async(
+                    "info", f"Started polling task (interval={self.poll_interval}s)"
+                )
             case PinnedMode(_):
                 pass  # No polling in pinned mode
 
-        logger.info(f"InferenceClient started with version {version.counter}")
+        await self._log_async("info", f"InferenceClient started with version {version.counter}")
         return Success(None)
 
     async def stop(self) -> None:
@@ -274,7 +300,7 @@ class InferenceClient:
         - Cancels background polling task
         - Cleans up resources
         """
-        logger.info("Stopping InferenceClient...")
+        await self._log_async("info", "Stopping InferenceClient...")
 
         # Signal shutdown
         self._shutdown_event.set()
@@ -287,9 +313,9 @@ class InferenceClient:
             except asyncio.CancelledError:
                 pass
             self._polling_task = None
-            logger.info("Polling task stopped")
+            await self._log_async("info", "Polling task stopped")
 
-        logger.info("InferenceClient stopped")
+        await self._log_async("info", "InferenceClient stopped")
 
     def get_model(self) -> GbmCVNNPricerConfig:
         """
@@ -325,7 +351,7 @@ class InferenceClient:
 
     async def _poll_loop(self) -> None:
         """Background task that polls for new versions (tracking mode only)."""
-        logger.info("Polling loop started")
+        await self._log_async("info", "Polling loop started")
 
         while not self._shutdown_event.is_set():
             try:
@@ -351,41 +377,57 @@ class InferenceClient:
                             continue
 
                         if head.counter > self._current_version.counter:
-                            logger.info(
+                            await self._log_async(
+                                "info",
                                 f"New version detected: {head.counter} "
-                                f"(current: {self._current_version.counter})"
+                                f"(current: {self._current_version.counter})",
                             )
                             await self._load_version(head)
-                            logger.info(f"Hot-swapped to version {head.counter}")
+                            await self._log_async("info", f"Hot-swapped to version {head.counter}")
 
                     case Failure(error):
                         self._consecutive_failures += 1
-                        logger.warning(
-                            f"Failed to fetch HEAD during poll (attempt {self._consecutive_failures}/{self.max_consecutive_failures}): {error}"
+                        await self._log_async(
+                            "warning",
+                            (
+                                "Failed to fetch HEAD during poll "
+                                f"(attempt {self._consecutive_failures}/{self.max_consecutive_failures}): {error}"
+                            ),
                         )
 
                         if self._consecutive_failures >= self.max_consecutive_failures:
-                            logger.error(
-                                f"Circuit breaker triggered: {self._consecutive_failures} consecutive failures. "
-                                "Stopping polling loop."
+                            await self._log_async(
+                                "error",
+                                (
+                                    "Circuit breaker triggered: "
+                                    f"{self._consecutive_failures} consecutive failures. "
+                                    "Stopping polling loop."
+                                ),
                             )
                             break
 
             except (VersionNotFoundError, StorageError, OSError) as e:
                 self._consecutive_failures += 1
-                logger.error(
-                    f"Unexpected error in polling loop (attempt {self._consecutive_failures}/{self.max_consecutive_failures}): {e}",
-                    exc_info=True,
+                await self._log_async(
+                    "error",
+                    (
+                        "Unexpected error in polling loop "
+                        f"(attempt {self._consecutive_failures}/{self.max_consecutive_failures}): {e}"
+                    ),
                 )
 
                 if self._consecutive_failures >= self.max_consecutive_failures:
-                    logger.error(
-                        f"Circuit breaker triggered: {self._consecutive_failures} consecutive failures. "
-                        "Stopping polling loop."
+                    await self._log_async(
+                        "error",
+                        (
+                            "Circuit breaker triggered: "
+                            f"{self._consecutive_failures} consecutive failures. "
+                            "Stopping polling loop."
+                        ),
                     )
                     break
 
-        logger.info("Polling loop stopped")
+        await self._log_async("info", "Polling loop stopped")
 
     async def _load_version(self, version: ModelVersion) -> None:
         """
@@ -396,7 +438,7 @@ class InferenceClient:
         Args:
             version: Version to load
         """
-        logger.info(f"Loading version {version.counter}...")
+        await self._log_async("info", f"Loading version {version.counter}...")
 
         # Load snapshot from checkpoint
         snapshot_result = await load_snapshot_from_checkpoint(
@@ -414,10 +456,13 @@ class InferenceClient:
         self._current_version = version
         self._current_snapshot = snapshot
 
-        logger.info(
-            f"Loaded version {version.counter}: "
-            f"global_step={snapshot.global_step}, "
-            f"params={sum(p.numel() for p in snapshot.cvnn.parameters())}"
+        await self._log_async(
+            "info",
+            (
+                f"Loaded version {version.counter}: "
+                f"global_step={snapshot.global_step}, "
+                f"params={sum(p.numel() for p in snapshot.cvnn.parameters())}"
+            ),
         )
 
     async def _fetch_version_by_counter(

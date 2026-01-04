@@ -17,12 +17,13 @@ See Also:
 from __future__ import annotations
 
 import asyncio
-import logging
+import hashlib
 import pickle
 from dataclasses import dataclass
-from typing import Literal, Never, Protocol, TypeVar
+from typing import Literal, Never, Protocol, Sequence, TypeVar
 
 import cupy as cp
+from cupy import stack as cupy_stack
 import numpy as np
 from numba import cuda
 from numba.cuda import synchronize as numba_sync
@@ -46,32 +47,48 @@ from spectralmc.effects.gpu import (
     DLPackTransfer,
     GPUEffect,
     KernelLaunch,
+    SplitInputs,
     StreamSync,
     TensorTransfer,
 )
-from spectralmc.effects.logging import LogMessage, LoggingEffect
+from spectralmc.effects.logging import LogMessage, LoggingInterpreter
 from spectralmc.effects.metadata import MetadataEffect, ReadMetadata, UpdateMetadata
 from spectralmc.effects.montecarlo import (
     ComputeFFT,
+    ComputeMeanFFT,
     ForwardNormalization,
     GenerateNormals,
     MonteCarloEffect,
     PathScheme,
+    ProcessBatch,
+    SampleContracts,
     SimulatePaths,
+    StackTensors,
 )
-from spectralmc.effects.registry import SharedRegistry
+from spectralmc.effects.registry import SharedRegistry, SupportsContracts
 from spectralmc.effects.rng import CaptureRNGState, RestoreRNGState, RNGEffect
-from spectralmc.effects.storage import CommitVersion, ReadObject, StorageEffect, WriteObject
+from spectralmc.effects.storage import (
+    CommitCheckpoint,
+    CommitVersion,
+    ReadObject,
+    StorageEffect,
+    WriteObject,
+)
 from spectralmc.effects.training import (
     BackwardPass,
+    ComputeComplexLoss,
+    ComputeGradNorm,
     ComputeLoss,
     ForwardPass,
+    ForwardPassComplex,
     LogMetrics,
     OptimizerStep,
     TrainingEffect,
+    UpdateLearningRate,
+    ZeroGrad,
 )
 from spectralmc.effects.types import Effect
-from spectralmc.gbm import SimulateBlackScholes
+from spectralmc.gbm import BlackScholes, SimulateBlackScholes
 from spectralmc.models.cpu_gpu_transfer import (
     OutputPinning,
     TransferDestination,
@@ -180,6 +197,8 @@ class GPUInterpreter:
                 return await self._launch_kernel(name, grid, block)
             case DLPackTransfer():
                 return await self._dlpack_transfer(effect)
+            case SplitInputs():
+                return await self._split_inputs(effect)
             case _:
                 assert_never(effect)
 
@@ -348,6 +367,44 @@ class GPUInterpreter:
         except (RuntimeError, TypeError) as e:
             return Failure(GPUError(message=str(e)))
 
+    async def _split_inputs(self, effect: SplitInputs) -> Result[object, GPUError]:
+        """Split stored contracts into real/imaginary tensors."""
+        contracts_result = self._registry.get_contracts(effect.contracts_tensor_id)
+        match contracts_result:
+            case Failure(err):
+                return Failure(GPUError(message=f"Contracts not found: {err}"))
+            case Success(contracts):
+                pass
+
+        try:
+            rows = [
+                [
+                    float(contract.X0),
+                    float(contract.K),
+                    float(contract.T),
+                    float(contract.r),
+                    float(contract.d),
+                    float(contract.v),
+                ]
+                for contract in contracts
+            ]
+            real = torch.tensor(rows, device="cuda", dtype=torch.float32)
+            imag = torch.zeros_like(real)
+
+            match self._registry.register_tensor(effect.real_output_tensor_id, real):
+                case Failure(reg_err):
+                    return Failure(GPUError(message=f"Registry tensor error: {reg_err}"))
+                case Success(_):
+                    pass
+
+            match self._registry.register_tensor(effect.imag_output_tensor_id, imag):
+                case Failure(reg_err):
+                    return Failure(GPUError(message=f"Registry tensor error: {reg_err}"))
+                case Success(_):
+                    return Success((real, imag))
+        except Exception as exc:  # noqa: BLE001
+            return Failure(GPUError(message=str(exc)))
+
 
 class TrainingInterpreter:
     """Interpreter for training effects.
@@ -369,12 +426,22 @@ class TrainingInterpreter:
         match effect:
             case ForwardPass():
                 return await self._forward_pass(effect)
+            case ForwardPassComplex():
+                return await self._forward_pass_complex(effect)
             case BackwardPass(loss_tensor_id=tid):
                 return await self._backward_pass(tid)
             case OptimizerStep(optimizer_id=oid):
                 return await self._optimizer_step(oid)
             case ComputeLoss():
                 return await self._compute_loss(effect)
+            case ComputeComplexLoss():
+                return await self._compute_complex_loss(effect)
+            case ZeroGrad():
+                return await self._zero_grad(effect)
+            case ComputeGradNorm():
+                return await self._compute_grad_norm(effect)
+            case UpdateLearningRate():
+                return await self._update_learning_rate(effect)
             case LogMetrics():
                 return await self._log_metrics(effect)
             case _:
@@ -421,6 +488,68 @@ class TrainingInterpreter:
         except RuntimeError as e:
             return Failure(TrainingError(message=str(e)))
 
+    async def _forward_pass_complex(
+        self,
+        effect: ForwardPassComplex,
+    ) -> Result[object, TrainingError]:
+        """Execute complex-valued forward pass."""
+        model_result = self._registry.get_model(effect.model_id)
+        match model_result:
+            case Failure(_):
+                return Failure(TrainingError(message=f"Model not found: {effect.model_id}"))
+            case Success(model):
+                pass
+
+        real_result = self._registry.get_torch_tensor(effect.real_input_tensor_id)
+        match real_result:
+            case Failure(_):
+                return Failure(
+                    TrainingError(message=f"Tensor not found: {effect.real_input_tensor_id}")
+                )
+            case Success(real_input):
+                pass
+
+        imag_result = self._registry.get_torch_tensor(effect.imag_input_tensor_id)
+        match imag_result:
+            case Failure(_):
+                return Failure(
+                    TrainingError(message=f"Tensor not found: {effect.imag_input_tensor_id}")
+                )
+            case Success(imag_input):
+                pass
+
+        try:
+            if callable(model):
+                outputs = model(real_input, imag_input)
+            else:
+                return Failure(TrainingError(message=f"Model {effect.model_id} is not callable"))
+
+            match outputs:
+                case (pred_real, pred_imag):
+                    pass
+                case _:
+                    return Failure(
+                        TrainingError(
+                            message=f"Model {effect.model_id} did not return complex outputs"
+                        )
+                    )
+
+            for tensor_id, tensor in (
+                (effect.real_output_tensor_id, pred_real),
+                (effect.imag_output_tensor_id, pred_imag),
+            ):
+                match self._registry.register_tensor(tensor_id, tensor):
+                    case Failure(err):
+                        return Failure(
+                            TrainingError(message=f"Registry tensor error: {err}", step=None)
+                        )
+                    case Success(_):
+                        pass
+
+            return Success((pred_real, pred_imag))
+        except RuntimeError as exc:
+            return Failure(TrainingError(message=str(exc)))
+
     async def _backward_pass(self, loss_tensor_id: str) -> Result[object, TrainingError]:
         """Compute gradients via backpropagation."""
         tensor_result = self._registry.get_tensor(loss_tensor_id)
@@ -440,7 +569,7 @@ class TrainingInterpreter:
             return Failure(TrainingError(message=str(e)))
 
     async def _optimizer_step(self, optimizer_id: str) -> Result[object, TrainingError]:
-        """Update model parameters using optimizer."""
+        """Update model parameters using optimizer (zero_grad handled separately)."""
         optimizer_result = self._registry.get_optimizer(optimizer_id)
         match optimizer_result:
             case Failure(_):
@@ -452,9 +581,6 @@ class TrainingInterpreter:
             if hasattr(optimizer, "step"):
                 step_fn = optimizer.step
                 step_fn()
-            if hasattr(optimizer, "zero_grad"):
-                zero_grad_fn = optimizer.zero_grad
-                zero_grad_fn()
             return Success(None)
         except RuntimeError as e:
             return Failure(TrainingError(message=str(e)))
@@ -508,6 +634,128 @@ class TrainingInterpreter:
         except RuntimeError as e:
             return Failure(TrainingError(message=str(e)))
 
+    async def _compute_complex_loss(
+        self, effect: ComputeComplexLoss
+    ) -> Result[object, TrainingError]:
+        """Compute loss for complex-valued predictions."""
+        pred_real_result = self._registry.get_torch_tensor(effect.pred_real_tensor_id)
+        match pred_real_result:
+            case Failure(_):
+                return Failure(
+                    TrainingError(
+                        message=f"Prediction tensor not found: {effect.pred_real_tensor_id}"
+                    )
+                )
+            case Success(pred_real):
+                pass
+
+        pred_imag_result = self._registry.get_torch_tensor(effect.pred_imag_tensor_id)
+        match pred_imag_result:
+            case Failure(_):
+                return Failure(
+                    TrainingError(
+                        message=f"Prediction tensor not found: {effect.pred_imag_tensor_id}"
+                    )
+                )
+            case Success(pred_imag):
+                pass
+
+        target_result = self._registry.get_torch_tensor(effect.target_tensor_id)
+        match target_result:
+            case Failure(_):
+                return Failure(
+                    TrainingError(message=f"Target tensor not found: {effect.target_tensor_id}")
+                )
+            case Success(target):
+                target_real = torch.real(target)
+
+        try:
+            zero_like_imag = torch.zeros_like(pred_imag)
+            loss_kind = str(effect.loss_type)
+            match loss_kind:
+                case "mse":
+                    loss_real = torch.nn.functional.mse_loss(pred_real, target_real)
+                    loss_imag = torch.nn.functional.mse_loss(pred_imag, zero_like_imag)
+                case "mae":
+                    loss_real = torch.nn.functional.l1_loss(pred_real, target_real)
+                    loss_imag = torch.nn.functional.l1_loss(pred_imag, zero_like_imag)
+                case "huber":
+                    loss_real = torch.nn.functional.smooth_l1_loss(pred_real, target_real)
+                    loss_imag = torch.nn.functional.smooth_l1_loss(pred_imag, zero_like_imag)
+                case other:
+                    return Failure(TrainingError(message=f"unsupported_loss_type:{other}"))
+
+            loss = loss_real + loss_imag
+            match self._registry.register_tensor(effect.output_tensor_id, loss):
+                case Failure(err):
+                    return Failure(TrainingError(message=f"Registry tensor error: {err}"))
+                case Success(_):
+                    return Success(loss)
+        except RuntimeError as exc:
+            return Failure(TrainingError(message=str(exc)))
+
+    async def _zero_grad(self, effect: ZeroGrad) -> Result[object, TrainingError]:
+        """Explicit optimizer.zero_grad()."""
+        optimizer_result = self._registry.get_optimizer(effect.optimizer_id)
+        match optimizer_result:
+            case Failure(_):
+                return Failure(TrainingError(message=f"Optimizer not found: {effect.optimizer_id}"))
+            case Success(optimizer):
+                pass
+
+        try:
+            if hasattr(optimizer, "zero_grad"):
+                optimizer.zero_grad(set_to_none=effect.set_to_none)
+            return Success(None)
+        except RuntimeError as exc:
+            return Failure(TrainingError(message=str(exc)))
+
+    async def _compute_grad_norm(self, effect: ComputeGradNorm) -> Result[object, TrainingError]:
+        """Compute gradient norm for monitoring."""
+        model_result = self._registry.get_model(effect.model_id)
+        match model_result:
+            case Failure(_):
+                return Failure(TrainingError(message=f"Model not found: {effect.model_id}"))
+            case Success(model):
+                pass
+
+        try:
+            parameters = list(model.parameters()) if hasattr(model, "parameters") else []
+            if not parameters:
+                return Failure(TrainingError(message="Model has no parameters"))
+
+            grad_norm_result = torch.nn.utils.clip_grad_norm_(parameters, max_norm=effect.max_norm)
+            grad_tensor = torch.tensor(grad_norm_result, device=parameters[0].device)
+            match self._registry.register_tensor(effect.output_tensor_id, grad_tensor):
+                case Failure(err):
+                    return Failure(TrainingError(message=f"Registry tensor error: {err}"))
+                case Success(_):
+                    return Success(grad_tensor)
+        except RuntimeError as exc:
+            return Failure(TrainingError(message=str(exc)))
+
+    async def _update_learning_rate(
+        self, effect: UpdateLearningRate
+    ) -> Result[object, TrainingError]:
+        """Update optimizer learning rate."""
+        optimizer_result = self._registry.get_optimizer(effect.optimizer_id)
+        match optimizer_result:
+            case Failure(_):
+                return Failure(TrainingError(message=f"Optimizer not found: {effect.optimizer_id}"))
+            case Success(optimizer):
+                pass
+
+        try:
+            groups = getattr(optimizer, "param_groups", None)
+            if groups is None:
+                return Failure(TrainingError(message="optimizer_missing_param_groups"))
+
+            for group in groups:
+                group["lr"] = effect.lr
+            return Success(effect.lr)
+        except Exception as exc:  # noqa: BLE001
+            return Failure(TrainingError(message=str(exc)))
+
     async def _log_metrics(self, effect: LogMetrics) -> Result[object, TrainingError]:
         """Log metrics to TensorBoard.
 
@@ -523,11 +771,35 @@ class TrainingInterpreter:
             match writer_result:
                 case Success(writer) if isinstance(writer, SummaryWriter):
                     for metric_name, metric_value in effect.metrics:
-                        writer.add_scalar(metric_name, metric_value, effect.step)
+                        resolved_value: float
+                        match metric_value:
+                            case str() as placeholder if placeholder.startswith(
+                                "{"
+                            ) and placeholder.endswith("}"):
+                                tensor_id = placeholder.strip("{}")
+                                metric_tensor_result = self._registry.get_tensor(tensor_id)
+                                match metric_tensor_result:
+                                    case Failure(err):
+                                        return Failure(
+                                            TrainingError(message=f"metric_tensor_missing:{err}")
+                                        )
+                                    case Success(metric_tensor):
+                                        if hasattr(metric_tensor, "item"):
+                                            resolved_value = float(metric_tensor.item())
+                                        else:
+                                            return Failure(
+                                                TrainingError(
+                                                    message=f"metric_tensor_invalid:{tensor_id}"
+                                                )
+                                            )
+                            case _:
+                                resolved_value = float(metric_value)
+
+                        writer.add_scalar(metric_name, resolved_value, effect.step)
                 case Success(_):
                     return Failure(TrainingError(message="tensorboard_writer_invalid"))
-                case Failure(error):
-                    return Failure(TrainingError(message=f"tensorboard_writer_missing:{error}"))
+                case Failure(_):
+                    return Success(None)
 
             return Success(None)
         except (ImportError, RuntimeError) as exc:
@@ -541,13 +813,15 @@ class MonteCarloInterpreter:
     Uses SharedRegistry for tensor storage to enable data flow between effects.
     """
 
-    def __init__(self, registry: SharedRegistry) -> None:
+    def __init__(self, registry: SharedRegistry, mc_engine: BlackScholes | None = None) -> None:
         """Initialize Monte Carlo interpreter.
 
         Args:
             registry: Shared registry for tensor storage across interpreters.
+            mc_engine: Optional BlackScholes engine for contract pricing.
         """
         self._registry = registry
+        self._mc_engine = mc_engine
 
     async def interpret(self, effect: MonteCarloEffect) -> Result[object, MonteCarloError]:
         """Execute Monte Carlo effect."""
@@ -558,6 +832,16 @@ class MonteCarloInterpreter:
                 return await self._simulate_paths(effect)
             case ComputeFFT():
                 return await self._compute_fft(effect)
+            case SampleContracts():
+                return await self._sample_contracts(effect)
+            case ProcessBatch():
+                return await self._process_batch(effect)
+            case StackTensors():
+                return await self._stack_tensors(
+                    effect.input_tensor_ids, effect.dim, effect.output_tensor_id
+                )
+            case ComputeMeanFFT():
+                return await self._compute_mean_fft(effect)
             case _:
                 assert_never(effect)
 
@@ -711,6 +995,183 @@ class MonteCarloInterpreter:
         except RuntimeError as e:
             return Failure(MonteCarloError(message=str(e)))
 
+    async def _sample_contracts(self, effect: SampleContracts) -> Result[object, MonteCarloError]:
+        """Sample contracts using a registered sampler."""
+        sampler_result = self._registry.get_sampler(effect.sampler_id)
+        match sampler_result:
+            case Failure(reg_err):
+                return Failure(MonteCarloError(message=f"Sampler not found: {reg_err}"))
+            case Success(sampler):
+                pass
+
+        def _normalize_contracts(
+            raw_contracts: Sequence[SupportsContracts] | Sequence[BlackScholes.Inputs],
+        ) -> Result[tuple[BlackScholes.Inputs, ...], MonteCarloError]:
+            normalized: list[BlackScholes.Inputs] = []
+            for contract in raw_contracts:
+                if not isinstance(contract, BlackScholes.Inputs):
+                    return Failure(MonteCarloError(message="Invalid contract type in sampler"))
+                normalized.append(contract)
+            return Success(tuple(normalized))
+
+        try:
+            sampled = sampler.sample(effect.num_samples)
+            match sampled:
+                case Failure(err):
+                    return Failure(MonteCarloError(message=str(err)))
+                case Success(contracts):
+                    norm_result = _normalize_contracts(contracts)
+                case list_contracts if isinstance(list_contracts, list):
+                    norm_result = _normalize_contracts(list_contracts)
+
+            match norm_result:
+                case Failure(norm_err):
+                    return Failure(norm_err)
+                case Success(normalized_contracts):
+                    match self._registry.register_contracts(
+                        effect.output_tensor_id, normalized_contracts
+                    ):
+                        case Failure(reg_err):
+                            return Failure(
+                                MonteCarloError(message=f"Registry contracts error: {reg_err}")
+                            )
+                        case Success(_):
+                            return Success(normalized_contracts)
+        except Exception as exc:  # noqa: BLE001
+            return Failure(MonteCarloError(message=str(exc)))
+
+    async def _process_batch(self, effect: ProcessBatch) -> Result[object, MonteCarloError]:
+        """Generate FFT targets for a batch of contracts."""
+        contracts_result = self._registry.get_contracts(effect.contracts_tensor_id)
+        match contracts_result:
+            case Failure(reg_err):
+                return Failure(MonteCarloError(message=f"Contracts not found: {reg_err}"))
+            case Success(contracts):
+                pass
+
+        if self._mc_engine is None:
+            return Failure(MonteCarloError(message="mc_engine_missing"))
+
+        fft_results: list[cp.ndarray] = []
+
+        batches_per_run = int(effect.config.get("batches_per_mc_run", 1))
+        network_size = int(effect.config.get("network_size", 1))
+
+        try:
+            for contract in contracts:
+                if not isinstance(contract, BlackScholes.Inputs):
+                    return Failure(
+                        MonteCarloError(
+                            message=f"Unsupported contract type: {type(contract).__name__}"
+                        )
+                    )
+                price_result = self._mc_engine.price(inputs=contract)
+                match price_result:
+                    case Failure(mc_err):
+                        return Failure(MonteCarloError(message=str(mc_err)))
+                    case Success(pricing):
+                        pass
+
+                mat = pricing.put_price.reshape(batches_per_run, network_size)
+                fft_val = cp.mean(cp.fft.fft(mat, axis=1), axis=0)
+                fft_results.append(fft_val)
+
+            stacked = cupy_stack(fft_results, axis=0)
+            match self._registry.register_tensor(effect.output_tensor_id, stacked):
+                case Failure(reg_err):
+                    return Failure(MonteCarloError(message=f"Registry tensor error: {reg_err}"))
+                case Success(_):
+                    return Success(stacked)
+        except Exception as exc:  # noqa: BLE001
+            return Failure(MonteCarloError(message=str(exc)))
+
+    async def _stack_tensors(
+        self, input_tensor_ids: tuple[str, ...], dim: int, output_tensor_id: str
+    ) -> Result[object, MonteCarloError]:
+        """Stack multiple tensors or arrays."""
+        try:
+            tensors: list[object] = []
+            for tensor_id in input_tensor_ids:
+                tensor_result = self._registry.get_tensor(tensor_id)
+                match tensor_result:
+                    case Failure(err):
+                        return Failure(MonteCarloError(message=f"Tensor not found: {err}"))
+                    case Success(tensor):
+                        tensors.append(tensor)
+
+            if not tensors:
+                empty = cp.array([])
+                match self._registry.register_tensor(output_tensor_id, empty):
+                    case Failure(err):
+                        return Failure(MonteCarloError(message=f"Registry tensor error: {err}"))
+                    case Success(_):
+                        return Success(empty)
+
+            first = tensors[0]
+            if isinstance(first, cp.ndarray):
+                cupy_tensors: list[cp.ndarray] = []
+                for t in tensors:
+                    if not isinstance(t, cp.ndarray):
+                        return Failure(
+                            MonteCarloError(message=f"Unsupported tensor type: {type(t).__name__}")
+                        )
+                    cupy_tensors.append(t)
+                stacked_cu = cupy_stack(cupy_tensors, axis=dim)
+                match self._registry.register_tensor(output_tensor_id, stacked_cu):
+                    case Failure(err):
+                        return Failure(MonteCarloError(message=f"Registry tensor error: {err}"))
+                    case Success(_):
+                        return Success(stacked_cu)
+            elif isinstance(first, torch.Tensor):
+                torch_tensors: list[torch.Tensor] = []
+                for t in tensors:
+                    if not isinstance(t, torch.Tensor):
+                        return Failure(
+                            MonteCarloError(message=f"Unsupported tensor type: {type(t).__name__}")
+                        )
+                    torch_tensors.append(t)
+                stacked_torch = torch.stack(torch_tensors, dim=dim)
+                match self._registry.register_tensor(output_tensor_id, stacked_torch):
+                    case Failure(err):
+                        return Failure(MonteCarloError(message=f"Registry tensor error: {err}"))
+                    case Success(_):
+                        return Success(stacked_torch)
+            else:
+                return Failure(
+                    MonteCarloError(message=f"Unsupported tensor type: {type(first).__name__}")
+                )
+        except Exception as exc:  # noqa: BLE001
+            return Failure(MonteCarloError(message=str(exc)))
+
+    async def _compute_mean_fft(self, effect: ComputeMeanFFT) -> Result[object, MonteCarloError]:
+        """Compute FFT with mean reduction."""
+        tensor_result = self._registry.get_tensor(effect.input_tensor_id)
+        match tensor_result:
+            case Failure(_):
+                return Failure(
+                    MonteCarloError(message=f"Tensor not found: {effect.input_tensor_id}")
+                )
+            case Success(tensor):
+                pass
+
+        try:
+            if isinstance(tensor, cp.ndarray):
+                fft_val = cp.mean(cp.fft.fft(tensor, axis=1), axis=0)
+            elif isinstance(tensor, torch.Tensor):
+                fft_val = torch.fft.fft(tensor, dim=1).mean(dim=0)
+            else:
+                return Failure(
+                    MonteCarloError(message=f"Unsupported tensor type: {type(tensor).__name__}")
+                )
+
+            match self._registry.register_tensor(effect.output_tensor_id, fft_val):
+                case Failure(err):
+                    return Failure(MonteCarloError(message=f"Registry tensor error: {err}"))
+                case Success(_):
+                    return Success(fft_val)
+        except Exception as exc:  # noqa: BLE001
+            return Failure(MonteCarloError(message=str(exc)))
+
 
 class StorageInterpreter:
     """Interpreter for storage effects.
@@ -738,6 +1199,8 @@ class StorageInterpreter:
                 return await self._write_object(b or self._bucket, k, h)
             case CommitVersion(parent_counter=p, checkpoint_hash=h, message=m):
                 return await self._commit_version(p, h, m)
+            case CommitCheckpoint():
+                return await self._commit_checkpoint(effect)
             case _:
                 assert_never(effect)
 
@@ -841,6 +1304,60 @@ class StorageInterpreter:
                 return Success(version)
         except Exception as e:
             return Failure(StorageError(message=str(e)))
+
+    async def _commit_checkpoint(self, effect: CommitCheckpoint) -> Result[object, StorageError]:
+        """Conditionally commit checkpoint bytes to blockchain storage."""
+        plan = effect.commit_plan
+
+        def _parse_interval(plan_str: str) -> int | None:
+            try:
+                return int(plan_str.split(":", maxsplit=1)[1])
+            except (IndexError, ValueError):
+                return None
+
+        should_commit = False
+        if plan == "NoCommit":
+            should_commit = False
+        elif plan == "FinalCommit":
+            should_commit = effect.current_step >= effect.total_steps - 1
+        elif plan.startswith("IntervalCommit"):
+            interval = _parse_interval(plan)
+            should_commit = interval is not None and effect.current_step % interval == 0
+        elif plan.startswith("FinalAndIntervalCommit"):
+            interval = _parse_interval(plan)
+            should_commit = effect.current_step % (interval or 1) == 0 or (
+                effect.current_step >= effect.total_steps - 1
+            )
+        else:
+            should_commit = False
+
+        if not should_commit:
+            return Success(None)
+
+        checkpoint_result = self._registry.get_bytes(effect.checkpoint_id)
+        match checkpoint_result:
+            case Failure(err):
+                return Failure(StorageError(message=f"Checkpoint not found: {err}"))
+            case Success(checkpoint_bytes):
+                pass
+
+        store_result = self._registry.get_blockchain_store(effect.blockchain_store_id)
+        match store_result:
+            case Failure(err):
+                return Failure(StorageError(message=f"Blockchain store not found: {err}"))
+            case Success(store):
+                pass
+
+        try:
+            content_hash = hashlib.sha256(checkpoint_bytes).hexdigest()
+            version = await store.commit(
+                checkpoint_data=checkpoint_bytes,
+                content_hash=content_hash,
+                message=f"step:{effect.current_step}",
+            )
+            return Success(version)
+        except Exception as exc:  # noqa: BLE001
+            return Failure(StorageError(message=str(exc)))
 
 
 class RNGInterpreter:
@@ -1026,52 +1543,6 @@ class MetadataInterpreter:
                 return Success(new_value)
 
 
-class LoggingInterpreter:
-    """Interpreter for logging effects.
-
-    Emits structured log messages via the standard logging module.
-    """
-
-    def __init__(self, default_logger_name: str = "spectralmc") -> None:
-        """Initialize logging interpreter.
-
-        Args:
-            default_logger_name: Fallback logger name when effect.logger_name is empty.
-        """
-        self._default_logger_name = default_logger_name
-
-    async def interpret(self, effect: LoggingEffect) -> Result[object, LoggingError]:
-        """Execute logging effect."""
-        match effect:
-            case LogMessage():
-                return self._log_message(effect)
-            case _:
-                assert_never(effect)
-
-    def _log_message(self, effect: LogMessage) -> Result[object, LoggingError]:
-        """Emit a log message at the requested level."""
-        logger_name = effect.logger_name or self._default_logger_name
-        logger = logging.getLogger(logger_name)
-
-        try:
-            match effect.level:
-                case "debug":
-                    logger.debug(effect.message, exc_info=effect.exc_info)
-                case "info":
-                    logger.info(effect.message, exc_info=effect.exc_info)
-                case "warning":
-                    logger.warning(effect.message, exc_info=effect.exc_info)
-                case "error":
-                    logger.error(effect.message, exc_info=effect.exc_info)
-                case "critical":
-                    logger.critical(effect.message, exc_info=effect.exc_info)
-                case _ as unreachable:
-                    assert_never(unreachable)
-            return Success(None)
-        except Exception as exc:
-            return Failure(LoggingError(message=str(exc), logger_name=logger_name))
-
-
 class SpectralMCInterpreter:
     """Master interpreter composing all effect interpreters.
 
@@ -1137,16 +1608,37 @@ class SpectralMCInterpreter:
     async def interpret(self, effect: Effect) -> Result[object, EffectError]:
         """Route effect to appropriate sub-interpreter."""
         match effect:
-            case TensorTransfer() | StreamSync() | KernelLaunch() | DLPackTransfer():
+            case (
+                TensorTransfer() | StreamSync() | KernelLaunch() | DLPackTransfer() | SplitInputs()
+            ):
                 gpu_result = await self._gpu.interpret(effect)
                 return _widen_gpu_error(gpu_result)
-            case ForwardPass() | BackwardPass() | OptimizerStep() | ComputeLoss() | LogMetrics():
+            case (
+                ForwardPass()
+                | ForwardPassComplex()
+                | BackwardPass()
+                | OptimizerStep()
+                | ComputeLoss()
+                | ComputeComplexLoss()
+                | ZeroGrad()
+                | ComputeGradNorm()
+                | UpdateLearningRate()
+                | LogMetrics()
+            ):
                 training_result = await self._training.interpret(effect)
                 return _widen_training_error(training_result)
-            case GenerateNormals() | SimulatePaths() | ComputeFFT():
+            case (
+                GenerateNormals()
+                | SimulatePaths()
+                | ComputeFFT()
+                | SampleContracts()
+                | ProcessBatch()
+                | StackTensors()
+                | ComputeMeanFFT()
+            ):
                 mc_result = await self._montecarlo.interpret(effect)
                 return _widen_montecarlo_error(mc_result)
-            case ReadObject() | WriteObject() | CommitVersion():
+            case ReadObject() | WriteObject() | CommitVersion() | CommitCheckpoint():
                 storage_result = await self._storage.interpret(effect)
                 return _widen_storage_error(storage_result)
             case CaptureRNGState() | RestoreRNGState():
@@ -1243,12 +1735,49 @@ class SpectralMCInterpreter:
         """Get the shared registry for direct access."""
         return self._registry
 
+    @property
+    def gpu_interpreter(self) -> GPUInterpreter:
+        """Access GPU interpreter."""
+        return self._gpu
+
+    @property
+    def training_interpreter(self) -> TrainingInterpreter:
+        """Access training interpreter."""
+        return self._training
+
+    @property
+    def montecarlo_interpreter(self) -> MonteCarloInterpreter:
+        """Access Monte Carlo interpreter."""
+        return self._montecarlo
+
+    @property
+    def storage_interpreter(self) -> StorageInterpreter:
+        """Access storage interpreter."""
+        return self._storage
+
+    @property
+    def rng_interpreter(self) -> RNGInterpreter:
+        """Access RNG interpreter."""
+        return self._rng
+
+    @property
+    def metadata_interpreter(self) -> MetadataInterpreter:
+        """Access metadata interpreter."""
+        return self._metadata
+
+    @property
+    def logging_interpreter(self) -> LoggingInterpreter:
+        """Access logging interpreter."""
+        return self._logging
+
     @classmethod
     def create(
         cls,
         torch_stream: torch.cuda.Stream,
         cupy_stream: cp.cuda.Stream,
         storage_bucket: str,
+        mc_engine: BlackScholes | None = None,
+        logging_interpreter: LoggingInterpreter | None = None,
     ) -> SpectralMCInterpreter:
         """Factory method to create a SpectralMCInterpreter with a shared registry.
 
@@ -1258,6 +1787,8 @@ class SpectralMCInterpreter:
             torch_stream: PyTorch CUDA stream.
             cupy_stream: CuPy CUDA stream.
             storage_bucket: Default S3 bucket for storage operations.
+            mc_engine: Optional BlackScholes engine for Monte Carlo processing.
+            logging_interpreter: Optional logging interpreter instance.
 
         Returns:
             Configured SpectralMCInterpreter with shared registry.
@@ -1272,14 +1803,15 @@ class SpectralMCInterpreter:
             ... )
         """
         registry = SharedRegistry()
+        logging_impl = logging_interpreter or LoggingInterpreter()
         return cls(
             gpu=GPUInterpreter(torch_stream, cupy_stream, registry),
             training=TrainingInterpreter(registry),
-            montecarlo=MonteCarloInterpreter(registry),
+            montecarlo=MonteCarloInterpreter(registry, mc_engine=mc_engine),
             storage=StorageInterpreter(storage_bucket, registry),
             rng=RNGInterpreter(registry),
             metadata=MetadataInterpreter(registry),
-            logging_interpreter=LoggingInterpreter(),
+            logging_interpreter=logging_impl,
             registry=registry,
         )
 

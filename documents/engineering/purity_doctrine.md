@@ -857,7 +857,7 @@ Storage modules (`storage/`) are effectful by nature:
 
 - S3 client operations
 - Network I/O with retry logic
-- Blockchain atomic commits
+- Object store atomic commits
 
 These are part of the Effect Interpreter infrastructure.
 

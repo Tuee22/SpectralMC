@@ -12,7 +12,7 @@
 ## Cross-References
 
 - [Observability](observability.md) — Logging and audit expectations without Prometheus
-- [Blockchain Model Versioning](blockchain_storage.md) — S3 state and audit log SSoT
+- [Object Store Model Versioning](object_store_storage.md) — S3 state and audit log SSoT
 - [Documentation Standards](../documentation_standards.md) — Metadata and linking rules
 
 ## Current Policy

@@ -6,13 +6,15 @@ Logs version metadata, training metrics, and model statistics to TensorBoard.
 
 from __future__ import annotations
 
-import logging
+import asyncio
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from spectralmc.runtime import get_torch_handle
+from spectralmc.effects import LogMessage, LoggingInterpreter
 from ..gbm_trainer import GbmCVNNPricerConfig
 from ..result import Failure, Success
 from .chain import ModelVersion
@@ -23,7 +25,7 @@ from .store import AsyncBlockchainModelStore
 
 get_torch_handle()
 
-logger = logging.getLogger(__name__)
+LogLevel = Literal["debug", "info", "warning", "error", "critical"]
 
 
 class TensorBoardWriter:
@@ -57,7 +59,10 @@ class TensorBoardWriter:
     """
 
     def __init__(
-        self, store: AsyncBlockchainModelStore, log_dir: str = "runs/blockchain_models"
+        self,
+        store: AsyncBlockchainModelStore,
+        log_dir: str = "runs/blockchain_models",
+        logging_interpreter: LoggingInterpreter | None = None,
     ) -> None:
         """
         Initialize TensorBoard writer.
@@ -65,12 +70,30 @@ class TensorBoardWriter:
         Args:
             store: AsyncBlockchainModelStore instance
             log_dir: TensorBoard log directory
+            logging_interpreter: Interpreter used to emit LogMessage effects
         """
         self.store = store
         self.log_dir = Path(log_dir)
         self.writer = SummaryWriter(log_dir=str(self.log_dir))
+        self._logging_interpreter = logging_interpreter or LoggingInterpreter()
 
-        logger.info(f"TensorBoardWriter initialized: log_dir={self.log_dir}")
+        self._log_sync("info", f"TensorBoardWriter initialized: log_dir={self.log_dir}")
+
+    def _log_sync(self, level: LogLevel, message: str) -> None:
+        """Log synchronously via LoggingInterpreter."""
+        effect = LogMessage(level=level, message=message, logger_name=__name__)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self._logging_interpreter.interpret(effect))
+            return
+        loop.create_task(self._logging_interpreter.interpret(effect))
+
+    async def _log_async(self, level: LogLevel, message: str) -> None:
+        """Log asynchronously via LoggingInterpreter."""
+        await self._logging_interpreter.interpret(
+            LogMessage(level=level, message=message, logger_name=__name__)
+        )
 
     async def log_version(
         self,
@@ -115,8 +138,9 @@ class TensorBoardWriter:
                 )
                 match snapshot_result:
                     case Failure(load_err):
-                        logger.warning(
-                            f"Failed to load checkpoint for version {counter}: {load_err}"
+                        await self._log_async(
+                            "warning",
+                            f"Failed to load checkpoint for version {counter}: {load_err}",
                         )
                         return
                     case Success(snapshot):
@@ -136,12 +160,15 @@ class TensorBoardWriter:
                     "training/sobol_skip", snapshot.sobol_skip, global_step=counter
                 )
 
-                logger.info(f"Logged version {counter} with checkpoint metrics")
+                await self._log_async("info", f"Logged version {counter} with checkpoint metrics")
 
             except (VersionNotFoundError, StorageError, RuntimeError, OSError) as e:
-                logger.warning(f"Failed to load checkpoint for version {counter}: {e}")
+                await self._log_async(
+                    "warning",
+                    f"Failed to load checkpoint for version {counter}: {e}",
+                )
         else:
-            logger.info(f"Logged version {counter} metadata only")
+            await self._log_async("info", f"Logged version {counter} metadata only")
 
     async def log_all_versions(
         self,
@@ -163,9 +190,11 @@ class TensorBoardWriter:
 
         match head_result:
             case Success(head):
-                logger.info(f"Logging {head.counter + 1} versions to TensorBoard...")
+                await self._log_async(
+                    "info", f"Logging {head.counter + 1} versions to TensorBoard..."
+                )
             case Failure(_):
-                logger.info("No versions to log (empty chain)")
+                await self._log_async("info", "No versions to log (empty chain)")
                 return
 
         for counter in range(head.counter + 1):
@@ -175,7 +204,7 @@ class TensorBoardWriter:
             await self.log_version(version, model_template, config_template)
 
         self.writer.flush()
-        logger.info(f"Logged {head.counter + 1} versions to {self.log_dir}")
+        await self._log_async("info", f"Logged {head.counter + 1} versions to {self.log_dir}")
 
     async def log_summary_statistics(self) -> None:
         """
@@ -211,12 +240,12 @@ class TensorBoardWriter:
                 self.writer.add_scalar("summary/versions_per_day", versions_per_day, global_step=0)
 
         self.writer.flush()
-        logger.info("Logged summary statistics")
+        await self._log_async("info", "Logged summary statistics")
 
     def close(self) -> None:
         """Close the TensorBoard writer and flush remaining data."""
         self.writer.close()
-        logger.info("TensorBoardWriter closed")
+        self._log_sync("info", "TensorBoardWriter closed")
 
     def __enter__(self) -> TensorBoardWriter:
         """Context manager entry."""

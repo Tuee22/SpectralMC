@@ -13,6 +13,8 @@
 - [Reproducibility Proofs](reproducibility_proofs.md)
 - [Coding Standards](coding_standards.md)
 - [Total Pure Modelling](total_pure_modelling.md)
+- [Object Store Model Versioning](object_store_storage.md)
+- [TLA+ Reproducibility Proofs](tla.md)
 
 ## Overview
 
@@ -36,6 +38,14 @@ layer.
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) - Device placement rules
 - [Reproducibility Proofs](reproducibility_proofs.md) - Determinism guarantees
 - [Total Pure Modelling](total_pure_modelling.md) - Pure state machines that feed effects
+
+## TLA+ Proof Boundary
+
+The effect interpreter is modeled explicitly in TLA+ behind the purity wall. The
+TLA+ integration spec composes interpreter state with training and storage state
+to prove determinism, resume equivalence, and tamper-evident storage semantics.
+See [tla.md](tla.md) and [object_store_storage.md](object_store_storage.md) for
+the proof scope and storage assumptions.
 
 ---
 
@@ -394,7 +404,7 @@ class WriteObject:
 
 @dataclass(frozen=True)
 class CommitVersion:
-    """Request to commit a new model version to blockchain storage.
+    """Request to commit a new model version to object store storage.
 
     Attributes:
         kind: Discriminator for pattern matching. Always "CommitVersion".
@@ -648,8 +658,8 @@ class GPUInterpreter:
 class StorageInterpreter:
     """Interpreter for storage effects.
 
-    Handles S3 reads, writes, and blockchain version commits.
-    Uses AsyncBlockchainModelStore for atomic operations.
+    Handles S3 reads, writes, and object store version commits.
+    Uses AsyncBlockchainModelStore for atomic operations (legacy name).
     """
 
     def __init__(self, store: AsyncBlockchainModelStore) -> None:
@@ -1256,7 +1266,7 @@ See [Purity Doctrine](purity_doctrine.md) for complete purity requirements.
 - [Immutability Doctrine](immutability_doctrine.md) - Frozen dataclass requirements
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) - Device placement rules
 - [Torch Runtime (facade removed)](pytorch_facade.md) - Determinism configuration as runtime ADT + effect sequencing
-- [Blockchain Storage](blockchain_storage.md) - Storage effects implementation
+- [Object Store Model Versioning](object_store_storage.md) - Storage effects implementation
 - [Total Pure Modelling](total_pure_modelling.md) - Source of the pure state machines that
   feed effect builders
 

@@ -1,14 +1,14 @@
 # File: documents/product/deployment.md
-# SpectralMC Blockchain Storage - Production Deployment Guide
+# SpectralMC Object Store Storage - Production Deployment Guide
 
 **Status**: Reference only
-**Supersedes**: Prior blockchain storage deployment guides
+**Supersedes**: Prior storage deployment guides
 **Referenced by**: documents/product/index.md; engineering/testing_requirements.md
 
-> **Purpose**: Provide deployment guidance for SpectralMC blockchain storage across AWS S3 and MinIO environments.
-> **📖 Authoritative Reference**: [../engineering/blockchain_storage.md](../engineering/blockchain_storage.md)
+> **Purpose**: Provide deployment guidance for SpectralMC object store storage across AWS S3 and MinIO environments.
+> **📖 Authoritative Reference**: [../engineering/object_store_storage.md](../engineering/object_store_storage.md)
 
-This guide covers production deployment of SpectralMC's blockchain model storage system.
+This guide covers production deployment of SpectralMC's object store model storage system.
 
 ## Table of Contents
 
@@ -25,7 +25,7 @@ This guide covers production deployment of SpectralMC's blockchain model storage
 
 ## Architecture Overview
 
-SpectralMC blockchain storage uses S3-compatible object storage for model versioning:
+SpectralMC object store storage uses S3-compatible object storage for model versioning:
 
 ```mermaid
 flowchart TB
@@ -40,7 +40,7 @@ flowchart TB
 ```
 
 **Key Components**:
-- **AsyncBlockchainModelStore**: S3-based storage with atomic CAS manifest updates
+- **AsyncBlockchainModelStore**: S3-based storage with atomic CAS manifest updates (legacy name)
 - **head.json**: ETag/object-locked manifest as SSoT for training/inference state
 - **Audit log**: Append-only S3 records linked to manifest counter/hash
 - **InferenceClient**: Production model serving (pinned/tracking modes)

@@ -1395,7 +1395,7 @@ def _find_broken_link(
 
 
 async def verify_chain(store: AsyncBlockchainModelStore) -> Result[None, VerifyError]:
-    """Verify blockchain integrity using pure patterns."""
+    """Verify manifest chain integrity using pure patterns."""
     versions_result = await store.list_all_versions()
 
     match versions_result:
@@ -1677,7 +1677,7 @@ class VerificationError:
             case S3BucketNotFound(bucket=b):
                 return VerificationError(
                     kind="ChainNotFound",
-                    message=f"Blockchain not found in bucket: {b}",
+                    message=f"Manifest chain not found in bucket: {b}",
                     underlying=error,
                 )
             case S3NetworkError():

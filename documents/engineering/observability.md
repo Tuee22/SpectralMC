@@ -52,6 +52,6 @@
 
 - [Effect Interpreter Doctrine](effect_interpreter.md) — logging effects and interpreter duties.
 - [CPU/GPU Compute Policy](cpu_gpu_compute_policy.md) — device expectations for logging context.
-- [Blockchain Model Versioning](blockchain_storage.md) — S3 SSoT and audit log design.
+- [Object Store Model Versioning](object_store_storage.md) — S3 SSoT and audit log design.
 - [Monitoring and Alerting (Retired)](monitoring_and_alerting.md) — rationale for no Prometheus stack.
 - [Documentation Standards](../documentation_standards.md) — metadata and linking.

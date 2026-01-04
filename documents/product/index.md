@@ -16,7 +16,7 @@ Product and operations documentation for deploying and using SpectralMC in produ
 
 ### [Deployment Guide](deployment.md)
 
-Production deployment of SpectralMC blockchain model storage:
+Production deployment of SpectralMC object store model storage:
 
 - S3/MinIO configuration
 - IAM policies and security
@@ -28,7 +28,7 @@ Production deployment of SpectralMC blockchain model storage:
 
 ### [Training Integration](training_integration.md)
 
-Blockchain storage integration with GBM training loop:
+Object store storage integration with GBM training loop:
 
 - Auto-commit during training
 - Periodic checkpoints

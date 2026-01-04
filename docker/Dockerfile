@@ -99,8 +99,9 @@ RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 && \
 # 6) Clean up apt caches
 RUN apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/*
 
-# 7) Copy repo contents
+# 7) Copy repo contents (explicitly include TLA specs)
 COPY ./ /spectralmc
+COPY ./TLA /spectralmc/TLA
 
 # 8) Work in /spectralmc
 WORKDIR /spectralmc
